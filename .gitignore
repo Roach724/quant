@@ -5,7 +5,12 @@ __pycache__/
 
 # C extensions
 *.so
-
+# 
+.superpowers
+.gemini
+.claude
+.vscode
+*.ipynb
 # Distribution / packaging
 .Python
 build/
