@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check collectors/ sdk/ quality/
+      - run: ruff format --check collectors/ sdk/ quality/
+
+  python-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install mypy pandas-stubs
+      - run: pip install -e sdk/
+      - run: mypy collectors/ --ignore-missing-imports
+
+  python-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest pytest-cov
+      - run: pip install -r collectors/requirements.txt
+      - run: pip install -e sdk/
+      - run: pip install -r quality/requirements.txt
+      - run: python -m pytest collectors/tests/ sdk/tests/ quality/tests/ -v --cov --ignore=tests/vcr_cassettes
+
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - run: cd query-api && go vet ./...
+      - run: cd query-api && go test ./... -v -cover
+
+  terraform-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9"
+      - run: cd terraform && terraform fmt -check -recursive
+      - run: cd terraform && terraform validate
