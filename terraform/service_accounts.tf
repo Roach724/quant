@@ -5,7 +5,7 @@ resource "google_service_account" "collector" {
 
 resource "google_storage_bucket_iam_member" "collector_write" {
   bucket = google_storage_bucket.quant_data.name
-  role   = "roles/storage.objectUser"
+  role   = "roles/storage.objectCreator"
   member = "serviceAccount:${google_service_account.collector.email}"
 }
 

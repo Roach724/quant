@@ -13,3 +13,7 @@ output "query_api_service_account_email" {
 output "artifact_registry_repository" {
   value = google_artifact_registry_repository.docker.repository_id
 }
+
+output "quality_service_account_email" {
+  value = google_service_account.quality.email
+}
