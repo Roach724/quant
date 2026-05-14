@@ -1,7 +1,16 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
 [project]
 name = "quant"
 version = "0.1.0"
+description = "Quantitative trading data pipeline"
 requires-python = ">=3.12"
+license = {file = "LICENSE"}
+
+[tool.setuptools.packages.find]
+include = ["collectors*", "sdk*", "quality*"]
 
 [tool.ruff]
 target-version = "py312"
