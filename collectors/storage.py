@@ -7,14 +7,19 @@ import pyarrow.parquet as pq
 
 
 def build_gcs_path(market: str, data_type: str, symbol: str, timestamp: datetime) -> str:
+    """Build GCS object path with Hive-style partitioning for BigQuery compatibility.
+
+    Format: raw/{market}/{data_type}/year={YYYY}/month={MM}/day={DD}/symbol={SYMBOL}.parquet
+    """
     return (
         f"raw/{market.lower()}/{data_type}/"
-        f"{timestamp.year:04d}/{timestamp.month:02d}/{timestamp.day:02d}/"
-        f"{symbol}.parquet"
+        f"year={timestamp.year:04d}/month={timestamp.month:02d}/day={timestamp.day:02d}/"
+        f"symbol={symbol}.parquet"
     )
 
 
 def dataframe_to_parquet_bytes(df: pd.DataFrame) -> bytes:
+    """Convert a DataFrame to Parquet bytes with Snappy compression."""
     table = pa.Table.from_pandas(df, preserve_index=False)
     buf = io.BytesIO()
     pq.write_table(table, buf, compression="snappy")
@@ -26,6 +31,7 @@ def write_bars_to_gcs(
     bucket_name: str,
     market: str = "us",
 ) -> list[str]:
+    """Write bars DataFrame to GCS, one file per symbol-date combination. Returns list of GCS paths."""
     from google.cloud import storage
 
     client = storage.Client()

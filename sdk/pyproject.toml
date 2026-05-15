@@ -6,4 +6,6 @@ dependencies = [
     "pandas>=2.2",
     "pyarrow>=17.0",
     "requests>=2.32",
+    "gcsfs>=2025.3.0",
+    "google-auth>=2.36",
 ]

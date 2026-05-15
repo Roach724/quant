@@ -12,8 +12,8 @@ func TestBuildGCSPrefix(t *testing.T) {
 		date     time.Time
 		expected string
 	}{
-		{"us", "bars", time.Date(2026, 5, 13, 0, 0, 0, 0, time.UTC), "raw/us/bars/2026/05/13/"},
-		{"cn", "bars", time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC), "raw/cn/bars/2026/01/05/"},
+		{"us", "bars", time.Date(2026, 5, 13, 0, 0, 0, 0, time.UTC), "raw/us/bars/year=2026/month=05/day=13/"},
+		{"cn", "bars", time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC), "raw/cn/bars/year=2026/month=01/day=05/"},
 	}
 	for _, tc := range tests {
 		got := buildGCSPrefix(tc.market, tc.dataType, tc.date)

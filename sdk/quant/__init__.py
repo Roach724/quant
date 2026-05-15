@@ -1,5 +1,7 @@
 """Quantitative trading data SDK.
 
+Provides a clean interface for querying market data from research notebooks.
+
 Usage:
     import quant.data as qd
     df = qd.bars("AAPL", "2026-05-01", "2026-05-13")
@@ -27,6 +29,20 @@ def bars(
     frequency="1m",
     source="api",
 ):
+    """Fetch OHLCV bars.
+
+    Args:
+        symbols: Ticker(s), e.g. "AAPL" or ["AAPL", "MSFT"]
+        start: Start date/time as ISO string
+        end: End date/time as ISO string
+        market: Market code ("us", "cn", "hk")
+        frequency: Bar frequency ("1m", "5m", "1h", "1d")
+        source: "api" (via Go query API) or "direct" (read from GCS/local)
+
+    Returns:
+        pd.DataFrame with columns [open, high, low, close, volume, market, frequency]
+        indexed by (symbol, timestamp).
+    """
     if source == "direct":
         return bars_direct(symbols, start, end, market=market)
 
