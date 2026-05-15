@@ -7,7 +7,7 @@ terraform {
     }
   }
   backend "gcs" {
-    bucket = "quant-terraform-state"
+    bucket = "deductive-notch-495015-c2-quant-terraform-state"
     prefix = "terraform/state"
   }
 }

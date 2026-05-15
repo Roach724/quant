@@ -11,6 +11,10 @@ __pycache__/
 .claude
 .vscode
 *.ipynb
+.terraform/
+*.tfvars
+*.tfstate
+*.tfstate.*
 # Distribution / packaging
 .Python
 build/

@@ -1,6 +1,7 @@
 resource "google_cloud_run_v2_job" "collector_yfinance" {
-  name     = "quant-collector-yfinance"
-  location = var.region
+  name               = "quant-collector-yfinance"
+  location           = var.region
+  deletion_protection = false
 
   template {
     template {

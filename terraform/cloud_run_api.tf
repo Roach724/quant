@@ -1,7 +1,8 @@
 resource "google_cloud_run_v2_service" "query_api" {
-  name     = "quant-query-api"
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_ALL"
+  name               = "quant-query-api"
+  location           = var.region
+  ingress            = "INGRESS_TRAFFIC_ALL"
+  deletion_protection = false
 
   template {
     service_account = google_service_account.query_api.email
@@ -13,7 +14,7 @@ resource "google_cloud_run_v2_service" "query_api" {
       }
       resources {
         limits = {
-          memory = "256Mi"
+          memory = "512Mi"
           cpu    = "1"
         }
       }
@@ -25,9 +26,10 @@ resource "google_cloud_run_v2_service" "query_api" {
   }
 }
 
-resource "google_cloud_run_v2_service_iam_member" "query_api_public" {
-  name     = google_cloud_run_v2_service.query_api.name
-  location = var.region
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
+# Public access blocked by org policy. Use authenticated access via gcloud auth.
+# resource "google_cloud_run_v2_service_iam_member" "query_api_public" {
+#   name     = google_cloud_run_v2_service.query_api.name
+#   location = var.region
+#   role     = "roles/run.invoker"
+#   member   = "allUsers"
+# }
