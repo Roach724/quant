@@ -1,4 +1,5 @@
 import io
+import json
 from datetime import datetime
 
 import pandas as pd
@@ -48,5 +49,14 @@ def write_bars_to_gcs(
             content_type="application/octet-stream",
         )
         paths.append(f"gs://{bucket_name}/{path}")
+
+        # Write companion JSON for Go API consumption
+        json_path = path.replace(".parquet", ".json")
+        json_blob = bucket.blob(json_path)
+        json_blob.upload_from_string(
+            group.to_json(orient="records", date_format="iso"),
+            content_type="application/json",
+        )
+        paths.append(f"gs://{bucket_name}/{json_path}")
 
     return paths

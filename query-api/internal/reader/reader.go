@@ -2,6 +2,7 @@ package reader
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+
+	"github.com/quant/query-api/internal/market"
 )
 
 type QueryParams struct {
@@ -20,6 +23,9 @@ type QueryParams struct {
 }
 
 func ParseQueryParams(mkt, symbols, startStr, endStr, freq string) (QueryParams, error) {
+	if _, ok := market.ParseMarket(mkt); !ok {
+		return QueryParams{}, fmt.Errorf("invalid market: %s", mkt)
+	}
 	start, err := time.Parse(time.RFC3339, startStr)
 	if err != nil {
 		return QueryParams{}, fmt.Errorf("invalid start time: %w", err)
@@ -90,7 +96,6 @@ func NewGCSBarReader(bucketName string) (*GCSBarReader, error) {
 }
 
 func (r *GCSBarReader) QueryBars(ctx context.Context, params QueryParams) (*QueryResult, error) {
-	// List matching GCS objects for the queried symbols and date range.
 	var objectURIs []string
 	for _, symbol := range params.Symbols {
 		d := params.Start
@@ -114,10 +119,51 @@ func (r *GCSBarReader) QueryBars(ctx context.Context, params QueryParams) (*Quer
 
 	sort.Strings(objectURIs)
 
+	var allBars []BarRow
+	for _, uri := range objectURIs {
+		objName := strings.TrimPrefix(uri, fmt.Sprintf("gs://%s/", r.bucket))
+		bars, err := r.readBarData(ctx, objName)
+		if err != nil {
+			continue
+		}
+		for _, bar := range bars {
+			if (bar.Timestamp.Equal(params.Start) || bar.Timestamp.After(params.Start)) &&
+				(bar.Timestamp.Equal(params.End) || bar.Timestamp.Before(params.End)) {
+				allBars = append(allBars, bar)
+			}
+		}
+	}
+
+	sort.Slice(allBars, func(i, j int) bool {
+		if allBars[i].Symbol != allBars[j].Symbol {
+			return allBars[i].Symbol < allBars[j].Symbol
+		}
+		return allBars[i].Timestamp.Before(allBars[j].Timestamp)
+	})
+
 	return &QueryResult{
-		Bars:   []BarRow{},
-		Status: fmt.Sprintf("found %d matching parquet objects. Use Python SDK source=direct to read data.", len(objectURIs)),
+		Bars:   allBars,
+		Status: fmt.Sprintf("found %d objects, returned %d bars", len(objectURIs), len(allBars)),
 	}, nil
+}
+
+func (r *GCSBarReader) readBarData(ctx context.Context, objName string) ([]BarRow, error) {
+	jsonName := strings.Replace(objName, ".parquet", ".json", 1)
+	return r.readJSONObject(ctx, jsonName)
+}
+
+func (r *GCSBarReader) readJSONObject(ctx context.Context, objName string) ([]BarRow, error) {
+	rc, err := r.client.Bucket(r.bucket).Object(objName).NewReader(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+
+	var bars []BarRow
+	if err := json.NewDecoder(rc).Decode(&bars); err != nil {
+		return nil, err
+	}
+	return bars, nil
 }
 
 func (r *GCSBarReader) ListSymbols(ctx context.Context, mkt string) ([]string, error) {
@@ -135,7 +181,6 @@ func (r *GCSBarReader) ListSymbols(ctx context.Context, mkt string) ([]string, e
 			continue
 		}
 		file := parts[len(parts)-1]
-		// file is "symbol=AAPL.parquet"
 		symbol := strings.TrimSuffix(strings.TrimPrefix(file, "symbol="), ".parquet")
 		if symbol != "" && symbol != file {
 			seen[symbol] = true
