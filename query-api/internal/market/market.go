@@ -9,9 +9,10 @@ import (
 type Market string
 
 const (
-	US Market = "US"
-	CN Market = "CN"
-	HK Market = "HK"
+	US     Market = "US"
+	CN     Market = "CN"
+	HK     Market = "HK"
+	CRYPTO Market = "CRYPTO"
 )
 
 func ParseMarket(s string) (Market, bool) {
@@ -22,6 +23,8 @@ func ParseMarket(s string) (Market, bool) {
 		return CN, true
 	case "HK":
 		return HK, true
+	case "CRYPTO":
+		return CRYPTO, true
 	default:
 		return "", false
 	}

@@ -16,6 +16,7 @@ from datetime import datetime, timezone, timedelta
 
 from adapters.alpaca_adapter import AlpacaUSAdapter
 from adapters.yfinance_adapter import YFinanceUSAdapter
+from adapters.crypto_binance_adapter import CryptoBinanceAdapter
 from storage import write_bars_to_gcs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -27,6 +28,8 @@ def get_adapter(source: str):
         api_key = os.environ["ALPACA_API_KEY"]
         api_secret = os.environ["ALPACA_API_SECRET"]
         return AlpacaUSAdapter(api_key=api_key, api_secret=api_secret)
+    if source == "cryptobinance":
+        return CryptoBinanceAdapter()
     return YFinanceUSAdapter()
 
 

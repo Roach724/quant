@@ -14,8 +14,8 @@ class TrackedOrder:
     broker_id: str | None = None
     symbol: str = ""
     side: str = ""
-    qty: int = 0
-    filled_qty: int = 0
+    qty: float = 0.0
+    filled_qty: float = 0.0
     state: str = "PENDING"
     avg_fill_price: float | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
