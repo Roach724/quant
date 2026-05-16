@@ -7,6 +7,8 @@ native BigQuery tables using single-level globs (avoiding BigQuery's
 Env vars:
     GCS_BUCKET: GCS bucket name (required)
     GCP_PROJECT: GCP project ID (required)
+    MARKET: market to load, e.g. "us" or "crypto" (default: us)
+    TABLE: BigQuery table name (default: us_bars)
     LOAD_DAYS: days of historical data to load (default: 7)
 """
 
@@ -56,6 +58,15 @@ def ensure_table(client, project, dataset_id="quant", table_id="us_bars"):
         logger.warning("Table ensure: %s", e)
 
 
+def load_market(client, bucket, market, start_date, end_date, project,
+                dataset="quant", table="us_bars"):
+    """Load a market's Parquet data over a date range."""
+    for i in range((end_date - start_date).days + 1):
+        d = end_date - timedelta(days=i)
+        date_str = d.isoformat()
+        load_day(client, bucket, market, date_str, project, dataset, table)
+
+
 def load_day(client, bucket, market, date_str, project, dataset="quant", table="us_bars"):
     """Load one day of Parquet files using single-level glob."""
     pattern = (
@@ -90,19 +101,20 @@ def load_day(client, bucket, market, date_str, project, dataset="quant", table="
 def main():
     bucket = os.environ["GCS_BUCKET"]
     project = os.environ["GCP_PROJECT"]
+    market = os.environ.get("MARKET", "us")
+    table = os.environ.get("TABLE", "us_bars")
     load_days = int(os.environ.get("LOAD_DAYS", "7"))
 
     client = bigquery.Client(project=project)
     ensure_dataset(client, project)
-    ensure_table(client, project)
+    ensure_table(client, project, table_id=table)
 
     today = datetime.now(timezone.utc).date()
-    for i in range(load_days):
-        d = today - timedelta(days=i)
-        date_str = d.isoformat()
-        load_day(client, bucket, "us", date_str, project)
+    start = today - timedelta(days=load_days - 1)
+    load_market(client, bucket, market, start, today, project, table=table)
 
-    logger.info("BigQuery load complete: %d days", load_days)
+    logger.info("BigQuery load complete: market=%s table=%s %d days",
+                market, table, load_days)
 
 
 if __name__ == "__main__":
