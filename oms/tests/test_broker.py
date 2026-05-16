@@ -18,10 +18,11 @@ async def test_paper_broker_submit_market_order():
 @pytest.mark.asyncio
 async def test_paper_broker_submit_limit_order():
     broker = PaperBroker(initial_capital=100_000.0)
-    order = await broker.submit_order("AAPL", "buy", 10, order_type="limit", limit_price=150.0)
+    # Buy limit at 95: current price 100 > 95, so limit NOT crossed → pends
+    order = await broker.submit_order("AAPL", "buy", 10, order_type="limit", limit_price=95.0)
     assert order.status == "pending"
     assert order.order_type == "limit"
-    assert order.limit_price == 150.0
+    assert order.limit_price == 95.0
     open_orders = await broker.get_open_orders()
     assert len(open_orders) == 1
     assert open_orders[0].broker_id == order.broker_id
@@ -30,6 +31,7 @@ async def test_paper_broker_submit_limit_order():
 @pytest.mark.asyncio
 async def test_paper_broker_get_positions_and_account():
     broker = PaperBroker(initial_capital=100_000.0)
+    broker.update_price("AAPL", 150.0)
     await broker.submit_order("AAPL", "buy", 10)
     positions = await broker.get_positions()
     assert len(positions) == 1
@@ -44,7 +46,7 @@ async def test_paper_broker_get_positions_and_account():
 @pytest.mark.asyncio
 async def test_paper_broker_cancel_order():
     broker = PaperBroker(initial_capital=100_000.0)
-    order = await broker.submit_order("AAPL", "buy", 10, order_type="limit", limit_price=150.0)
+    order = await broker.submit_order("AAPL", "buy", 10, order_type="limit", limit_price=95.0)
     ok = await broker.cancel_order(order.broker_id)
     assert ok is True
     updated = await broker.get_order(order.broker_id)

@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import uuid
 from typing import Literal
 
 
@@ -7,6 +8,10 @@ class Signal:
     symbol: str
     side: Literal["buy", "sell", "close", "target"]
     weight: float | None = None
+    qty: int | None = None
+    order_type: str = "market"
+    limit_price: float | None = None
+    signal_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
 
     @classmethod
     def buy(cls, symbol: str, weight: float = 1.0) -> "Signal":

@@ -31,7 +31,7 @@ async def test_order_manager_submit_limit_and_cancel():
 async def test_order_manager_get_open_orders():
     broker = PaperBroker(initial_capital=100_000.0)
     manager = OrderManager(broker)
-    t1 = await manager.submit("AAPL", "buy", 10, order_type="limit", limit_price=149.0)
+    t1 = await manager.submit("AAPL", "buy", 10, order_type="limit", limit_price=95.0)
     t2 = await manager.submit("MSFT", "buy", 20)
     open_orders = manager.get_open_orders()
     assert len(open_orders) == 1
