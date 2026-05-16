@@ -205,3 +205,95 @@ resource "google_cloud_scheduler_job" "bq_load_crypto_daily" {
     }
   }
 }
+
+# =============================================================================
+# Hong Kong BigQuery Native Table + Loader
+# =============================================================================
+
+resource "google_bigquery_table" "hk_bars" {
+  dataset_id = google_bigquery_dataset.quant.dataset_id
+  table_id   = "hk_bars"
+  deletion_protection = false
+
+  time_partitioning {
+    type  = "DAY"
+    field = "timestamp"
+  }
+
+  clustering = ["symbol"]
+
+  schema = jsonencode([
+    { name = "symbol",    type = "STRING" },
+    { name = "timestamp", type = "TIMESTAMP" },
+    { name = "open",      type = "FLOAT64" },
+    { name = "high",      type = "FLOAT64" },
+    { name = "low",       type = "FLOAT64" },
+    { name = "close",     type = "FLOAT64" },
+    { name = "volume",    type = "INT64" },
+    { name = "market",    type = "STRING" },
+    { name = "frequency", type = "STRING" },
+  ])
+}
+
+resource "google_cloud_run_v2_job" "bq_loader_hk" {
+  name     = "quant-bq-loader-hk"
+  location = var.region
+  deletion_protection = false
+
+  template {
+    template {
+      service_account = google_service_account.bq_loader.email
+      containers {
+        image = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}/bq-loader:latest"
+        env {
+          name  = "GCS_BUCKET"
+          value = google_storage_bucket.quant_data.name
+        }
+        env {
+          name  = "GCP_PROJECT"
+          value = var.project_id
+        }
+        env {
+          name  = "MARKET"
+          value = "hk"
+        }
+        env {
+          name  = "TABLE"
+          value = "hk_bars"
+        }
+        env {
+          name  = "LOAD_DAYS"
+          value = "7"
+        }
+        resources {
+          limits = {
+            memory = "512Mi"
+            cpu    = "1"
+          }
+        }
+      }
+      max_retries = 3
+      timeout     = "600s"
+    }
+  }
+}
+
+resource "google_cloud_scheduler_job" "bq_load_hk_daily" {
+  name             = "quant-bq-load-hk-daily"
+  schedule         = "30 9 * * 1-5"
+  time_zone        = "Etc/UTC"
+  attempt_deadline = "600s"
+
+  retry_config {
+    retry_count = 2
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.bq_loader_hk.name}:run"
+
+    oauth_token {
+      service_account_email = google_service_account.bq_loader.email
+    }
+  }
+}
