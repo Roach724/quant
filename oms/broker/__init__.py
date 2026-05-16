@@ -10,8 +10,8 @@ class BrokerOrder:
     broker_id: str
     symbol: str
     side: str
-    qty: int
-    filled_qty: int = 0
+    qty: float = 0.0
+    filled_qty: float = 0.0
     status: str = "pending"
     avg_price: float | None = None
     order_type: str = "market"
@@ -23,7 +23,7 @@ class BrokerOrder:
 @dataclass
 class BrokerPosition:
     symbol: str
-    qty: int
+    qty: float
     avg_entry_price: float
     market_value: float
     unrealized_pnl: float
@@ -38,7 +38,7 @@ class BrokerAccount:
 
 
 class Broker(Protocol):
-    async def submit_order(self, symbol: str, side: str, qty: int,
+    async def submit_order(self, symbol: str, side: str, qty: float,
                            order_type: str = "market",
                            limit_price: float | None = None) -> BrokerOrder: ...
     async def cancel_order(self, broker_id: str) -> bool: ...
