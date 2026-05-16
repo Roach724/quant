@@ -9,7 +9,10 @@ def summary(result) -> dict:
 
     total_ret = (eq.iloc[-1] / eq.iloc[0]) - 1
     n_years = max((eq.index[-1] - eq.index[0]).days / 365.25, 0.01)
-    ann_ret = (1 + total_ret) ** (1 / n_years) - 1
+    if 1 + total_ret > 0:
+        ann_ret = (1 + total_ret) ** (1 / n_years) - 1
+    else:
+        ann_ret = total_ret / n_years  # fallback for >100% loss
 
     avg_ret = rets.mean()
     std_ret = rets.std()
