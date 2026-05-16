@@ -124,6 +124,7 @@ The OMS is async throughout (`asyncio`). The bridge (`oms/bridge.py`) wraps asyn
 - **Work on feature branches** branched from `main`. Phase branches (`phaseN-*`) represent major milestones.
 - **Docker images must be built and pushed** after code changes to collectors, query-api, or bigquery_loader. Use the `gcloud auth configure-docker` command first.
 - **Commit notebooks** with `git add -f` — `*.ipynb` is in `.gitignore` by default.
+- **Conda Environment** use the `quant` conda enviroment for thie project, i.e. `conda activate quant`.
 - **`pip install -e sdk/`** is required before importing `quant.data` or running tests that depend on the SDK.
 - **Run `asyncio.run()`** to bridge sync engine code to async OMS/broker calls. Never call async methods directly from sync context.
 

@@ -45,7 +45,7 @@ class YFinanceUSAdapter:
             for ts, row in sym_df.iterrows():
                 records.append({
                     "symbol": symbol,
-                    "timestamp": ts.tz_convert("UTC"),
+                    "timestamp": ts.tz_convert("UTC") if ts.tzinfo else ts.tz_localize("UTC"),
                     "open": float(row["Open"]),
                     "high": float(row["High"]),
                     "low": float(row["Low"]),

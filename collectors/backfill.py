@@ -41,6 +41,13 @@ from storage import write_bars_to_gcs, dataframe_to_parquet_bytes, build_gcs_pat
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+# Chunk size recommendations by frequency:
+#   "1m", "5m" → 7 days (yfinance free limit: last 30 days only)
+#   "15m", "30m" → 30 days
+#   "1h" → 60 days
+#   "1d" → 365 days (daily data has no time restriction)
+FREQUENCY_DEFAULTS = {"chunk_days": {"1m": 7, "5m": 7, "15m": 30, "30m": 30, "1h": 60, "1d": 365}}  # fmt: skip
+
 
 def backfill(
     start: str,
@@ -48,22 +55,30 @@ def backfill(
     symbols: list[str],
     gcs_bucket: str | None = None,
     local_dir: str | None = None,
-    chunk_days: int = 7,
+    chunk_days: int | None = None,
     sleep_seconds: float = 3.0,
+    frequency: str = "1m",
+    source: str = "yfinance",
 ):
-    """Fetch historical minute bars in chunks and write to GCS or local storage.
+    """Fetch historical bars in chunks and write to GCS or local storage.
 
-    Chunks the date range into windows (default 7 days) to avoid yfinance
-    rate limiting and timeout. Writes each chunk as a set of Parquet files
-    grouped by symbol-date.
+    Args:
+        frequency: Bar interval — "1m", "5m", "15m", "30m", "1h", "1d".
+                   Minute data (1m, 5m) only available for last 30 days
+                   from yfinance free tier. Use "1d" for multi-year backfill.
+        source: Data adapter — "yfinance" (free, no auth) or "alpaca"
+                (requires ALPACA_API_KEY + ALPACA_API_SECRET env vars).
     """
     start_dt = datetime.strptime(start, "%Y-%m-%d")
     end_dt = datetime.strptime(end, "%Y-%m-%d")
     total_days = (end_dt - start_dt).days
-    chunks = (total_days + chunk_days - 1) // chunk_days
 
-    logger.info("Backfill: %s → %s (%d days, %d chunks, %d symbols)",
-                start, end, total_days, chunks, len(symbols))
+    if chunk_days is None:
+        chunk_days = FREQUENCY_DEFAULTS["chunk_days"].get(frequency, 7)
+    chunks = max(1, (total_days + chunk_days - 1) // chunk_days)
+
+    logger.info("Backfill: %s → %s (%d days, %d chunks, %d symbols, freq=%s, source=%s)",
+                start, end, total_days, chunks, len(symbols), frequency, source)
     logger.info("Symbols: %s", symbols)
     if gcs_bucket:
         logger.info("Writing to GCS bucket: %s", gcs_bucket)
@@ -73,18 +88,28 @@ def backfill(
         logger.error("Either --gcs-bucket or --local-dir is required")
         sys.exit(1)
 
-    adapter = YFinanceUSAdapter()
+    if source == "alpaca":
+        from adapters.alpaca_adapter import AlpacaUSAdapter
+        key = os.environ.get("ALPACA_API_KEY", "")
+        secret = os.environ.get("ALPACA_API_SECRET", "")
+        if not key or not secret:
+            logger.error("Alpaca source requires ALPACA_API_KEY and ALPACA_API_SECRET env vars")
+            sys.exit(1)
+        adapter = AlpacaUSAdapter(api_key=key, api_secret=secret)
+    else:
+        adapter = YFinanceUSAdapter()
+
     total_rows = 0
     chunk_start = start_dt
 
     for i in range(chunks):
         chunk_end = min(chunk_start + timedelta(days=chunk_days), end_dt)
 
-        logger.info("[%d/%d] Fetching %s → %s ...", i + 1, chunks,
-                    chunk_start.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d"))
+        logger.info("[%d/%d] Fetching %s → %s (freq=%s)...", i + 1, chunks,
+                    chunk_start.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d"), frequency)
 
         try:
-            df = adapter.fetch_bars(symbols, chunk_start, chunk_end, frequency="1m")
+            df = adapter.fetch_bars(symbols, chunk_start, chunk_end, frequency=frequency)
         except Exception as e:
             logger.error("Fetch failed for %s → %s: %s", chunk_start, chunk_end, e)
             chunk_start = chunk_end
@@ -145,6 +170,12 @@ if __name__ == "__main__":
     parser.add_argument("--sleep", type=float,
                         default=float(os.environ.get("BACKFILL_SLEEP", "3")),
                         help="Seconds sleep between chunks")
+    parser.add_argument("--frequency", default=os.environ.get("BACKFILL_FREQUENCY", "1m"),
+                        choices=["1m", "5m", "15m", "30m", "1h", "1d"],
+                        help="Bar frequency (default: 1m. Use 1d for multi-year backfill)")
+    parser.add_argument("--source", default=os.environ.get("BACKFILL_SOURCE", "yfinance"),
+                        choices=["yfinance", "alpaca"],
+                        help="Data source adapter (default: yfinance)")
     args = parser.parse_args()
 
     if not args.start or not args.end:
@@ -161,5 +192,8 @@ if __name__ == "__main__":
         start=args.start, end=args.end, symbols=symbols,
         gcs_bucket=args.gcs_bucket or None,
         local_dir=args.local_dir or None,
-        chunk_days=args.chunk_days, sleep_seconds=args.sleep,
+        chunk_days=args.chunk_days or None,
+        sleep_seconds=args.sleep,
+        frequency=args.frequency,
+        source=args.source,
     )

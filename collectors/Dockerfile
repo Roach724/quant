@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY schema.py .
 COPY storage.py .
 COPY main.py .
+COPY backfill.py .
 COPY adapters/ adapters/
 
 ENTRYPOINT ["python", "main.py"]

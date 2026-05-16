@@ -37,7 +37,7 @@ class Strategy:
     def parameters(self) -> dict:
         result = {}
         for cls in type(self).__mro__:
-            for k in cls.__dict__.get("__annotations__", {}):
+            for k in getattr(cls, "__annotations__", {}):
                 if not k.startswith("_") and hasattr(self, k):
                     result[k] = getattr(self, k)
         return result
