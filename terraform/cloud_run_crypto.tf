@@ -66,21 +66,5 @@ resource "google_cloud_scheduler_job" "collect_crypto_bars" {
   }
 }
 
-# --- BigQuery External Table: Crypto Bars ---
-resource "google_bigquery_table" "crypto_bars" {
-  dataset_id = google_bigquery_dataset.quant.dataset_id
-  table_id   = "crypto_bars"
-
-  external_data_configuration {
-    autodetect    = true
-    source_format = "PARQUET"
-    source_uris   = [
-      "gs://${google_storage_bucket.quant_data.name}/raw/crypto/bars/*/*/*/*.parquet"
-    ]
-
-    hive_partitioning_options {
-      mode             = "AUTO"
-      source_uri_prefix = "gs://${google_storage_bucket.quant_data.name}/raw/crypto/bars/"
-    }
-  }
-}
+# NOTE: crypto_bars BigQuery native table is defined in bigquery.tf
+# (consistent with us_bars pattern — loaded daily by quant-bq-loader-crypto Job)
