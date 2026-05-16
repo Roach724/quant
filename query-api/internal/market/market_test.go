@@ -46,6 +46,24 @@ func TestParseMarket(t *testing.T) {
 	}
 }
 
+func TestParseMarketCrypto(t *testing.T) {
+	m, ok := ParseMarket("CRYPTO")
+	if !ok {
+		t.Fatal("expected CRYPTO to parse successfully")
+	}
+	if m != CRYPTO {
+		t.Fatalf("expected CRYPTO, got %s", m)
+	}
+}
+
+func TestCryptoStoragePrefix(t *testing.T) {
+	prefix := CRYPTO.StoragePrefix("bars")
+	expected := "raw/crypto/bars"
+	if prefix != expected {
+		t.Fatalf("expected %s, got %s", expected, prefix)
+	}
+}
+
 func TestMarketStoragePrefix(t *testing.T) {
 	tests := []struct {
 		market   Market
