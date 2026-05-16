@@ -131,9 +131,10 @@ if __name__ == "__main__":
                         help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", default=os.environ.get("BACKFILL_END", ""),
                         help="End date (YYYY-MM-DD)")
-    parser.add_argument("--symbols", default=os.environ.get("BACKFILL_SYMBOLS",
-                        "SPY,AAPL,MSFT,NVDA,GOOGL"),
-                        help="Comma-separated symbols")
+    parser.add_argument("--symbols", default=os.environ.get("BACKFILL_SYMBOLS", ""),
+                        help="Comma-separated symbols (default: all S&P 500)")
+    parser.add_argument("--all", action="store_true",
+                        help="Fetch all S&P 500 symbols (ignored if --symbols specified)")
     parser.add_argument("--gcs-bucket", default=os.environ.get("GCS_BUCKET", ""),
                         help="GCS bucket name")
     parser.add_argument("--local-dir", default=os.environ.get("BACKFILL_LOCAL_DIR", ""),
@@ -149,7 +150,13 @@ if __name__ == "__main__":
     if not args.start or not args.end:
         parser.error("--start and --end are required (or set BACKFILL_START/BACKFILL_END)")
 
-    symbols = [s.strip() for s in args.symbols.split(",")]
+    if args.symbols:
+        symbols = [s.strip() for s in args.symbols.split(",")]
+    elif args.all or os.environ.get("BACKFILL_ALL"):
+        symbols = YFinanceUSAdapter().fetch_supported_symbols()
+        logger.info("Using all %d S&P 500 symbols", len(symbols))
+    else:
+        symbols = ["SPY", "AAPL", "MSFT", "NVDA", "GOOGL"]  # minimal default
     backfill(
         start=args.start, end=args.end, symbols=symbols,
         gcs_bucket=args.gcs_bucket or None,
