@@ -52,3 +52,27 @@ def test_crypto_paper_limit_fills_when_crossed():
         "BTCUSDT", "buy", 0.01, order_type="limit", limit_price=66000.0
     ))
     assert order.status == "filled"  # current price 65000 <= limit 66000
+
+
+import os
+
+
+def test_crypto_binance_broker_requires_credentials():
+    from oms.broker.crypto_broker import CryptoBinanceBroker
+    if not os.environ.get("BINANCE_API_KEY"):
+        with pytest.raises(ValueError):
+            CryptoBinanceBroker()
+    else:
+        broker = CryptoBinanceBroker(testnet=True)
+        assert broker is not None
+
+
+@pytest.mark.vcr
+def test_crypto_binance_broker_get_account():
+    from oms.broker.crypto_broker import CryptoBinanceBroker
+    key = os.environ.get("BINANCE_API_KEY", "test")
+    secret = os.environ.get("BINANCE_API_SECRET", "test")
+    broker = CryptoBinanceBroker(api_key=key, api_secret=secret, testnet=True)
+    acc = asyncio.run(broker.get_account())
+    assert acc.cash >= 0
+    assert acc.equity >= 0
