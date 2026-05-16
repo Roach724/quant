@@ -16,6 +16,7 @@ from datetime import datetime, timezone, timedelta
 
 from adapters.alpaca_adapter import AlpacaUSAdapter
 from adapters.yfinance_adapter import YFinanceUSAdapter
+from adapters.yfinance_hk_adapter import YFinanceHKAdapter
 from adapters.crypto_binance_adapter import CryptoBinanceAdapter
 from storage import write_bars_to_gcs
 
@@ -30,6 +31,8 @@ def get_adapter(source: str):
         return AlpacaUSAdapter(api_key=api_key, api_secret=api_secret)
     if source == "cryptobinance":
         return CryptoBinanceAdapter()
+    if source == "yfinancehk":
+        return YFinanceHKAdapter()
     return YFinanceUSAdapter()
 
 
