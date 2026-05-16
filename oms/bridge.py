@@ -24,7 +24,7 @@ def convert_signal(signal: Signal, portfolio) -> dict:
     qty = signal.qty
     if qty is None:
         weight = signal.weight or 1.0
-        qty = max(1, int(portfolio.total_equity * weight / 100.0))
+        qty = max(1.0, portfolio.total_equity * weight / 100.0)
 
     return {
         "symbol": signal.symbol,

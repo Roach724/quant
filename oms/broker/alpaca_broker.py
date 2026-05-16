@@ -24,19 +24,19 @@ class AlpacaBroker:
         side_enum = OrderSide.BUY if side == "buy" else OrderSide.SELL
         if order_type == "limit" and limit_price:
             req = LimitOrderRequest(
-                symbol=symbol, qty=qty, side=side_enum,
+                symbol=symbol, qty=int(qty), side=side_enum,
                 limit_price=limit_price, time_in_force=TimeInForce.DAY,
             )
         else:
             req = MarketOrderRequest(
-                symbol=symbol, qty=qty, side=side_enum,
+                symbol=symbol, qty=int(qty), side=side_enum,
                 time_in_force=TimeInForce.DAY,
             )
         resp = self._client.submit_order(req)
         return BrokerOrder(
             broker_id=str(resp.id), symbol=resp.symbol, side=side,
-            qty=int(float(resp.qty or 0)),
-            filled_qty=int(float(resp.filled_qty or 0)),
+            qty=float(resp.qty or 0),
+            filled_qty=float(resp.filled_qty or 0),
             status=resp.status,
             avg_price=float(resp.filled_avg_price) if resp.filled_avg_price else None,
             created_at=resp.created_at, updated_at=resp.updated_at,
@@ -53,8 +53,8 @@ class AlpacaBroker:
         resp = self._client.get_order_by_id(broker_id)
         return BrokerOrder(
             broker_id=str(resp.id), symbol=resp.symbol, side=resp.side,
-            qty=int(float(resp.qty or 0)),
-            filled_qty=int(float(resp.filled_qty or 0)),
+            qty=float(resp.qty or 0),
+            filled_qty=float(resp.filled_qty or 0),
             status=resp.status,
             avg_price=float(resp.filled_avg_price) if resp.filled_avg_price else None,
         )
@@ -63,7 +63,7 @@ class AlpacaBroker:
         positions = self._client.get_all_positions()
         return [
             BrokerPosition(
-                symbol=p.symbol, qty=int(float(p.qty)),
+                symbol=p.symbol, qty=float(p.qty),
                 avg_entry_price=float(p.avg_entry_price),
                 market_value=float(p.market_value or 0),
                 unrealized_pnl=float(p.unrealized_pl or 0),
@@ -83,8 +83,8 @@ class AlpacaBroker:
         return [
             BrokerOrder(
                 broker_id=str(o.id), symbol=o.symbol, side=o.side.value,
-                qty=int(float(o.qty or 0)),
-                filled_qty=int(float(o.filled_qty or 0)),
+                qty=float(o.qty or 0),
+                filled_qty=float(o.filled_qty or 0),
                 status=o.status,
             )
             for o in orders if hasattr(o, "id")
