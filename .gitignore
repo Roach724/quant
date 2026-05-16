@@ -6,11 +6,14 @@ __pycache__/
 # C extensions
 *.so
 # 
+notebooks/
 .superpowers
 .gemini
 .claude
 .vscode
 *.ipynb
+*.html
+*.txt
 .terraform/
 *.tfvars
 *.tfstate
