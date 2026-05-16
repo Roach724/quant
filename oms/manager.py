@@ -8,7 +8,7 @@ class OrderManager:
         self.orders: dict[str, TrackedOrder] = {}
         self._history: list[TrackedOrder] = []
 
-    async def submit(self, symbol, side, qty, order_type="market",
+    async def submit(self, symbol, side, qty: float, order_type="market",
                      strategy_name="", signal_id=None, limit_price=None):
         t = TrackedOrder(
             symbol=symbol, side=side, qty=qty,
