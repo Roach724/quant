@@ -15,7 +15,7 @@ class Engine:
     def __init__(self, config):
         self.config = config
 
-    def _signals_to_orders(self, signals, portfolio):
+    def _signals_to_orders(self, signals, portfolio, bar_data=None):
         orders = []
         for sig in signals:
             if sig.side == "close" or sig.side == "sell":
@@ -25,7 +25,8 @@ class Engine:
             elif sig.side == "buy" or sig.side == "target":
                 weight = sig.weight or 1.0
                 cash_per_symbol = portfolio.total_equity * weight
-                price_est = 100.0
+                close_prices = bar_data.get("close", {}) if bar_data else {}
+                price_est = close_prices.get(sig.symbol, 100.0)
                 size = max(1, int(cash_per_symbol / price_est))
                 orders.append(Order(symbol=sig.symbol, side="buy", size=size))
         return orders
@@ -43,8 +44,9 @@ class Engine:
         for bar in range(n_bars):
             signals = strategy.on_bar(ctx, bar)
             if signals:
-                orders = self._signals_to_orders(signals, portfolio)
-                orders = risk_engine.check(orders, portfolio, data.iloc(bar))
+                bar_data = data.iloc(bar)
+                orders = self._signals_to_orders(signals, portfolio, bar_data)
+                orders = risk_engine.check(orders, portfolio, bar_data)
                 fills = self._simulate_fills(orders, data.iloc(bar))
                 portfolio.update(fills, data.iloc(bar))
             portfolio.mark_and_record(data.timestamp[bar], data.iloc(bar))

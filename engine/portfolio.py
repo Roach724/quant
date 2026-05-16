@@ -55,7 +55,10 @@ class Portfolio:
 
     def update(self, fills, bar_data):
         for fill in fills:
-            self.cash -= fill.price * fill.size + fill.commission
+            if fill.order.side == "sell":
+                self.cash += fill.price * fill.size - fill.commission
+            else:
+                self.cash -= fill.price * fill.size + fill.commission
             sym = fill.order.symbol
             if sym not in self.positions:
                 self.positions[sym] = Position(symbol=sym)
