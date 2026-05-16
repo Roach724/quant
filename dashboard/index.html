@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quant Trading Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+.header{background:#1e293b;padding:16px 24px;border-bottom:1px solid #334155;display:flex;justify-content:space-between;align-items:center}
+.header h1{font-size:18px;color:#f1f5f9}.header .status{font-size:12px;padding:4px 10px;border-radius:12px}
+.status.live{background:#065f46;color:#6ee7b7}.status.off{background:#7f1d1d;color:#fca5a5}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px;max-width:1400px;margin:0 auto}
+.card{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:16px}
+.card h2{font-size:14px;color:#94a3b8;margin-bottom:12px;text-transform:uppercase;letter-spacing:1px}
+.card.full{grid-column:1/-1}
+.metrics{display:flex;gap:24px;flex-wrap:wrap}
+.metric{text-align:center;min-width:100px}
+.metric .val{font-size:24px;font-weight:700;color:#f1f5f9}
+.metric .lbl{font-size:11px;color:#64748b;margin-top:2px}
+.metric .up{color:#34d399}.metric .down{color:#f87171}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td,th{padding:8px 10px;text-align:right;border-bottom:1px solid #1e293b}
+th{color:#64748b;font-weight:500;text-transform:uppercase;font-size:11px}
+tr:hover{background:#1e293b}
+.alert-item{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #1e293b;font-size:12px}
+.alert-badge{padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;min-width:60px;text-align:center}
+.alert-badge.critical{background:#7f1d1d;color:#fca5a5}
+.alert-badge.warning{background:#713f12;color:#fde047}
+.alert-badge.info{background:#1e3a5f;color:#93c5fd}
+.risk-bar{height:8px;border-radius:4px;margin:8px 0;background:#334155;overflow:hidden}
+.risk-bar .fill{height:100%;border-radius:4px;transition:width .3s}
+.fill.green{background:#34d399}.fill.yellow{background:#fbbf24}.fill.red{background:#f87171}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Trading Dashboard</h1>
+  <div id="status" class="status off">● OFFLINE</div>
+</div>
+<div class="grid" id="app">
+  <div class="card"><h2>Portfolio</h2>
+    <div class="metrics" id="portfolio"></div>
+  </div>
+  <div class="card"><h2>Risk</h2>
+    <div id="risk"></div>
+  </div>
+  <div class="card full"><h2>Positions</h2>
+    <table id="positions"><thead><tr><th>Symbol</th><th>Qty</th><th>Avg Entry</th><th>Market Value</th><th>Unrealized PnL</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card"><h2>Open Orders</h2>
+    <table id="orders"><thead><tr><th>ID</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Filled</th><th>State</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card"><h2>Alerts</h2>
+    <div id="alerts"></div>
+  </div>
+</div>
+<script>
+const API = 'http://localhost:8090';
+async function fetchJSON(path) {
+  try { const r = await fetch(API+path); return r.ok ? await r.json() : null; }
+  catch(e) { return null; }
+}
+function fmt(n, d=0) { return n != null ? Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}) : '-'; }
+function fmtPct(n) { return n != null ? (n*100).toFixed(1)+'%' : '-'; }
+function bar(val, max, colors=['#34d399','#fbbf24','#f87171']) {
+  const pct = Math.min(Math.abs(val)/max*100, 100);
+  const c = pct < 50 ? colors[0] : pct < 80 ? colors[1] : colors[2];
+  return `<div class="risk-bar"><div class="fill ${c==colors[0]?'green':c==colors[1]?'yellow':'red'}" style="width:${pct}%"></div></div>`;
+}
+
+async function refresh() {
+  const [pf, pos, orders, alerts, risk] = await Promise.all([
+    fetchJSON('/api/portfolio'), fetchJSON('/api/positions'),
+    fetchJSON('/api/orders'), fetchJSON('/api/alerts'), fetchJSON('/api/risk')
+  ]);
+
+  // Status
+  const st = document.getElementById('status');
+  st.className = pf ? 'status live' : 'status off';
+  st.innerHTML = pf ? '● LIVE' : '● OFFLINE';
+
+  // Portfolio
+  if (pf) {
+    document.getElementById('portfolio').innerHTML = `
+      <div class="metric"><div class="val">$${fmt(pf.equity,0)}</div><div class="lbl">Equity</div></div>
+      <div class="metric"><div class="val">$${fmt(pf.cash,0)}</div><div class="lbl">Cash</div></div>
+      <div class="metric"><div class="val">$${fmt(pf.buying_power,0)}</div><div class="lbl">Buying Power</div></div>`;
+  }
+
+  // Risk
+  if (risk) {
+    document.getElementById('risk').innerHTML = `
+      <div style="font-size:12px;color:#94a3b8">Drawdown ${bar(risk.drawdown_pct||0,0.2)}</div>
+      <div style="font-size:12px;color:#94a3b8">Leverage ${bar(risk.leverage||0,2)}</div>
+      <div style="display:flex;gap:16px;margin-top:8px;font-size:11px">
+        <span style="color:#93c5fd">● ${risk.alerts_info||0} info</span>
+        <span style="color:#fde047">● ${risk.alerts_warning||0} warning</span>
+        <span style="color:#fca5a5">● ${risk.alerts_critical||0} critical</span>
+      </div>`;
+  }
+
+  // Positions
+  if (pos && pos.length) {
+    document.querySelector('#positions tbody').innerHTML = pos.map(p => `
+      <tr><td style="font-weight:600">${p.symbol}</td><td>${p.qty}</td><td>$${fmt(p.avg_entry,2)}</td>
+      <td>$${fmt(p.market_value,0)}</td>
+      <td class="${p.unrealized_pnl>=0?'up':'down'}">$${fmt(Math.abs(p.unrealized_pnl),0)}</td></tr>`).join('');
+  }
+
+  // Orders
+  if (orders && orders.open.length) {
+    document.querySelector('#orders tbody').innerHTML = orders.open.map(o => `
+      <tr><td>${o.id}</td><td>${o.symbol}</td><td class="${o.side==='buy'?'up':'down'}">${o.side}</td>
+      <td>${o.qty}</td><td>${o.filled_qty}</td><td>${o.state}</td></tr>`).join('');
+  } else {
+    document.querySelector('#orders tbody').innerHTML = '<tr><td colspan="6" style="color:#64748b">No open orders</td></tr>';
+  }
+
+  // Alerts
+  if (alerts && alerts.length) {
+    document.getElementById('alerts').innerHTML = alerts.map(a => `
+      <div class="alert-item">
+        <span class="alert-badge ${a.level}">${a.level}</span>
+        <span>${a.message}</span>
+        <span style="color:#64748b;font-size:10px;margin-left:auto">${new Date(a.timestamp).toLocaleTimeString()}</span>
+      </div>`).join('');
+  } else {
+    document.getElementById('alerts').innerHTML = '<div style="color:#64748b;font-size:13px">No alerts</div>';
+  }
+}
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
