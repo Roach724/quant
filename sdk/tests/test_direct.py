@@ -7,7 +7,7 @@ def test_bars_direct_reads_parquet_from_gcs(tmp_path):
     import pyarrow.parquet as pq
     import pyarrow as pa
 
-    data_dir = tmp_path / "raw/us/bars/year=2026/month=05/day=13"
+    data_dir = tmp_path / "raw/us/bars/freq=5m/year=2026/month=05/day=13"
     data_dir.mkdir(parents=True)
     table = pa.table({
         "symbol": ["AAPL"] * 3,
@@ -22,7 +22,7 @@ def test_bars_direct_reads_parquet_from_gcs(tmp_path):
         "close": [100.5, 101.5, 102.5],
         "volume": [1000, 1100, 1200],
         "market": ["US"] * 3,
-        "frequency": ["1m"] * 3,
+        "frequency": ["5m"] * 3,
     })
     pq.write_table(table, data_dir / "symbol=AAPL.parquet")
 

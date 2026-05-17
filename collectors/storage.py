@@ -1,19 +1,20 @@
 import io
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-def build_gcs_path(market: str, data_type: str, symbol: str, timestamp: datetime) -> str:
+def build_gcs_path(market: str, data_type: str, frequency: str, symbol: str, timestamp: datetime) -> str:
     """Build GCS object path with Hive-style partitioning for BigQuery compatibility.
 
-    Format: raw/{market}/{data_type}/year={YYYY}/month={MM}/day={DD}/symbol={SYMBOL}.parquet
+    Format: raw/{market}/{data_type}/freq={freq}/year={YYYY}/month={MM}/day={DD}/symbol={SYMBOL}.parquet
     """
     return (
         f"raw/{market.lower()}/{data_type}/"
+        f"freq={frequency}/"
         f"year={timestamp.year:04d}/month={timestamp.month:02d}/day={timestamp.day:02d}/"
         f"symbol={symbol}.parquet"
     )
@@ -31,9 +32,13 @@ def write_bars_to_gcs(
     df: pd.DataFrame,
     bucket_name: str,
     market: str = "us",
+    frequency: str = "5m",
 ) -> list[str]:
     """Write bars DataFrame to GCS, one file per symbol-date combination. Returns list of GCS paths."""
     from google.cloud import storage
+
+    df = df.copy()
+    df["_ingest_time"] = datetime.now(timezone.utc)
 
     client = storage.Client()
     bucket = client.bucket(bucket_name)
@@ -42,7 +47,7 @@ def write_bars_to_gcs(
     groups = df.groupby(["symbol", df["timestamp"].dt.date])
     for (symbol, _date), group in groups:
         ts = group["timestamp"].iloc[0]
-        path = build_gcs_path(market, "bars", symbol, ts)
+        path = build_gcs_path(market, "bars", frequency, symbol, ts)
         blob = bucket.blob(path)
         blob.upload_from_string(
             dataframe_to_parquet_bytes(group),

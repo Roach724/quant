@@ -9,17 +9,18 @@ func TestBuildGCSPrefix(t *testing.T) {
 	tests := []struct {
 		market   string
 		dataType string
+		freq     string
 		date     time.Time
 		expected string
 	}{
-		{"us", "bars", time.Date(2026, 5, 13, 0, 0, 0, 0, time.UTC), "raw/us/bars/year=2026/month=05/day=13/"},
-		{"cn", "bars", time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC), "raw/cn/bars/year=2026/month=01/day=05/"},
+		{"us", "bars", "1m", time.Date(2026, 5, 13, 0, 0, 0, 0, time.UTC), "raw/us/bars/freq=1m/year=2026/month=05/day=13/"},
+		{"cn", "bars", "1d", time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC), "raw/cn/bars/freq=1d/year=2026/month=01/day=05/"},
 	}
 	for _, tc := range tests {
-		got := buildGCSPrefix(tc.market, tc.dataType, tc.date)
+		got := buildGCSPrefix(tc.market, tc.dataType, tc.freq, tc.date)
 		if got != tc.expected {
-			t.Errorf("buildGCSPrefix(%q, %q, %v) = %q; want %q",
-				tc.market, tc.dataType, tc.date, got, tc.expected)
+			t.Errorf("buildGCSPrefix(%q, %q, %q, %v) = %q; want %q",
+				tc.market, tc.dataType, tc.freq, tc.date, got, tc.expected)
 		}
 	}
 }

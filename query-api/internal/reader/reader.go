@@ -46,9 +46,9 @@ func ParseQueryParams(mkt, symbols, startStr, endStr, freq string) (QueryParams,
 	}, nil
 }
 
-func buildGCSPrefix(mkt, dataType string, date time.Time) string {
-	return fmt.Sprintf("raw/%s/%s/year=%04d/month=%02d/day=%02d/",
-		strings.ToLower(mkt), dataType,
+func buildGCSPrefix(mkt, dataType, freq string, date time.Time) string {
+	return fmt.Sprintf("raw/%s/%s/freq=%s/year=%04d/month=%02d/day=%02d/",
+		strings.ToLower(mkt), dataType, freq,
 		date.Year(), date.Month(), date.Day())
 }
 
@@ -100,7 +100,7 @@ func (r *GCSBarReader) QueryBars(ctx context.Context, params QueryParams) (*Quer
 	for _, symbol := range params.Symbols {
 		d := params.Start
 		for !d.After(params.End) {
-			prefix := buildGCSPrefix(params.Market, "bars", d)
+			prefix := buildGCSPrefix(params.Market, "bars", params.Frequency, d)
 			target := fmt.Sprintf("symbol=%s.parquet", symbol)
 
 			it := r.client.Bucket(r.bucket).Objects(ctx, &storage.Query{Prefix: prefix})
@@ -166,24 +166,33 @@ func (r *GCSBarReader) readJSONObject(ctx context.Context, objName string) ([]Ba
 	return bars, nil
 }
 
-func (r *GCSBarReader) ListSymbols(ctx context.Context, mkt string) ([]string, error) {
-	prefix := fmt.Sprintf("raw/%s/bars/", strings.ToLower(mkt))
-	it := r.client.Bucket(r.bucket).Objects(ctx, &storage.Query{Prefix: prefix})
+func (r *GCSBarReader) ListSymbols(ctx context.Context, mkt, freq string) ([]string, error) {
+	var prefixes []string
+	if freq != "" {
+		prefixes = []string{fmt.Sprintf("raw/%s/bars/freq=%s/", strings.ToLower(mkt), freq)}
+	} else {
+		for _, f := range []string{"5m", "1d", "1m"} {
+			prefixes = append(prefixes, fmt.Sprintf("raw/%s/bars/freq=%s/", strings.ToLower(mkt), f))
+		}
+	}
 
 	seen := make(map[string]bool)
-	for {
-		attrs, err := it.Next()
-		if err == io.EOF || err != nil {
-			break
-		}
-		parts := strings.Split(attrs.Name, "/")
-		if len(parts) < 2 {
-			continue
-		}
-		file := parts[len(parts)-1]
-		symbol := strings.TrimSuffix(strings.TrimPrefix(file, "symbol="), ".parquet")
-		if symbol != "" && symbol != file {
-			seen[symbol] = true
+	for _, prefix := range prefixes {
+		it := r.client.Bucket(r.bucket).Objects(ctx, &storage.Query{Prefix: prefix})
+		for {
+			attrs, err := it.Next()
+			if err == io.EOF || err != nil {
+				break
+			}
+			parts := strings.Split(attrs.Name, "/")
+			if len(parts) < 2 {
+				continue
+			}
+			file := parts[len(parts)-1]
+			symbol := strings.TrimSuffix(strings.TrimPrefix(file, "symbol="), ".parquet")
+			if symbol != "" && symbol != file {
+				seen[symbol] = true
+			}
 		}
 	}
 

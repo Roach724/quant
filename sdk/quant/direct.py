@@ -11,6 +11,7 @@ def bars_direct(
     start: str,
     end: str,
     market: str = "us",
+    frequency: str = "5m",
     base_path: str | None = None,
     cache_dir: str | None = None,
 ) -> pd.DataFrame:
@@ -32,29 +33,30 @@ def bars_direct(
         bucket = bucket[5:]
 
     if is_gcs and cache:
-        return _read_with_cache(symbols, start_dt, end_dt, market, bucket, cache)
+        return _read_with_cache(symbols, start_dt, end_dt, market, frequency, bucket, cache)
     elif is_gcs:
-        return _read_from_gcs(symbols, start_dt, end_dt, market, bucket)
+        return _read_from_gcs(symbols, start_dt, end_dt, market, frequency, bucket)
     else:
-        return _read_from_local(symbols, start_dt, end_dt, market, bucket)
+        return _read_from_local(symbols, start_dt, end_dt, market, frequency, bucket)
 
 
-def _cache_path(cache_dir: str, market: str, symbol: str, d) -> str:
+def _cache_path(cache_dir: str, market: str, frequency: str, symbol: str, d) -> str:
     return (
         f"{cache_dir}/raw/{market}/bars/"
+        f"freq={frequency}/"
         f"year={d.year:04d}/month={d.month:02d}/"
         f"day={d.day:02d}/symbol={symbol}.parquet"
     )
 
 
-def _read_with_cache(symbols, start_dt, end_dt, market, bucket, cache_dir):
+def _read_with_cache(symbols, start_dt, end_dt, market, frequency, bucket, cache_dir):
     """Read from local cache; on miss, fetch from GCS and cache locally."""
     frames = []
     date_range = pd.date_range(start_dt, end_dt, freq="D")
 
     for symbol in symbols:
         for d in date_range:
-            local_path = _cache_path(cache_dir, market, symbol, d)
+            local_path = _cache_path(cache_dir, market, frequency, symbol, d)
 
             # Check cache first
             if os.path.exists(local_path):
@@ -68,6 +70,7 @@ def _read_with_cache(symbols, start_dt, end_dt, market, bucket, cache_dir):
             # Cache miss — try GCS
             gcs_path = (
                 f"{bucket}/raw/{market}/bars/"
+                f"freq={frequency}/"
                 f"year={d.year:04d}/month={d.month:02d}/day={d.day:02d}/"
                 f"symbol={symbol}.parquet"
             )
@@ -92,13 +95,14 @@ def _read_with_cache(symbols, start_dt, end_dt, market, bucket, cache_dir):
     return result.set_index(["symbol", "timestamp"]).sort_index()
 
 
-def _read_from_local(symbols, start_dt, end_dt, market, base_path):
+def _read_from_local(symbols, start_dt, end_dt, market, frequency, base_path):
     frames = []
     for symbol in symbols:
         date_range = pd.date_range(start_dt, end_dt, freq="D")
         for d in date_range:
             path = (
                 f"{base_path or '.'}/raw/{market}/bars/"
+                f"freq={frequency}/"
                 f"year={d.year:04d}/month={d.month:02d}/day={d.day:02d}/"
                 f"symbol={symbol}.parquet"
             )
@@ -116,7 +120,7 @@ def _read_from_local(symbols, start_dt, end_dt, market, base_path):
     return result.set_index(["symbol", "timestamp"]).sort_index()
 
 
-def _read_from_gcs(symbols, start_dt, end_dt, market, bucket):
+def _read_from_gcs(symbols, start_dt, end_dt, market, frequency, bucket):
     import gcsfs
 
     fs = gcsfs.GCSFileSystem()
@@ -127,6 +131,7 @@ def _read_from_gcs(symbols, start_dt, end_dt, market, bucket):
         for d in date_range:
             path = (
                 f"{bucket}/raw/{market}/bars/"
+                f"freq={frequency}/"
                 f"year={d.year:04d}/month={d.month:02d}/day={d.day:02d}/"
                 f"symbol={symbol}.parquet"
             )

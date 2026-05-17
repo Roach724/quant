@@ -48,7 +48,7 @@ def bars(
         indexed by (symbol, timestamp).
     """
     if source == "direct":
-        return bars_direct(symbols, start, end, market=market, cache_dir=cache_dir)
+        return bars_direct(symbols, start, end, market=market, frequency=frequency, cache_dir=cache_dir)
 
     if isinstance(symbols, list):
         symbols = ",".join(symbols)

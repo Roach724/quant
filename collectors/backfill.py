@@ -143,10 +143,10 @@ def backfill(
         else:
             total_rows += len(df)
             if gcs_bucket:
-                paths = write_bars_to_gcs(df, gcs_bucket, market=market)
+                paths = write_bars_to_gcs(df, gcs_bucket, market=market, frequency=frequency)
                 logger.info("  Wrote %d rows → %d GCS objects", len(df), len(paths))
             elif local_dir:
-                _write_local(df, local_dir, market)
+                _write_local(df, local_dir, market, frequency)
 
         chunk_start = chunk_end
         if i < chunks - 1:
@@ -155,14 +155,14 @@ def backfill(
     logger.info("Backfill complete. Total rows: %d", total_rows)
 
 
-def _write_local(df, base_dir: str, market: str):
+def _write_local(df, base_dir: str, market: str, frequency: str = "5m"):
     """Write bars to local filesystem (same Hive-path structure as GCS)."""
     import pandas as pd
 
     groups = df.groupby(["symbol", df["timestamp"].dt.date])
     for (symbol, _date), group in groups:
         ts = group["timestamp"].iloc[0]
-        path = build_gcs_path(market, "bars", symbol, ts)
+        path = build_gcs_path(market, "bars", frequency, symbol, ts)
         full_path = os.path.join(base_dir, path)
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         group.to_parquet(full_path, index=False)

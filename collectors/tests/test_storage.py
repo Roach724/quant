@@ -8,14 +8,14 @@ from collectors.storage import build_gcs_path, dataframe_to_parquet_bytes
 
 def test_build_gcs_path():
     ts = datetime(2026, 5, 13, 10, 30, tzinfo=timezone.utc)
-    path = build_gcs_path(market="us", data_type="bars", symbol="AAPL", timestamp=ts)
-    assert path == "raw/us/bars/year=2026/month=05/day=13/symbol=AAPL.parquet"
+    path = build_gcs_path(market="us", data_type="bars", frequency="5m", symbol="AAPL", timestamp=ts)
+    assert path == "raw/us/bars/freq=5m/year=2026/month=05/day=13/symbol=AAPL.parquet"
 
 
 def test_build_gcs_path_cn_market():
     ts = datetime(2026, 5, 13, 10, 30, tzinfo=timezone.utc)
-    path = build_gcs_path(market="cn", data_type="bars", symbol="000001", timestamp=ts)
-    assert path == "raw/cn/bars/year=2026/month=05/day=13/symbol=000001.parquet"
+    path = build_gcs_path(market="cn", data_type="bars", frequency="1d", symbol="000001", timestamp=ts)
+    assert path == "raw/cn/bars/freq=1d/year=2026/month=05/day=13/symbol=000001.parquet"
 
 
 def test_dataframe_to_parquet_bytes():

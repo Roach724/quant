@@ -90,6 +90,7 @@ func (h *Handler) handleSymbols(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "market is required"})
 		return
 	}
+	freq := r.URL.Query().Get("frequency")
 
 	if err := h.initBarReader(); err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -103,7 +104,7 @@ func (h *Handler) handleSymbols(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	symbols, err := h.barReader.ListSymbols(ctx, mkt)
+	symbols, err := h.barReader.ListSymbols(ctx, mkt, freq)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"symbols": []string{},

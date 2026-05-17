@@ -1,0 +1,49 @@
+interactions:
+- request:
+    body: null
+    headers:
+      APCA-API-KEY-ID:
+      - test-key
+      APCA-API-SECRET-KEY:
+      - test-secret
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      User-Agent:
+      - APCA-PY/0.43.4
+    method: GET
+    uri: https://data.alpaca.markets/v2/stocks/bars?start=2026-05-11T00%3A00%3A00%2B00%3A00&end=2026-05-13T00%3A00%3A00%2B00%3A00&timeframe=1Min&symbols=AAPL%2CMSFT&limit=10000
+  response:
+    body:
+      string: "<html>\r\n<head><title>401 Authorization Required</title></head>\r\n<body>\r\n<center><h1>401
+        Authorization Required</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+    headers:
+      Access-Control-Allow-Credentials:
+      - 'true'
+      Access-Control-Allow-Headers:
+      - Apca-Api-Key-Id, Apca-Api-Secret-Key, Authorization
+      Access-Control-Allow-Methods:
+      - GET, OPTIONS
+      Access-Control-Allow-Origin:
+      - '*'
+      Access-Control-Max-Age:
+      - '1728000'
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '172'
+      Content-Type:
+      - text/html
+      Date:
+      - Sun, 17 May 2026 15:31:59 GMT
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Request-ID:
+      - 6a00f53d0f201fb3451d17c118e2b319
+    status:
+      code: 401
+      message: Unauthorized
+version: 1

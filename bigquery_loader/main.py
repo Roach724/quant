@@ -1,14 +1,15 @@
 """BigQuery data loader Cloud Run Job.
 
 Runs daily via Cloud Scheduler. Loads Parquet files from GCS into
-native BigQuery tables using single-level globs (avoiding BigQuery's
-"multiple asterisks not supported" limitation).
+native BigQuery tables using single-level globs. Uses WRITE_APPEND
+with dedup on _ingest_time to safely handle overlapping collector runs.
 
 Env vars:
     GCS_BUCKET: GCS bucket name (required)
     GCP_PROJECT: GCP project ID (required)
     MARKET: market to load, e.g. "us" or "crypto" (default: us)
     TABLE: BigQuery table name (default: us_bars)
+    FREQUENCY: bar frequency for path glob (default: 5m)
     LOAD_DAYS: days of historical data to load (default: 7)
 """
 
@@ -31,6 +32,7 @@ SCHEMA = [
     bigquery.SchemaField("volume", "INT64"),
     bigquery.SchemaField("market", "STRING"),
     bigquery.SchemaField("frequency", "STRING"),
+    bigquery.SchemaField("_ingest_time", "TIMESTAMP"),
 ]
 
 
@@ -58,26 +60,27 @@ def ensure_table(client, project, dataset_id="quant", table_id="us_bars"):
         logger.warning("Table ensure: %s", e)
 
 
-def load_market(client, bucket, market, start_date, end_date, project,
+def load_market(client, bucket, market, frequency, start_date, end_date, project,
                 dataset="quant", table="us_bars"):
     """Load a market's Parquet data over a date range."""
     for i in range((end_date - start_date).days + 1):
         d = end_date - timedelta(days=i)
         date_str = d.isoformat()
-        load_day(client, bucket, market, date_str, project, dataset, table)
+        load_day(client, bucket, market, frequency, date_str, project, dataset, table)
 
 
-def load_day(client, bucket, market, date_str, project, dataset="quant", table="us_bars"):
+def load_day(client, bucket, market, frequency, date_str, project, dataset="quant", table="us_bars"):
     """Load one day of Parquet files using single-level glob."""
     pattern = (
-        f"raw/{market}/bars/year={date_str[:4]}/"
-        f"month={date_str[5:7]}/day={date_str[8:10]}/*.parquet"
+        f"raw/{market}/bars/freq={frequency}/"
+        f"year={date_str[:4]}/month={date_str[5:7]}/"
+        f"day={date_str[8:10]}/*.parquet"
     )
     uri = f"gs://{bucket}/{pattern}"
 
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.PARQUET,
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
         time_partitioning=bigquery.TimePartitioning(
             type_=bigquery.TimePartitioningType.DAY,
             field="timestamp",
@@ -98,11 +101,32 @@ def load_day(client, bucket, market, date_str, project, dataset="quant", table="
         logger.warning("Load failed for %s: %s", date_str, e)
 
 
+def dedup_table(client, project, dataset="quant", table="us_bars"):
+    """Remove duplicate (symbol, timestamp) rows, keeping the latest _ingest_time."""
+    query = f"""
+        CREATE OR REPLACE TABLE `{project}.{dataset}.{table}` AS
+        SELECT * EXCEPT(rn) FROM (
+          SELECT *, ROW_NUMBER() OVER (
+            PARTITION BY symbol, timestamp ORDER BY _ingest_time DESC
+          ) AS rn
+          FROM `{project}.{dataset}.{table}`
+        ) WHERE rn = 1
+    """
+    logger.info("Deduping %s.%s.%s ...", project, dataset, table)
+    try:
+        job = client.query(query)
+        job.result()
+        logger.info("Dedup complete: %s.%s.%s", project, dataset, table)
+    except Exception as e:
+        logger.warning("Dedup failed for %s.%s.%s: %s", project, dataset, table, e)
+
+
 def main():
     bucket = os.environ["GCS_BUCKET"]
     project = os.environ["GCP_PROJECT"]
     market = os.environ.get("MARKET", "us")
     table = os.environ.get("TABLE", "us_bars")
+    frequency = os.environ.get("FREQUENCY", "5m")
     load_days = int(os.environ.get("LOAD_DAYS", "7"))
     start_date_str = os.environ.get("START_DATE", "")
 
@@ -117,10 +141,11 @@ def main():
     else:
         start = today - timedelta(days=load_days - 1)
         end = today
-    load_market(client, bucket, market, start, end, project, table=table)
+    load_market(client, bucket, market, frequency, start, end, project, table=table)
+    dedup_table(client, project, table=table)
 
-    logger.info("BigQuery load complete: market=%s table=%s %d days (%s → %s)",
-                market, table, (end - start).days + 1, start.isoformat(), end.isoformat())
+    logger.info("BigQuery load complete: market=%s freq=%s table=%s %d days (%s → %s)",
+                market, frequency, table, (end - start).days + 1, start.isoformat(), end.isoformat())
 
 
 if __name__ == "__main__":
