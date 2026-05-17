@@ -44,13 +44,26 @@ def forward_signal(signal_dict: dict, broker, order_manager,
     If an execution algo is provided, slices the order via TWAP/VWAP.
     Otherwise submits directly through the OrderManager.
 
-    Runs the async broker+manager+algo chain synchronously via asyncio.run().
+    Auto-detects Jupyter event loop: uses asyncio.run() in scripts,
+    or nests the coroutine in a new thread when inside a running loop.
     Returns list of TrackedOrder objects.
     """
-    return asyncio.run(
-        _forward_async(signal_dict, broker, order_manager,
-                       execution_algo, position_tracker, market_data)
-    )
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(
+            _forward_async(signal_dict, broker, order_manager,
+                           execution_algo, position_tracker, market_data)
+        )
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        future = pool.submit(
+            asyncio.run,
+            _forward_async(signal_dict, broker, order_manager,
+                           execution_algo, position_tracker, market_data)
+        )
+        return future.result()
 
 
 async def _forward_async(signal_dict, broker, order_manager,
