@@ -1,5 +1,6 @@
 """Hong Kong stock market adapter via yfinance."""
-from datetime import date, datetime, time, timezone
+from datetime import time
+
 import pandas as pd
 import yfinance as yf
 

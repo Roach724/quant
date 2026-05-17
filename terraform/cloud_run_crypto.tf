@@ -4,8 +4,8 @@
 
 # --- Cloud Run Job: Crypto Bar Collector ---
 resource "google_cloud_run_v2_job" "collector_crypto" {
-  name     = "quant-collector-crypto-binance"
-  location = var.region
+  name                = "quant-collector-crypto-binance"
+  location            = var.region
   deletion_protection = false
 
   template {
@@ -64,6 +64,14 @@ resource "google_cloud_scheduler_job" "collect_crypto_bars" {
       service_account_email = google_service_account.collector.email
     }
   }
+}
+
+resource "google_cloud_run_v2_job_iam_member" "collector_crypto_invoker" {
+  name     = google_cloud_run_v2_job.collector_crypto.name
+  location = var.region
+  project  = var.project_id
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.collector.email}"
 }
 
 # NOTE: crypto_bars BigQuery native table is defined in bigquery.tf

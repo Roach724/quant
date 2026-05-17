@@ -4,8 +4,8 @@
 
 # --- Cloud Run Job: HK Daily Bar Collector ---
 resource "google_cloud_run_v2_job" "collector_hk_daily" {
-  name     = "quant-collector-hk-daily"
-  location = var.region
+  name                = "quant-collector-hk-daily"
+  location            = var.region
   deletion_protection = false
 
   template {
@@ -47,9 +47,17 @@ resource "google_cloud_run_v2_job" "collector_hk_daily" {
 }
 
 # --- Cloud Run Job: HK Minute Bar Collector ---
-resource "google_cloud_run_v2_job" "collector_hk_minute" {
-  name     = "quant-collector-hk-minute"
+resource "google_cloud_run_v2_job_iam_member" "collector_hk_daily_invoker" {
+  name     = google_cloud_run_v2_job.collector_hk_daily.name
   location = var.region
+  project  = var.project_id
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.collector.email}"
+}
+
+resource "google_cloud_run_v2_job" "collector_hk_minute" {
+  name                = "quant-collector-hk-minute"
+  location            = var.region
   deletion_protection = false
 
   template {
@@ -88,6 +96,14 @@ resource "google_cloud_run_v2_job" "collector_hk_minute" {
       timeout     = "600s"
     }
   }
+}
+
+resource "google_cloud_run_v2_job_iam_member" "collector_hk_minute_invoker" {
+  name     = google_cloud_run_v2_job.collector_hk_minute.name
+  location = var.region
+  project  = var.project_id
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.collector.email}"
 }
 
 # --- Cloud Scheduler: HK Daily (Mon-Fri, after market close HKT) ---

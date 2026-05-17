@@ -4,8 +4,8 @@ resource "google_bigquery_dataset" "quant" {
 }
 
 resource "google_bigquery_table" "us_bars" {
-  dataset_id = google_bigquery_dataset.quant.dataset_id
-  table_id   = "us_bars"
+  dataset_id          = google_bigquery_dataset.quant.dataset_id
+  table_id            = "us_bars"
   deletion_protection = false
 
   time_partitioning {
@@ -16,14 +16,14 @@ resource "google_bigquery_table" "us_bars" {
   clustering = ["symbol"]
 
   schema = jsonencode([
-    { name = "symbol",    type = "STRING" },
+    { name = "symbol", type = "STRING" },
     { name = "timestamp", type = "TIMESTAMP" },
-    { name = "open",      type = "FLOAT64" },
-    { name = "high",      type = "FLOAT64" },
-    { name = "low",       type = "FLOAT64" },
-    { name = "close",     type = "FLOAT64" },
-    { name = "volume",    type = "INT64" },
-    { name = "market",    type = "STRING" },
+    { name = "open", type = "FLOAT64" },
+    { name = "high", type = "FLOAT64" },
+    { name = "low", type = "FLOAT64" },
+    { name = "close", type = "FLOAT64" },
+    { name = "volume", type = "INT64" },
+    { name = "market", type = "STRING" },
     { name = "frequency", type = "STRING" },
   ])
 }
@@ -52,8 +52,8 @@ resource "google_project_iam_member" "bq_loader_job_user" {
 }
 
 resource "google_cloud_run_v2_job" "bq_loader" {
-  name               = "quant-bq-loader"
-  location           = var.region
+  name                = "quant-bq-loader"
+  location            = var.region
   deletion_protection = false
 
   template {
@@ -89,9 +89,17 @@ resource "google_cloud_run_v2_job" "bq_loader" {
         }
       }
       max_retries = 3
-      timeout     = "600s"
+      timeout     = "3600s"
     }
   }
+}
+
+resource "google_cloud_run_v2_job_iam_member" "bq_loader_invoker" {
+  name     = google_cloud_run_v2_job.bq_loader.name
+  location = var.region
+  project  = var.project_id
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.bq_loader.email}"
 }
 
 resource "google_cloud_scheduler_job" "bq_load_daily" {
@@ -119,8 +127,8 @@ resource "google_cloud_scheduler_job" "bq_load_daily" {
 # =============================================================================
 
 resource "google_bigquery_table" "crypto_bars" {
-  dataset_id = google_bigquery_dataset.quant.dataset_id
-  table_id   = "crypto_bars"
+  dataset_id          = google_bigquery_dataset.quant.dataset_id
+  table_id            = "crypto_bars"
   deletion_protection = false
 
   time_partitioning {
@@ -131,21 +139,21 @@ resource "google_bigquery_table" "crypto_bars" {
   clustering = ["symbol"]
 
   schema = jsonencode([
-    { name = "symbol",    type = "STRING" },
+    { name = "symbol", type = "STRING" },
     { name = "timestamp", type = "TIMESTAMP" },
-    { name = "open",      type = "FLOAT64" },
-    { name = "high",      type = "FLOAT64" },
-    { name = "low",       type = "FLOAT64" },
-    { name = "close",     type = "FLOAT64" },
-    { name = "volume",    type = "INT64" },
-    { name = "market",    type = "STRING" },
+    { name = "open", type = "FLOAT64" },
+    { name = "high", type = "FLOAT64" },
+    { name = "low", type = "FLOAT64" },
+    { name = "close", type = "FLOAT64" },
+    { name = "volume", type = "INT64" },
+    { name = "market", type = "STRING" },
     { name = "frequency", type = "STRING" },
   ])
 }
 
 resource "google_cloud_run_v2_job" "bq_loader_crypto" {
-  name               = "quant-bq-loader-crypto"
-  location           = var.region
+  name                = "quant-bq-loader-crypto"
+  location            = var.region
   deletion_protection = false
 
   template {
@@ -186,6 +194,14 @@ resource "google_cloud_run_v2_job" "bq_loader_crypto" {
   }
 }
 
+resource "google_cloud_run_v2_job_iam_member" "bq_loader_crypto_invoker" {
+  name     = google_cloud_run_v2_job.bq_loader_crypto.name
+  location = var.region
+  project  = var.project_id
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.bq_loader.email}"
+}
+
 resource "google_cloud_scheduler_job" "bq_load_crypto_daily" {
   name             = "quant-bq-load-crypto-daily"
   schedule         = "0 6 * * *"
@@ -211,8 +227,8 @@ resource "google_cloud_scheduler_job" "bq_load_crypto_daily" {
 # =============================================================================
 
 resource "google_bigquery_table" "hk_bars" {
-  dataset_id = google_bigquery_dataset.quant.dataset_id
-  table_id   = "hk_bars"
+  dataset_id          = google_bigquery_dataset.quant.dataset_id
+  table_id            = "hk_bars"
   deletion_protection = false
 
   time_partitioning {
@@ -223,21 +239,21 @@ resource "google_bigquery_table" "hk_bars" {
   clustering = ["symbol"]
 
   schema = jsonencode([
-    { name = "symbol",    type = "STRING" },
+    { name = "symbol", type = "STRING" },
     { name = "timestamp", type = "TIMESTAMP" },
-    { name = "open",      type = "FLOAT64" },
-    { name = "high",      type = "FLOAT64" },
-    { name = "low",       type = "FLOAT64" },
-    { name = "close",     type = "FLOAT64" },
-    { name = "volume",    type = "INT64" },
-    { name = "market",    type = "STRING" },
+    { name = "open", type = "FLOAT64" },
+    { name = "high", type = "FLOAT64" },
+    { name = "low", type = "FLOAT64" },
+    { name = "close", type = "FLOAT64" },
+    { name = "volume", type = "INT64" },
+    { name = "market", type = "STRING" },
     { name = "frequency", type = "STRING" },
   ])
 }
 
 resource "google_cloud_run_v2_job" "bq_loader_hk" {
-  name     = "quant-bq-loader-hk"
-  location = var.region
+  name                = "quant-bq-loader-hk"
+  location            = var.region
   deletion_protection = false
 
   template {
@@ -276,6 +292,14 @@ resource "google_cloud_run_v2_job" "bq_loader_hk" {
       timeout     = "600s"
     }
   }
+}
+
+resource "google_cloud_run_v2_job_iam_member" "bq_loader_hk_invoker" {
+  name     = google_cloud_run_v2_job.bq_loader_hk.name
+  location = var.region
+  project  = var.project_id
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.bq_loader.email}"
 }
 
 resource "google_cloud_scheduler_job" "bq_load_hk_daily" {

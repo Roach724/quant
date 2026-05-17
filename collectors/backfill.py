@@ -1,16 +1,28 @@
 """Historical data backfill script.
 
 Fetches minute-level OHLCV bars for a configurable date range and writes
-them to GCS using the existing YFinance adapter and storage module.
+them to GCS using available market adapters (YFinance US/HK, Crypto Binance, Alpaca US).
 
 Usage:
-    # Local run (writes to GCS):
+    # US stocks (default):
     python collectors/backfill.py \
         --start 2023-01-01 --end 2026-01-01 \
         --symbols SPY,AAPL,MSFT,NVDA \
         --market us
 
-    # Local dry run (writes to local files):
+    # Crypto via Binance (daily bars recommended for multi-month backfill):
+    python collectors/backfill.py \
+        --start 2025-01-01 --end 2026-01-01 \
+        --source cryptobinance --all \
+        --frequency 1d --gcs-bucket <bucket>
+
+    # Hong Kong stocks:
+    python collectors/backfill.py \
+        --start 2025-01-01 --end 2026-01-01 \
+        --source yfinancehk --all \
+        --frequency 1d --gcs-bucket <bucket>
+
+    # Local dry run:
     python collectors/backfill.py \
         --start 2023-01-01 --end 2024-01-01 \
         --local-dir ./backfill_data
@@ -26,6 +38,8 @@ Env vars (Cloud Run mode):
     BACKFILL_SYMBOLS: comma-separated symbols (default: SPY,AAPL,MSFT,NVDA,GOOGL)
     BACKFILL_CHUNK_DAYS: days per API call (default: 7)
     BACKFILL_SLEEP: seconds between chunks (default: 3)
+    BACKFILL_SOURCE: data source — "yfinance" (US), "alpaca" (US),
+                     "cryptobinance" (crypto), "yfinancehk" (HK)
 """
 
 import argparse
@@ -36,7 +50,9 @@ import time
 from datetime import datetime, timedelta
 
 from adapters.yfinance_adapter import YFinanceUSAdapter
-from storage import write_bars_to_gcs, dataframe_to_parquet_bytes, build_gcs_path
+from adapters.crypto_binance_adapter import CryptoBinanceAdapter
+from adapters.yfinance_hk_adapter import YFinanceHKAdapter
+from storage import build_gcs_path, dataframe_to_parquet_bytes, write_bars_to_gcs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -66,8 +82,8 @@ def backfill(
         frequency: Bar interval — "1m", "5m", "15m", "30m", "1h", "1d".
                    Minute data (1m, 5m) only available for last 30 days
                    from yfinance free tier. Use "1d" for multi-year backfill.
-        source: Data adapter — "yfinance" (free, no auth) or "alpaca"
-                (requires ALPACA_API_KEY + ALPACA_API_SECRET env vars).
+        source: Data adapter — "yfinance" (US, free), "alpaca" (US, needs auth),
+                "cryptobinance" (Binance crypto), "yfinancehk" (HK stocks).
     """
     start_dt = datetime.strptime(start, "%Y-%m-%d")
     end_dt = datetime.strptime(end, "%Y-%m-%d")
@@ -96,8 +112,14 @@ def backfill(
             logger.error("Alpaca source requires ALPACA_API_KEY and ALPACA_API_SECRET env vars")
             sys.exit(1)
         adapter = AlpacaUSAdapter(api_key=key, api_secret=secret)
+    elif source == "cryptobinance":
+        adapter = CryptoBinanceAdapter()
+    elif source == "yfinancehk":
+        adapter = YFinanceHKAdapter()
     else:
         adapter = YFinanceUSAdapter()
+
+    market = adapter.market.lower()
 
     total_rows = 0
     chunk_start = start_dt
@@ -121,10 +143,10 @@ def backfill(
         else:
             total_rows += len(df)
             if gcs_bucket:
-                paths = write_bars_to_gcs(df, gcs_bucket, market="us")
+                paths = write_bars_to_gcs(df, gcs_bucket, market=market)
                 logger.info("  Wrote %d rows → %d GCS objects", len(df), len(paths))
             elif local_dir:
-                _write_local(df, local_dir)
+                _write_local(df, local_dir, market)
 
         chunk_start = chunk_end
         if i < chunks - 1:
@@ -133,14 +155,14 @@ def backfill(
     logger.info("Backfill complete. Total rows: %d", total_rows)
 
 
-def _write_local(df, base_dir: str):
+def _write_local(df, base_dir: str, market: str):
     """Write bars to local filesystem (same Hive-path structure as GCS)."""
     import pandas as pd
 
     groups = df.groupby(["symbol", df["timestamp"].dt.date])
     for (symbol, _date), group in groups:
         ts = group["timestamp"].iloc[0]
-        path = build_gcs_path("us", "bars", symbol, ts)
+        path = build_gcs_path(market, "bars", symbol, ts)
         full_path = os.path.join(base_dir, path)
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         group.to_parquet(full_path, index=False)
@@ -174,7 +196,7 @@ if __name__ == "__main__":
                         choices=["1m", "5m", "15m", "30m", "1h", "1d"],
                         help="Bar frequency (default: 1m. Use 1d for multi-year backfill)")
     parser.add_argument("--source", default=os.environ.get("BACKFILL_SOURCE", "yfinance"),
-                        choices=["yfinance", "alpaca"],
+                        choices=["yfinance", "alpaca", "cryptobinance", "yfinancehk"],
                         help="Data source adapter (default: yfinance)")
     args = parser.parse_args()
 
@@ -184,8 +206,19 @@ if __name__ == "__main__":
     if args.symbols:
         symbols = [s.strip() for s in args.symbols.split(",")]
     elif args.all or os.environ.get("BACKFILL_ALL"):
-        symbols = YFinanceUSAdapter().fetch_supported_symbols()
-        logger.info("Using all %d S&P 500 symbols", len(symbols))
+        # Use the adapter that matches the selected source for symbol discovery
+        if args.source == "cryptobinance":
+            symbols = CryptoBinanceAdapter().fetch_supported_symbols()
+        elif args.source == "yfinancehk":
+            symbols = YFinanceHKAdapter().fetch_supported_symbols()
+        elif args.source == "alpaca":
+            from adapters.alpaca_adapter import AlpacaUSAdapter
+            key = os.environ.get("ALPACA_API_KEY", "")
+            secret = os.environ.get("ALPACA_API_SECRET", "")
+            symbols = AlpacaUSAdapter(api_key=key, api_secret=secret).fetch_supported_symbols()
+        else:
+            symbols = YFinanceUSAdapter().fetch_supported_symbols()
+        logger.info("Using all %d symbols from %s", len(symbols), args.source)
     else:
         symbols = ["SPY", "AAPL", "MSFT", "NVDA", "GOOGL"]  # minimal default
     backfill(

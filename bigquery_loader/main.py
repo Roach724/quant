@@ -104,17 +104,23 @@ def main():
     market = os.environ.get("MARKET", "us")
     table = os.environ.get("TABLE", "us_bars")
     load_days = int(os.environ.get("LOAD_DAYS", "7"))
+    start_date_str = os.environ.get("START_DATE", "")
 
     client = bigquery.Client(project=project)
     ensure_dataset(client, project)
     ensure_table(client, project, table_id=table)
 
     today = datetime.now(timezone.utc).date()
-    start = today - timedelta(days=load_days - 1)
-    load_market(client, bucket, market, start, today, project, table=table)
+    if start_date_str:
+        start = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        end = min(start + timedelta(days=load_days - 1), today)
+    else:
+        start = today - timedelta(days=load_days - 1)
+        end = today
+    load_market(client, bucket, market, start, end, project, table=table)
 
-    logger.info("BigQuery load complete: market=%s table=%s %d days",
-                market, table, load_days)
+    logger.info("BigQuery load complete: market=%s table=%s %d days (%s → %s)",
+                market, table, (end - start).days + 1, start.isoformat(), end.isoformat())
 
 
 if __name__ == "__main__":

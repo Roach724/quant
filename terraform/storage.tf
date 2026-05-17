@@ -12,7 +12,7 @@ resource "google_storage_bucket" "quant_data" {
   lifecycle_rule {
     condition { age = 90 }
     action {
-      type         = "SetStorageClass"
+      type          = "SetStorageClass"
       storage_class = "NEARLINE"
     }
   }

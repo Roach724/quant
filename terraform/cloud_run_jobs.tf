@@ -1,6 +1,6 @@
 resource "google_cloud_run_v2_job" "collector_yfinance" {
-  name               = "quant-collector-yfinance"
-  location           = var.region
+  name                = "quant-collector-yfinance"
+  location            = var.region
   deletion_protection = false
 
   template {
@@ -39,4 +39,12 @@ resource "google_cloud_run_v2_job" "collector_yfinance" {
       timeout     = "600s"
     }
   }
+}
+
+resource "google_cloud_run_v2_job_iam_member" "collector_yfinance_invoker" {
+  name     = google_cloud_run_v2_job.collector_yfinance.name
+  location = var.region
+  project  = var.project_id
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.collector.email}"
 }

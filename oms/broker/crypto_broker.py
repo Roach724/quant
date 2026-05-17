@@ -1,10 +1,12 @@
 """Crypto broker implementations: CryptoPaperBroker and CryptoBinanceBroker."""
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-import uuid
+import os
 import random
+import uuid
+from datetime import UTC, datetime
 
-from oms.broker import BrokerOrder, BrokerPosition, BrokerAccount
+import ccxt
+
+from oms.broker import BrokerAccount, BrokerOrder, BrokerPosition
 
 
 class CryptoPaperBroker:
@@ -41,7 +43,7 @@ class CryptoPaperBroker:
         order.status = "filled"
         order.filled_qty = order.qty
         order.avg_price = fill_price
-        order.updated_at = datetime.now(timezone.utc)
+        order.updated_at = datetime.now(UTC)
         pos = self._positions.get(order.symbol)
         if pos:
             total_qty = pos.qty + (order.qty if order.side == "buy" else -order.qty)
@@ -61,7 +63,7 @@ class CryptoPaperBroker:
 
     async def submit_order(self, symbol, side, qty, order_type="market", limit_price=None):
         oid = str(uuid.uuid4())[:8]
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         order = BrokerOrder(
             broker_id=oid, symbol=symbol, side=side, qty=qty,
             order_type=order_type, limit_price=limit_price,
@@ -103,10 +105,6 @@ class CryptoPaperBroker:
 
     async def get_open_orders(self):
         return [o for o in self._orders.values() if o.status in ("pending",)]
-
-
-import os
-import ccxt
 
 
 class CryptoBinanceBroker:
@@ -153,8 +151,8 @@ class CryptoBinanceBroker:
                 filled_qty=float(resp.get("filled", 0)),
                 status=resp.get("status", "unknown"),
                 avg_price=float(resp.get("average", 0)) if resp.get("average") else None,
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
             )
         except Exception as e:
             raise RuntimeError(f"Binance order failed: {e}")

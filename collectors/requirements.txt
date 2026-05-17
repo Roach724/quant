@@ -3,3 +3,4 @@ pyarrow>=17.0
 google-cloud-storage>=2.18
 yfinance>=0.2.50
 alpaca-py>=0.34.0
+ccxt>=4.4
