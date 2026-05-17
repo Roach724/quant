@@ -1,0 +1,104 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker \
+            ${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev
+
+      # ── Collector image ──
+      - name: Build & push collector
+        uses: docker/build-push-action@v6
+        with:
+          context: collectors/
+          push: true
+          tags: |
+            ${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/quant/collector:latest
+            ${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/quant/collector:${{ github.sha }}
+
+      # ── BQ loader image ──
+      - name: Build & push bq-loader
+        uses: docker/build-push-action@v6
+        with:
+          context: bigquery_loader/
+          push: true
+          tags: |
+            ${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/quant/bq-loader:latest
+            ${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/quant/bq-loader:${{ github.sha }}
+
+      # ── Query API image ──
+      - name: Build & push query-api
+        uses: docker/build-push-action@v6
+        with:
+          context: query-api/
+          push: true
+          tags: |
+            ${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/quant/query-api:latest
+            ${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/quant/query-api:${{ github.sha }}
+
+      # ── Update Cloud Run Jobs ──
+      - name: Update collector jobs
+        run: |
+          IMAGE="${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/quant/collector:${{ github.sha }}"
+          for job in \
+            quant-collector-us-5m \
+            quant-collector-us-1d \
+            quant-collector-hk-5m \
+            quant-collector-hk-1d \
+            quant-collector-crypto-5m \
+            quant-collector-crypto-1d
+          do
+            echo "Updating $job ..."
+            gcloud run jobs update "$job" --region=${{ vars.GCP_REGION || 'us-central1' }} \
+              --image="$IMAGE" --quiet
+          done
+
+      - name: Update BQ loader jobs
+        run: |
+          IMAGE="${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/quant/bq-loader:${{ github.sha }}"
+          for job in \
+            quant-bq-loader-us-5m \
+            quant-bq-loader-us-1d \
+            quant-bq-loader-hk-5m \
+            quant-bq-loader-hk-1d \
+            quant-bq-loader-crypto-5m \
+            quant-bq-loader-crypto-1d
+          do
+            echo "Updating $job ..."
+            gcloud run jobs update "$job" --region=${{ vars.GCP_REGION || 'us-central1' }} \
+              --image="$IMAGE" --quiet
+          done
+
+      - name: Deploy query-api service
+        run: |
+          IMAGE="${{ vars.GCP_REGION || 'us-central1' }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/quant/query-api:${{ github.sha }}"
+          gcloud run deploy quant-query-api \
+            --region=${{ vars.GCP_REGION || 'us-central1' }} \
+            --image="$IMAGE" \
+            --quiet
