@@ -47,7 +47,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from adapters.yfinance_adapter import YFinanceUSAdapter
 from adapters.crypto_binance_adapter import CryptoBinanceAdapter
@@ -158,6 +158,9 @@ def backfill(
 def _write_local(df, base_dir: str, market: str, frequency: str = "5m"):
     """Write bars to local filesystem (same Hive-path structure as GCS)."""
     import pandas as pd
+
+    df = df.copy()
+    df["_ingest_time"] = datetime.now(timezone.utc)
 
     groups = df.groupby(["symbol", df["timestamp"].dt.date])
     for (symbol, _date), group in groups:
