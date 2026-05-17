@@ -52,6 +52,8 @@ from datetime import datetime, timedelta, timezone
 from adapters.yfinance_adapter import YFinanceUSAdapter
 from adapters.crypto_binance_adapter import CryptoBinanceAdapter
 from adapters.yfinance_hk_adapter import YFinanceHKAdapter
+from adapters.akshare_hk_adapter import AkshareHKAdapter
+from adapters.akshare_us_adapter import AkshareUSAdapter
 from storage import build_gcs_path, dataframe_to_parquet_bytes, write_bars_to_gcs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -63,6 +65,147 @@ logger = logging.getLogger(__name__)
 #   "1h" → 60 days
 #   "1d" → 365 days (daily data has no time restriction)
 FREQUENCY_DEFAULTS = {"chunk_days": {"1m": 7, "5m": 7, "15m": 30, "30m": 30, "1h": 60, "1d": 365}}  # fmt: skip
+
+# HK-specific: delay between symbols to avoid rate-limiting
+HK_SYMBOL_DELAY = 0.3  # seconds
+HK_MAX_RETRIES = 2
+HK_PROGRESS_INTERVAL = 50  # log every N symbols
+
+# US-specific: delay between symbols to avoid rate-limiting
+US_SYMBOL_DELAY = 0.3  # seconds
+US_MAX_RETRIES = 2
+US_PROGRESS_INTERVAL = 50  # log every N symbols
+
+
+def _backfill_us(
+    adapter: YFinanceUSAdapter,
+    symbols: list[str],
+    start_dt: datetime,
+    end_dt: datetime,
+    frequency: str,
+    gcs_bucket: str | None,
+    local_dir: str | None,
+    chunk_days: int = 365,
+):
+    """Backfill US stocks: per-symbol serial processing with yfinance→akshare fallback.
+
+    Each symbol is fetched independently in time-based chunks. Failed symbols
+    are retried up to US_MAX_RETRIES times with exponential backoff.
+    """
+    market = adapter.market.lower()
+    total_rows = 0
+    failed_symbols = []
+
+    for idx, sym in enumerate(symbols):
+        sym_rows = 0
+
+        for attempt in range(1 + US_MAX_RETRIES):
+            try:
+                chunk_start = start_dt
+                while chunk_start < end_dt:
+                    chunk_end = min(chunk_start + timedelta(days=chunk_days), end_dt)
+                    df = adapter.fetch_bars([sym], chunk_start, chunk_end, frequency=frequency)
+                    if df is not None and not df.empty:
+                        sym_rows += len(df)
+                        if gcs_bucket:
+                            write_bars_to_gcs(df, gcs_bucket, market=market, frequency=frequency)
+                        elif local_dir:
+                            _write_local(df, local_dir, market, frequency)
+                    chunk_start = chunk_end
+                    if chunk_start < end_dt:
+                        time.sleep(0.1)  # small pause between chunks for same symbol
+                break  # success
+            except Exception as e:
+                if attempt < US_MAX_RETRIES:
+                    wait = US_SYMBOL_DELAY * (2 ** (attempt + 1))
+                    logger.warning("Symbol %s attempt %d failed: %s. Retrying in %.1fs...",
+                                   sym, attempt + 1, e, wait)
+                    time.sleep(wait)
+                else:
+                    logger.error("Symbol %s failed after %d retries: %s", sym, US_MAX_RETRIES, e)
+                    failed_symbols.append(sym)
+
+        if sym_rows > 0:
+            total_rows += sym_rows
+
+        if (idx + 1) % US_PROGRESS_INTERVAL == 0:
+            logger.info("Progress: %d/%d symbols processed, %d rows collected so far",
+                        idx + 1, len(symbols), total_rows)
+
+        # Rate-limit between symbols
+        if idx < len(symbols) - 1:
+            time.sleep(US_SYMBOL_DELAY)
+
+    logger.info("US backfill complete: %d/%d symbols succeeded, %d total rows",
+                len(symbols) - len(failed_symbols), len(symbols), total_rows)
+    if failed_symbols:
+        logger.warning("Failed symbols (%d): %s", len(failed_symbols), failed_symbols[:20])
+
+
+def _backfill_hk(
+    adapter: YFinanceHKAdapter,
+    symbols: list[str],
+    start_dt: datetime,
+    end_dt: datetime,
+    frequency: str,
+    gcs_bucket: str | None,
+    local_dir: str | None,
+    chunk_days: int = 365,
+):
+    """Backfill HK stocks: per-symbol serial processing with yfinance→akshare fallback.
+
+    Each symbol is fetched independently in time-based chunks. Failed symbols
+    are retried up to HK_MAX_RETRIES times with exponential backoff.
+    """
+    market = adapter.market.lower()
+    total_rows = 0
+    failed_symbols = []
+
+    for idx, sym in enumerate(symbols):
+        yf_sym = f"{sym}.HK"
+        sym_rows = 0
+
+        for attempt in range(1 + HK_MAX_RETRIES):
+            try:
+                chunk_start = start_dt
+                while chunk_start < end_dt:
+                    chunk_end = min(chunk_start + timedelta(days=chunk_days), end_dt)
+                    df = adapter.fetch_bars([yf_sym], chunk_start, chunk_end, frequency=frequency)
+                    if df is not None and not df.empty:
+                        sym_rows += len(df)
+                        if gcs_bucket:
+                            write_bars_to_gcs(df, gcs_bucket, market=market, frequency=frequency)
+                        elif local_dir:
+                            _write_local(df, local_dir, market, frequency)
+                    chunk_start = chunk_end
+                    if chunk_start < end_dt:
+                        time.sleep(0.1)  # small pause between chunks for same symbol
+                break  # success
+            except Exception as e:
+                if attempt < HK_MAX_RETRIES:
+                    wait = HK_SYMBOL_DELAY * (2 ** (attempt + 1))
+                    logger.warning("Symbol %s attempt %d failed: %s. Retrying in %.1fs...",
+                                   sym, attempt + 1, e, wait)
+                    time.sleep(wait)
+                else:
+                    logger.error("Symbol %s failed after %d retries: %s", sym, HK_MAX_RETRIES, e)
+                    failed_symbols.append(sym)
+
+        if sym_rows > 0:
+            total_rows += sym_rows
+
+        if (idx + 1) % HK_PROGRESS_INTERVAL == 0:
+            logger.info("Progress: %d/%d symbols processed, %d rows collected so far",
+                        idx + 1, len(symbols), total_rows)
+
+        # Rate-limit between symbols
+        if idx < len(symbols) - 1:
+            time.sleep(HK_SYMBOL_DELAY)
+
+    logger.info("HK backfill complete: %d/%d symbols succeeded, %d total rows",
+                len(symbols) - len(failed_symbols), len(symbols), total_rows)
+    if failed_symbols:
+        logger.warning("Failed symbols (%d): %s", len(failed_symbols), failed_symbols[:20])
 
 
 def backfill(
@@ -89,13 +232,9 @@ def backfill(
     end_dt = datetime.strptime(end, "%Y-%m-%d")
     total_days = (end_dt - start_dt).days
 
-    if chunk_days is None:
-        chunk_days = FREQUENCY_DEFAULTS["chunk_days"].get(frequency, 7)
-    chunks = max(1, (total_days + chunk_days - 1) // chunk_days)
-
-    logger.info("Backfill: %s → %s (%d days, %d chunks, %d symbols, freq=%s, source=%s)",
-                start, end, total_days, chunks, len(symbols), frequency, source)
-    logger.info("Symbols: %s", symbols)
+    logger.info("Backfill: %s → %s (%d days, %d symbols, freq=%s, source=%s)",
+                start, end, total_days, len(symbols), frequency, source)
+    logger.info("Symbols: %s", symbols[:20] if len(symbols) > 20 else symbols)
     if gcs_bucket:
         logger.info("Writing to GCS bucket: %s", gcs_bucket)
     elif local_dir:
@@ -103,6 +242,45 @@ def backfill(
     else:
         logger.error("Either --gcs-bucket or --local-dir is required")
         sys.exit(1)
+
+    # --- HK: per-symbol serial processing with fallback ---
+    if source == "yfinancehk":
+        hk_adapter = YFinanceHKAdapter(fallback_adapter=AkshareHKAdapter())
+        if chunk_days is None:
+            chunk_days = FREQUENCY_DEFAULTS["chunk_days"].get(frequency, 365)
+        _backfill_hk(
+            adapter=hk_adapter,
+            symbols=symbols,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            frequency=frequency,
+            gcs_bucket=gcs_bucket,
+            local_dir=local_dir,
+            chunk_days=chunk_days,
+        )
+        return
+
+    # --- US: per-symbol serial processing with fallback ---
+    if source == "yfinance":
+        us_adapter = YFinanceUSAdapter(fallback_adapter=AkshareUSAdapter())
+        if chunk_days is None:
+            chunk_days = FREQUENCY_DEFAULTS["chunk_days"].get(frequency, 365)
+        _backfill_us(
+            adapter=us_adapter,
+            symbols=symbols,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            frequency=frequency,
+            gcs_bucket=gcs_bucket,
+            local_dir=local_dir,
+            chunk_days=chunk_days,
+        )
+        return
+
+    # --- Standard bulk-fetch path (Alpaca, Crypto) ---
+    if chunk_days is None:
+        chunk_days = FREQUENCY_DEFAULTS["chunk_days"].get(frequency, 7)
+    chunks = max(1, (total_days + chunk_days - 1) // chunk_days)
 
     if source == "alpaca":
         from adapters.alpaca_adapter import AlpacaUSAdapter
@@ -114,8 +292,6 @@ def backfill(
         adapter = AlpacaUSAdapter(api_key=key, api_secret=secret)
     elif source == "cryptobinance":
         adapter = CryptoBinanceAdapter()
-    elif source == "yfinancehk":
-        adapter = YFinanceHKAdapter()
     else:
         adapter = YFinanceUSAdapter()
 
@@ -208,19 +384,23 @@ if __name__ == "__main__":
 
     if args.symbols:
         symbols = [s.strip() for s in args.symbols.split(",")]
+    elif args.source == "yfinance":
+        # US 1d: auto-discover full stock pool
+        symbols = YFinanceUSAdapter.fetch_all_symbols()
+        logger.info("Auto-discovered %d US symbols from %s", len(symbols), args.source)
     elif args.all or os.environ.get("BACKFILL_ALL"):
         # Use the adapter that matches the selected source for symbol discovery
         if args.source == "cryptobinance":
             symbols = CryptoBinanceAdapter().fetch_supported_symbols()
         elif args.source == "yfinancehk":
-            symbols = YFinanceHKAdapter().fetch_supported_symbols()
+            symbols = YFinanceHKAdapter.fetch_all_symbols()
         elif args.source == "alpaca":
             from adapters.alpaca_adapter import AlpacaUSAdapter
             key = os.environ.get("ALPACA_API_KEY", "")
             secret = os.environ.get("ALPACA_API_SECRET", "")
             symbols = AlpacaUSAdapter(api_key=key, api_secret=secret).fetch_supported_symbols()
         else:
-            symbols = YFinanceUSAdapter().fetch_supported_symbols()
+            symbols = YFinanceUSAdapter.fetch_all_symbols()
         logger.info("Using all %d symbols from %s", len(symbols), args.source)
     else:
         symbols = ["SPY", "AAPL", "MSFT", "NVDA", "GOOGL"]  # minimal default

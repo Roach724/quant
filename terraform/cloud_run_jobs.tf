@@ -94,10 +94,6 @@ resource "google_cloud_run_v2_job" "collector_us_1d" {
           value = "yfinance"
         }
         env {
-          name  = "SYMBOLS"
-          value = "SPY,AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA"
-        }
-        env {
           name  = "FREQUENCY"
           value = "1d"
         }

@@ -74,6 +74,9 @@ resource "google_cloud_scheduler_job" "collect_hk_5m" {
 }
 
 # --- HK 1d Collector ---
+# Symbols are auto-discovered at runtime via akshare stock_hk_ggt_components_em()
+# with liquidity filters (price >= 1.0, turnover >= 1M HKD).
+# YFinanceHKAdapter uses akshare as fallback when yfinance returns < 5 rows.
 resource "google_cloud_run_v2_job" "collector_hk_1d" {
   name                = "quant-collector-hk-1d"
   location            = var.region
@@ -91,10 +94,6 @@ resource "google_cloud_run_v2_job" "collector_hk_1d" {
         env {
           name  = "COLLECTOR_SOURCE"
           value = "yfinancehk"
-        }
-        env {
-          name  = "SYMBOLS"
-          value = "0700.HK,9988.HK,3690.HK,9618.HK,9999.HK,9888.HK,2015.HK,9868.HK,1810.HK,1024.HK,9626.HK,0005.HK,0388.HK,1299.HK,2318.HK,3968.HK,1398.HK,3988.HK,2628.HK,0011.HK,0001.HK,0002.HK,0003.HK,0016.HK,0027.HK,0175.HK,0267.HK,0291.HK,0669.HK,0823.HK,0883.HK,0941.HK,1044.HK,1093.HK,1177.HK,1928.HK,2269.HK"
         }
         env {
           name  = "FREQUENCY"
