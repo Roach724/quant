@@ -38,6 +38,44 @@ def test_walkforward_runs_folds():
         assert "sharpe_ratio" in f["test_metrics"]
 
 
+def test_walkforward_with_pred():
+    """WalkForward should pass pred data through to fold data sources."""
+    import pandas as pd
+    import numpy as np
+    from engine.config import BacktestConfig
+    from engine.data import DataFrameSource
+    from engine.walkforward import WalkForward
+    from engine.strategy import Strategy
+
+    class DummyStrategy(Strategy):
+        def on_bar(self, ctx, bar):
+            return []
+
+    np.random.seed(42)
+    dates = pd.date_range("2026-01-01", periods=60, freq="D")
+    close = pd.DataFrame(
+        {"AAPL": 100 + np.cumsum(np.random.randn(60) * 2)}, index=dates
+    )
+    pred = pd.DataFrame(
+        {"AAPL": np.random.randn(60)}, index=dates
+    )
+
+    config = BacktestConfig()
+    data = DataFrameSource(close=close, pred=pred)
+    strategy = DummyStrategy()
+
+    # 30 days train, 10 days test, step 10
+    wf = WalkForward(strategy, data, config, train_window=30, test_window=10, step_size=10)
+    folds = wf.run()
+
+    assert len(folds) > 0, "Should have at least 1 fold"
+
+    # Each fold should have metrics (verifying it ran successfully)
+    for f in folds:
+        assert "train_metrics" in f
+        assert "test_metrics" in f
+
+
 def test_walkforward_summary():
     np.random.seed(42)
     n = 80

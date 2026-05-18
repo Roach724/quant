@@ -57,7 +57,17 @@ class StrategyContext:
         self.data = data
         self.portfolio = portfolio
         self.config = config
+        self._last_pred = None
 
     @property
     def universe(self) -> list[str]:
         return self.data.universe
+
+    def _set_bar_data(self, bar_data):
+        """Cache bar data for property access. Called by Engine each bar."""
+        self._last_pred = bar_data.get("pred") if bar_data else None
+
+    @property
+    def predictions(self) -> dict | None:
+        """Last bar's ML predictions: {symbol: score}. None if no ML model."""
+        return self._last_pred

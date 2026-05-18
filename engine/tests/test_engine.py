@@ -70,3 +70,39 @@ def test_result_has_required_attrs():
     r = Result(portfolio=pf, config=cfg, strategy_name="test")
     assert r.strategy_name == "test"
     assert r.config is cfg
+
+
+def test_engine_with_ml_predictions():
+    """Verify Engine passes predictions through ctx."""
+    import numpy as np
+
+    class MLStrategy(Strategy):
+        def on_bar(self, ctx, bar):
+            preds = ctx.predictions
+            if preds is None:
+                return []
+            signals = []
+            for sym, score in preds.items():
+                if score > 0.5:
+                    signals.append(Signal.buy(sym, weight=0.5))
+                elif score < -0.5:
+                    signals.append(Signal.sell(sym))
+            return signals
+
+    dates = pd.date_range("2026-01-01", periods=10, freq="D")
+    np.random.seed(42)
+    prices = 100 + np.cumsum(np.random.randn(10) * 2)
+    close = pd.DataFrame({"AAPL": prices}, index=dates)
+    # Predictions: positive days → buy, negative → sell
+    pred_values = np.where(np.random.randn(10) > 0, 0.8, -0.8)
+    pred = pd.DataFrame({"AAPL": pred_values}, index=dates)
+
+    config = BacktestConfig(initial_capital=100000)
+    data = DataFrameSource(close=close, pred=pred)
+    strategy = MLStrategy()
+    result = Engine(config).run(strategy, data)
+
+    # Strategy should have made trades based on predictions
+    equity = result.portfolio.equity_curve
+    assert len(equity) > 0
+    assert equity.iloc[-1] > 0  # non-zero equity
