@@ -85,4 +85,8 @@ class WalkForward:
 
     def _slice(self, start: int, end: int):
         """Create a DataFrameSource slice of the data for a time window."""
-        return DataFrameSource(close=self.data.close.iloc[start:end].copy())
+        close = self.data.close.iloc[start:end].copy()
+        pred = None
+        if hasattr(self.data, 'pred') and self.data.pred is not None:
+            pred = self.data.pred.iloc[start:end].copy()
+        return DataFrameSource(close=close, pred=pred)

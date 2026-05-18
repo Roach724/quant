@@ -42,14 +42,15 @@ class Engine:
 
         n_bars = len(data)
         for bar in range(n_bars):
+            bar_data = data.iloc(bar)
+            ctx._set_bar_data(bar_data)
             signals = strategy.on_bar(ctx, bar)
             if signals:
-                bar_data = data.iloc(bar)
                 orders = self._signals_to_orders(signals, portfolio, bar_data)
                 orders = risk_engine.check(orders, portfolio, bar_data)
-                fills = self._simulate_fills(orders, data.iloc(bar))
-                portfolio.update(fills, data.iloc(bar))
-            portfolio.mark_and_record(data.timestamp[bar], data.iloc(bar))
+                fills = self._simulate_fills(orders, bar_data)
+                portfolio.update(fills, bar_data)
+            portfolio.mark_and_record(data.timestamp[bar], bar_data)
 
         return Result(portfolio=portfolio, config=self.config,
                       strategy_name=strategy.__class__.__name__)

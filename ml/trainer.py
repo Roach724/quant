@@ -1,0 +1,474 @@
+"""
+ML 模型训练引擎 — 独立于 Engine
+
+Models: Linear(OLS/Ridge) baseline → LightGBM
+Ported from hk-quant/src/model_trainer.py.
+"""
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import logging
+import pickle
+import warnings
+from typing import Optional, Tuple
+
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import StandardScaler
+from scipy.stats import spearmanr
+
+import lightgbm as lgb
+
+warnings.filterwarnings("ignore")
+logger = logging.getLogger(__name__)
+
+
+class ModelTrainer:
+    """多因子模型训练器 — 独立于 Engine 运行。
+
+    Provides:
+        OLS baseline → Ridge → LightGBM (with early stopping)
+        IC evaluation, predict, save/load.
+    """
+
+    def __init__(self, factor_path: Optional[str] = "./data/factors/factors.parquet"):
+        """Initialize model trainer.
+
+        Args:
+            factor_path: Path to factor parquet file, or None if data
+                         will be provided directly (e.g. for testing).
+        """
+        self.factor_path = factor_path
+        self.factor_df: Optional[pd.DataFrame] = None
+        self.feature_cols: list[str] = []
+        self.label_col = "fwd_ret_5d"
+        self.scaler = StandardScaler()
+
+    # ── Data Loading ──────────────────────────────────────────────
+
+    def load_data(self) -> pd.DataFrame:
+        """Load factor data from factor_path.
+
+        Auto-detects feature columns by excluding metadata and label columns.
+
+        Returns:
+            Loaded factor DataFrame.
+
+        Raises:
+            ValueError: If factor_path is None.
+        """
+        if self.factor_path is None:
+            raise ValueError("factor_path is None; cannot load data")
+
+        self.factor_df = pd.read_parquet(self.factor_path)
+        logger.info(f"Loaded factors: {self.factor_df.shape}")
+
+        # Feature columns (exclude metadata and labels)
+        exclude = {"symbol", "date", "fwd_ret_5d", "fwd_ret_20d"}
+        self.feature_cols = [
+            c for c in self.factor_df.columns if c not in exclude
+        ]
+        logger.info(f"Features: {len(self.feature_cols)} columns")
+
+        return self.factor_df
+
+    # ── Data Splitting ─────────────────────────────────────────────
+
+    def split_data(
+        self,
+        train_end: str = "2022-12-31",
+        val_end: str = "2023-12-31",
+        test_end: str = "2024-12-31",
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Time-series data split (no look-ahead bias).
+
+        Args:
+            train_end: Training set end date (inclusive).
+            val_end: Validation set end date (inclusive).
+            test_end: Test set end date (inclusive).
+
+        Returns:
+            (train, val, test) DataFrames.
+        """
+        if self.factor_df is None:
+            self.load_data()
+
+        df = self.factor_df.copy()
+        df["date"] = pd.to_datetime(df["date"])
+
+        train = df[df["date"] <= train_end]
+        val = df[(df["date"] > train_end) & (df["date"] <= val_end)]
+        test = df[(df["date"] > val_end) & (df["date"] <= test_end)]
+
+        logger.info(
+            f"Data split: train={len(train)} "
+            f"({train['date'].min().date()}~{train['date'].max().date()}), "
+            f"val={len(val)} "
+            f"({val['date'].min().date()}~{val['date'].max().date()}), "
+            f"test={len(test)} "
+            f"({test['date'].min().date()}~{test['date'].max().date()})"
+        )
+        return train, val, test
+
+    # ── Internal helpers ───────────────────────────────────────────
+
+    def _prepare_xy(
+        self, df: pd.DataFrame, fit_scaler: bool = False
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Prepare feature matrix X and label vector y with scaling.
+
+        Args:
+            df: Input DataFrame.
+            fit_scaler: If True, fit the scaler on this data (use for training).
+
+        Returns:
+            (X, y) arrays.
+        """
+        df_clean = df.dropna(subset=self.feature_cols + [self.label_col])
+        X = df_clean[self.feature_cols].values.astype(np.float64)
+        y = df_clean[self.label_col].values.astype(np.float64)
+
+        if fit_scaler:
+            X = self.scaler.fit_transform(X)
+        else:
+            X = self.scaler.transform(X)
+
+        return X, y
+
+    def _prepare_raw_xy(
+        self, df: pd.DataFrame
+    ) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+        """Prepare raw X/y for tree models (no scaling, NaN-fill with col means).
+
+        Returns:
+            (df_clean, X, y) — X is NaN-filled raw features.
+        """
+        df_clean = df.dropna(subset=self.feature_cols + [self.label_col])
+        X = df_clean[self.feature_cols].values.astype(np.float64)
+        y = df_clean[self.label_col].values.astype(np.float64)
+
+        # NaN fill with column means
+        col_means = np.nanmean(X, axis=0)
+        inds = np.where(np.isnan(X))
+        X[inds] = np.take(col_means, inds[1])
+
+        return df_clean, X, y
+
+    # ── OLS Baseline ───────────────────────────────────────────────
+
+    def train_ols(self, train: pd.DataFrame, val: pd.DataFrame) -> dict:
+        """OLS baseline: fit → predict → RMSE.
+
+        Auto-fits scaler on training data.
+
+        Args:
+            train: Training DataFrame.
+            val: Validation DataFrame.
+
+        Returns:
+            dict with keys: model, rmse.
+        """
+        logger.info("Training OLS baseline...")
+        X_train, y_train = self._prepare_xy(train, fit_scaler=True)
+        X_val, y_val = self._prepare_xy(val)
+
+        model = LinearRegression()
+        model.fit(X_train, y_train)
+
+        pred_val = model.predict(X_val)
+        rmse = float(np.sqrt(mean_squared_error(y_val, pred_val)))
+
+        result = {
+            "model": model,
+            "name": "OLS",
+            "rmse": rmse,
+        }
+
+        logger.info(f"  OLS: RMSE val={rmse:.6f}")
+        return result
+
+    # ── Ridge ──────────────────────────────────────────────────────
+
+    def train_ridge(
+        self, train: pd.DataFrame, val: pd.DataFrame, alpha: float = 1.0
+    ) -> dict:
+        """Ridge regression with L2 regularization.
+
+        Auto-fits scaler on training data.
+
+        Args:
+            train: Training DataFrame.
+            val: Validation DataFrame.
+            alpha: L2 regularization strength.
+
+        Returns:
+            dict with keys: model, alpha, rmse.
+        """
+        logger.info(f"Training Ridge (alpha={alpha})...")
+        X_train, y_train = self._prepare_xy(train, fit_scaler=True)
+        X_val, y_val = self._prepare_xy(val)
+
+        model = Ridge(alpha=alpha)
+        model.fit(X_train, y_train)
+
+        pred_val = model.predict(X_val)
+        rmse = float(np.sqrt(mean_squared_error(y_val, pred_val)))
+
+        result = {
+            "model": model,
+            "name": f"Ridge(α={alpha})",
+            "alpha": alpha,
+            "rmse": rmse,
+        }
+        logger.info(f"  Ridge: RMSE val={rmse:.6f}")
+        return result
+
+    # ── LightGBM ───────────────────────────────────────────────────
+
+    def train_lightgbm(
+        self,
+        train: pd.DataFrame,
+        val: pd.DataFrame,
+    ) -> dict:
+        """LightGBM with purged TimeSeriesSplit CV, early stopping.
+
+        Uses raw features (no scaling needed for tree models).
+
+        Args:
+            train: Training DataFrame.
+            val: Validation DataFrame.
+
+        Returns:
+            dict with keys: model, rmse_val, feature_importance, best_iteration.
+        """
+        logger.info("Training LightGBM...")
+
+        # Use raw features (no scaling)
+        train_clean, X_train, y_train = self._prepare_raw_xy(train)
+        val_clean, X_val, y_val = self._prepare_raw_xy(val)
+
+        params = {
+            "objective": "regression",
+            "metric": "rmse",
+            "boosting_type": "gbdt",
+            "num_leaves": 16,
+            "learning_rate": 0.1,
+            "feature_fraction": 0.6,
+            "bagging_fraction": 0.6,
+            "bagging_freq": 5,
+            "min_data_in_leaf": 200,
+            "min_sum_hessian_in_leaf": 1.0,
+            "lambda_l1": 1.0,
+            "lambda_l2": 1.0,
+            "verbose": -1,
+            "num_threads": 4,
+            "seed": 42,
+            "deterministic": True,
+        }
+
+        dtrain = lgb.Dataset(
+            X_train, label=y_train, params={"feature_pre_filter": False}
+        )
+        dval = lgb.Dataset(
+            X_val, label=y_val, reference=dtrain,
+            params={"feature_pre_filter": False}
+        )
+
+        model = lgb.train(
+            params,
+            dtrain,
+            num_boost_round=2000,
+            valid_sets=[dtrain, dval],
+            valid_names=["train", "val"],
+            callbacks=[
+                lgb.early_stopping(stopping_rounds=100),
+                lgb.log_evaluation(period=0),
+            ],
+        )
+
+        # Predict on validation
+        pred_val = model.predict(X_val)
+        rmse_val = float(np.sqrt(mean_squared_error(y_val, pred_val)))
+
+        # Feature importance
+        importance = pd.DataFrame({
+            "feature": self.feature_cols,
+            "importance": model.feature_importance(importance_type="gain"),
+        }).sort_values("importance", ascending=False)
+
+        result = {
+            "model": model,
+            "name": "LightGBM",
+            "params": params,
+            "best_iteration": model.best_iteration,
+            "rmse_val": rmse_val,
+            "feature_importance": importance,
+        }
+
+        logger.info(
+            f"  LightGBM: RMSE val={rmse_val:.6f}, "
+            f"best_iter={model.best_iteration}, "
+            f"top feature: {importance.iloc[0]['feature']} "
+            f"({importance.iloc[0]['importance']:.1f})"
+        )
+        return result
+
+    # ── IC Evaluation ──────────────────────────────────────────────
+
+    def evaluate_ic(
+        self, model, df: pd.DataFrame, name: str = ""
+    ) -> dict:
+        """Compute Rank IC (overall + daily + ICIR).
+
+        Uses scaler if fitted, otherwise raw features with NaN fill.
+
+        Args:
+            model: Trained model (LinearRegression, Ridge, or LightGBM Booster).
+            df: DataFrame for evaluation.
+            name: Optional model name for logging.
+
+        Returns:
+            dict with keys: overall_rank_ic, mean_daily_ic, daily_ic_std, icir.
+        """
+        df_clean = df.dropna(subset=self.feature_cols + [self.label_col])
+
+        # Prepare features: use scaler for linear models, raw for tree models
+        X_raw = df_clean[self.feature_cols].values.astype(np.float64)
+        use_scaler = hasattr(self.scaler, "mean_") and not isinstance(model, lgb.Booster)
+        if use_scaler:
+            X = self.scaler.transform(X_raw)
+        else:
+            col_means = np.nanmean(X_raw, axis=0)
+            inds = np.where(np.isnan(X_raw))
+            X_raw[inds] = np.take(col_means, inds[1])
+            X = X_raw
+
+        pred = model.predict(X)
+        actual = df_clean[self.label_col].values
+
+        # Overall Rank IC
+        ic, pval = spearmanr(pred, actual)
+
+        # Daily Rank IC
+        eval_df = df_clean.copy()
+        eval_df["pred"] = pred
+
+        daily_ic = []
+        for date, group in eval_df.groupby("date"):
+            if len(group) < 10:
+                continue
+            ic_d = group["pred"].rank().corr(group[self.label_col].rank())
+            daily_ic.append({"date": date, "rank_ic": ic_d})
+
+        ic_series = pd.DataFrame(daily_ic)
+        ic_mean = ic_series["rank_ic"].mean() if len(ic_series) > 0 else float(ic)
+        ic_std = ic_series["rank_ic"].std() if len(ic_series) > 0 else 0.0
+        icir = ic_mean / ic_std if ic_std > 1e-8 else 0.0
+
+        result = {
+            "overall_rank_ic": float(ic),
+            "mean_daily_ic": float(ic_mean),
+            "daily_ic_std": float(ic_std),
+            "icir": float(icir),
+            "n_dates": len(ic_series),
+        }
+
+        display_name = name or "Model"
+        logger.info(
+            f"  {display_name}: overall IC={ic:.4f}, "
+            f"daily IC={ic_mean:.4f}±{ic_std:.4f}, "
+            f"ICIR={icir:.3f}, n_dates={len(ic_series)}"
+        )
+        return result
+
+    # ── Prediction ─────────────────────────────────────────────────
+
+    def predict(self, model, df: pd.DataFrame) -> pd.Series:
+        """Generate predictions for a DataFrame.
+
+        Uses scaler if fitted, otherwise raw features with NaN fill.
+
+        Args:
+            model: Trained model.
+            df: DataFrame with feature columns.
+
+        Returns:
+            Flat pd.Series of predictions, indexed by the clean DataFrame's index.
+        """
+        df_clean = df.dropna(subset=self.feature_cols)
+        X_raw = df_clean[self.feature_cols].values.astype(np.float64)
+
+        use_scaler = hasattr(self.scaler, "mean_") and not isinstance(model, lgb.Booster)
+        if use_scaler:
+            X = self.scaler.transform(X_raw)
+        else:
+            col_means = np.nanmean(X_raw, axis=0)
+            inds = np.where(np.isnan(X_raw))
+            X_raw[inds] = np.take(col_means, inds[1])
+            X = X_raw
+
+        preds = model.predict(X)
+        return pd.Series(preds.flatten(), index=df_clean.index, name="prediction")
+
+    # ── Save / Load ────────────────────────────────────────────────
+
+    def save_model(self, model, path: str):
+        """Save model to path.
+
+        LightGBM models are saved in native .txt format;
+        scikit-learn models are saved as .pkl.
+
+        Args:
+            model: Model object to save.
+            path: File path (without extension for LightGBM).
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        # LightGBM Booster: save in native format
+        if isinstance(model, lgb.Booster):
+            txt_path = path.with_suffix(".txt")
+            model.save_model(str(txt_path))
+            logger.info(f"Saved LightGBM model to {txt_path}")
+        else:
+            # scikit-learn or other: pickle
+            pkl_path = path.with_suffix(".pkl")
+            with open(pkl_path, "wb") as f:
+                pickle.dump(model, f)
+            logger.info(f"Saved model to {pkl_path}")
+
+    def load_model(self, path: str) -> object:
+        """Load model from path.
+
+        Detects LightGBM (.txt) vs pickle (.pkl) based on file existence.
+
+        Args:
+            path: File path (with or without extension).
+
+        Returns:
+            Loaded model object.
+
+        Raises:
+            FileNotFoundError: If neither .txt nor .pkl file exists.
+        """
+        path = Path(path)
+
+        # Try LightGBM native format first
+        txt_path = path.with_suffix(".txt")
+        if txt_path.exists():
+            model = lgb.Booster(model_file=str(txt_path))
+            logger.info(f"Loaded LightGBM model from {txt_path}")
+            return model
+
+        # Try pickle
+        pkl_path = path.with_suffix(".pkl")
+        if pkl_path.exists():
+            with open(pkl_path, "rb") as f:
+                model = pickle.load(f)
+            logger.info(f"Loaded model from {pkl_path}")
+            return model
+
+        raise FileNotFoundError(
+            f"Model file not found: {txt_path} or {pkl_path}"
+        )
