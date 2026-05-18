@@ -117,16 +117,37 @@ class YFinanceHKAdapter:
     def fetch_all_symbols() -> list[str]:
         """Dynamically fetch all eligible HK stock symbols via akshare.
 
-        Uses akshare stock_hk_ggt_components_em() to get 港股通 (Stock Connect)
-        constituents, then applies liquidity filters:
-          - price >= 1.0 HKD (exclude penny stocks)
-          - turnover >= 1,000,000 HKD (exclude illiquid stocks)
+        Multi-level fallback:
+          1. config/stock_pool_hk.csv (pre-cached snapshot of 港股通)
+          2. akshare stock_hk_ggt_components_em() with liquidity filtering
+          3. Built-in _FALLBACK_SYMBOLS list (~37 major stocks)
 
         Returns:
             List of 4-digit symbol strings (no .HK suffix), e.g. ["0700", "9988", ...].
-            These are compatible with yfinance (append ".HK" for API calls).
-            Falls back to a built-in list if akshare is unavailable.
         """
+        import os
+        import pandas as pd
+
+        # Priority 1: pre-cached CSV snapshot
+        csv_path = os.path.normpath(os.path.join(
+            os.path.dirname(__file__), "..", "..", "config", "stock_pool_hk.csv"
+        ))
+        if os.path.exists(csv_path):
+            try:
+                df = pd.read_csv(csv_path, header=None, names=["symbol"])
+                symbols = sorted(
+                    df["symbol"].astype(str).str.strip().str.zfill(4).tolist()
+                )
+                if len(symbols) > 100:
+                    logger.info(
+                        "fetch_all_symbols: loaded %d symbols from %s",
+                        len(symbols), csv_path,
+                    )
+                    return symbols
+            except Exception as e:
+                logger.debug("fetch_all_symbols: CSV failed (%s), trying akshare", e)
+
+        # Priority 2: live akshare API
         try:
             import akshare as ak
 
@@ -142,8 +163,6 @@ class YFinanceHKAdapter:
                 "成交量": "volume",
                 "成交额": "turnover",
             })
-            # Normalize to 4-digit format for yfinance compatibility, then apply filters
-            # akshare may return "00700" or "700" — normalize to "0700"
             df["symbol"] = df["symbol"].astype(str).str.lstrip("0")
             df["symbol"] = df["symbol"].apply(lambda s: s if s else "0")
             df["symbol"] = df["symbol"].str.zfill(4)
@@ -159,7 +178,9 @@ class YFinanceHKAdapter:
             return symbols
 
         except Exception as e:
-            logger.warning("fetch_all_symbols via akshare failed (%s), using built-in fallback list", e)
+            logger.warning(
+                "fetch_all_symbols via akshare failed (%s), using built-in fallback list", e
+            )
             return list(YFinanceHKAdapter._FALLBACK_SYMBOLS)
 
     def fetch_supported_symbols(self) -> list[str]:
