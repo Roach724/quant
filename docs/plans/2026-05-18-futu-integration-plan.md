@@ -11,7 +11,7 @@
 
 - [ ] 富途牛牛 APP 上完成 **Futu API 问卷评估与协议确认**
 - [ ] OpenD 能成功登录并保持运行（`FutuOpenD` → 登录成功）
-- [ ] 权限确认：港股 LV2 / 美股 Nasdaq Basic / 加密币 LV1
+- [ ] 权限确认：港股 LV2 / 美股 LV3 / 加密币免费（300订阅+300历史K线，每7天重置）
 - [ ] 确定富途证券账户已开通
 
 ---
@@ -34,7 +34,7 @@
 - `OPEND_HOST`, `OPEND_PORT` 从环境变量读取（默认 127.0.0.1:11111）
 - 复权类型: `AuType.QFQ`（前复权）
 - 频率映射: `{"1m": KLType.K_1M, "5m": ..., "1d": KLType.K_DAY, ...}`
-- 2000 只股票不可能一次 pull，用 `max_count=1000` 分页
+- 历史K线 300 额度，每周可回填 300 只，月度吞吐 1,200 只
 
 **日志格式**: `Futu fetch: {symbol} {start}→{end} {chunk}/{total_chunks} rows={n}`
 
@@ -205,9 +205,11 @@ resource "google_cloud_run_job" "collector_futu_stock" {
 **调度计划**:
 | Job | cron 表达式 | 说明 |
 |-----|------------|------|
-| collector-futu-stock | `*/30 9-16 * * 1-5` | 盘中每 30 分钟 |
+| collector-futu-stock | `*/30 9-16 * * 1-5` | 盘中每 30 分钟增量 |
 | collector-futu-crypto | `*/5 * * * *` | 每 5 分钟（7×24） |
-| collector-binance-crypto | `*/5 * * * *` | 与上并行（备选） |
+| collector-binance-crypto | `*/5 * * * *` | 并行备选 |
+
+> 历史回填（backfill.py）一次性批量跑：300只×7天重置周期，全量HK回填约2天完成。
 
 ---
 

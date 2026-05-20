@@ -1,8 +1,9 @@
 # Futu OpenAPI 全面集成设计文档
 
-> Date: 2026-05-18
-> Status: Draft（待富途 API 协议签署后执行）
-> 范围: 港股 + 美股 + 加密币的数据适配器、交易 Broker、Cloud Run 部署
+> Date: 2026-05-20
+> Status: Draft（待 Phase 0 数据管道修复完成 + Futu OpenD 接入后执行）
+> 权限依据: https://openapi.futunn.com/futu-api-doc/intro/authority.html
+> 最新政策: 无开户限制，港股 LV2 免费，美股推广期 LV3 免费，加密币免费
 
 ---
 
@@ -22,6 +23,51 @@
 └──────────────┴──────────────┴──────────────┴────────────────┘
 ```
 
+### 1.1 权限详情（开户后，总资产≥1万HKD）
+
+| 市场 | 品种 | 权限 | 时延 | 摆盘 | 获取方式 |
+|------|------|------|------|------|---------|
+| 港股 | 股票/ETF/窝轮 | **LV2** | 实时 | 10档 | 境内IP免费 |
+| 港股 | 期权/期货 | LV2 | 实时 | — | 推广期免费 |
+| 美股 | 股票/ETF | **LV3** | 实时 | 60档(Nas) | 推广期免费* |
+| 美股 | 期权 | LV1 | — | — | 达标免费 |
+| A股 | 股票/ETF | LV1 | 实时 | — | 境内IP免费 |
+| 加密币 | 主流币种/币对 | LV1 | 实时 | 1/5/10/20/40档 | 推广期免费 |
+
+| 额度类型 | 数量 | 重置周期 |
+|----------|------|---------|
+| 订阅额度 | **300** | 释放即恢复 |
+| 历史K线额度 | **300** | **每7天** |
+
+> \* 美股 LV3 含 Nasdaq Basic + TotalView + NYSE Arcabook。Arcabook 深度摆盘需完成[非专业用户评估问卷](https://qtcard.futunn.com/question/us?lang=zh-cn)。
+
+---
+
+### 1.2 前置依赖：Phase 0 数据管道修复
+
+**Futu 采集器的部署前提：Phase 0（append-only + freq 分隔）必须先完工。**
+
+Phase 0 将 GCS 路径从旧格式升级为带频率维度的新格式：
+
+```
+# 旧（当前）
+raw/{market}/bars/year=.../month=.../day=.../symbol={S}.parquet
+
+# 新（Phase 0 完成后）
+raw/{market}/bars/freq={5m,1d}/year=.../month=.../day=.../symbol={S}.parquet
+```
+
+**为什么 Futu 需要等 Phase 0：**
+1. Futu 数据本质上与现有 yfinance/akshare 数据是**同市场同频率**的
+2. 如果沿用旧路径，Futu 写入时会与旧源数据碰撞（同一 symbol+date 覆盖）
+3. 只有 freq 维度就位，Futu 才能作为独立数据源写入自己的 `freq=futu_1m/` 路径
+4. BQ 表的 `WRITE_APPEND + _ingest_time dedup` 机制也允许 Futu 数据与旧源共存，便于切换验证
+
+**接入阶段建议：**
+1. Phase 0 完成 → GCS/BQ 体系就位
+2. Futu 采集器以 `freq=futu_1m` / `freq=futu_1d` 写入，与 yfinance/akshare 源并行
+3. 数据验证无误后，策略层默认使用 Futu 数据；yfinance/akshare 保留作为 fallback（不删除、不切换）
+
 ---
 
 ## 2. 现有数据源现状
@@ -37,15 +83,25 @@ collectors/adapters/
 └── base.py                     ← MarketAdapter Protocol
 ```
 
-**替换关系**:
-| 当前数据源 | 替代方 | 优先级 | 说明 |
-|-----------|-------|--------|------|
-| yfinance (港股) | Futu HK LV2 | **高** | 实时 vs 15min 延迟，数据质量提升最大 |
-| akshare_hk (港股) | Futu HK LV2 | **高** | 消除 akshare 不稳定性 |
-| yfinance (美股) | Futu Nasdaq Basic | **中** | 日K 免费，分钟K 有延迟，可保留备用 |
-| akshare_us (美股) | Futu Nasdaq Basic | **中** | 兜底保留 |
-| alpaca (美股) | Futu Nasdaq Basic | **低** | 如果已有 Alpaca 账户，可留 |
-| crypto_binance (加密币) | Futu LV1 | **中** | 并行，按需选源 |
+#### 新增策略
+
+Futu 是**新增数据源**，与 yfinance/akshare/Binance 并行，不替代任何人。
+
+| 阶段 | 操作 | 说明 |
+|------|------|------|
+| 1 | 新建 Futu 采集器，以独立 freq 路径写入（`freq=futu_1m`） | 与 yfinance `freq=5m` 互不冲突 |
+| 2 | 数据质量验证（对比 Futu vs YFinance 延迟、完整性、正确性） | 确保 Futu 数据可靠 |
+| 3 | 策略层默认切换到 Futu 数据源 | yfinance/akshare 保留定时调度，作为 failover 数据源 |
+| 4 | 长期运维：Futu 异常时，采集器代码和 Terraform timer 保留，可一键切回 | 不删除旧源 Job |
+
+**数据源关系**（新增关系标 **→**）：
+
+| 市场 | 主数据源（新增） | 备用数据源（保留） | 优先级说明 |
+|------|-----------------|-------------------|-----------|
+| 港股 | **Futu HK LV2** → 实时，10档 | yfinance（15min 延迟） / akshare（兜底） | Futu 提升最大：实时 vs 15min |
+| 美股 | **Futu LV3** → 实时，60档(Nas) | yfinance（15min 延迟） / akshare（兜底） | LV3 含 NasBasic+TotalView+Arcabook |
+| 加密币 | **Futu LV1** / **Binance**（并行） | — | 两者并行，用户按需选源 |
+| 加密币（交易） | **Futu Crypto Broker**（实盘） | **Binance Broker**（回测+备选） | Futu 无模拟，回测用 Binance PaperBroker |
 
 ---
 
@@ -73,7 +129,7 @@ class FutuStockAdapter:
         """Fetch OHLCV via request_history_kline with pagination.
         
         symbols format: ["HK.00700", "HK.09988", "US.AAPL"]
-        Works for both HK (LV2) and US (Nasdaq Basic).
+        Works for both HK (LV2) and US (LV3: NasBasic+TotalView+Arcabook).
         """
         ktype = self._map_frequency(frequency)
         records = []
@@ -205,23 +261,74 @@ oms/broker/__init__.py — RouterOrderManager
 - 实盘交易    → OrderManager 不跑在 Cloud Run 上，跑在本地
                  （实盘交易在用户本地终端，不是云上）
 
-3 个 Job，各有独立 Dockerfile 和 cron 触发：
+3 个 Job（Phase 0 的 6 个 Collector 之外，额外 3 个 Futu 源）：
 ```
 
 | Job 名称 | 镜像 | 触发方式 | 数据源 |
 |---------|------|---------|--------|
 | `collector-futu-stock` | `Dockerfile.collector` | 每30分钟 cron（盘中） | Futu OpenD |
 | `collector-futu-crypto` | `Dockerfile.collector` | 每5分钟 cron（7×24） | Futu OpenD |
-| `collector-binance-crypto` | `Dockerfile.collector` | 每5分钟 cron（备选） | ccxt Binance |
+| `collector-binance-crypto` | `Dockerfile.collector` | 每5分钟 cron（并行） | ccxt Binance |
 
 ```
 使用 Terraform 部署，每个 Job 独立 timer。
-想切换数据源时，启用/禁用 timer 即可。
+Futu Job 和 Binance Job 同时运行（并行双源），策略层按需选数据源。
 ```
 
-**为什么不搞并行双源？** 同一个 Job 一次只能跑一个 source。双源 = 两个 Job，各自独立配置和调度周期。
+**并行双源的设计**：
+- 同一市场、同一频率的数据，Futu 和 Binance 各自写入 `freq=futu_1m` / `freq=binance_1m` 路径
+- 策略层 / SDK 通过 `source` 参数选择用哪个源，或基于可用性自动 fallback
+- Futu 异常时，切换指向旧源只需改 `--source` 参数，无需重新部署
 
-### 5.2 Dockerfile + 启动脚本
+### 5.2 OpenD 运行时架构
+
+OpenD 是 x86_64 二进制，运行方式有两种选择：
+
+#### 方案 A：Job 内嵌 OpenD（定时采集场景）
+
+```
+Cloud Run Job（定时触发）
+├── 启动 OpenD（后台）
+├── 等待登录成功（轮询 ≤30s）
+├── 采集数据 → 写入 GCS
+├── 关闭 OpenD
+└── Job 结束
+```
+
+**适合：** 定时采集 K 线（当前场景）
+**优点：** 无额外进程管理，Job 瞬启瞬灭
+**缺点：** 每次启动需要 OpenD 登录（约 5-15s 开销），不适合 WebSocket 实时流
+
+#### 方案 B：本地常驻 OpenD + Cloud Run 拉取（实时流场景）
+
+```
+用户本地 / VPS
+└── OpenD 常驻（24/7）
+    ├── WebSocket 实时行情推送 → Live Trading Loop
+    └── REST API（历史 K 线） ← Cloud Run Job 定时拉取
+                          ^
+                    ┌─────┴─────┐
+              Cloud Run Collector Job
+              （OPEND_HOST 指向本地 OpenD）
+```
+
+**适合：** 实时 WebSocket + 实盘交易
+**优点：** OpenD 只需登录一次，WebSocket 长连接持续推送
+**缺点：** 需要一台 24/7 机器（本地 PC 或 VPS），Cloud Run 仍可定时拉取历史数据
+
+#### 推荐路径
+
+| 阶段 | 架构 | 说明 |
+|------|------|------|
+| 第一阶段（当前） | 方案 A | 定时采集历史 K 线，验证数据质量 |
+| 第二阶段（Live Loop） | 方案 B | 本地/VPS 跑 OpenD + Live Trading Loop |
+
+Cloud Run Collector Job 始终通过 `OPEND_HOST` / `OPEND_PORT` 环境变量连接 OpenD，
+两种方案下代码不感知差异，只配不同的连接地址。
+
+---
+
+### 5.3 Dockerfile + 启动脚本
 
 ```dockerfile
 # Dockerfile.collector — 适用于所有 collector 类型的 Cloud Run Job
@@ -283,7 +390,7 @@ kill $OPEND_PID 2>/dev/null
 wait $OPEND_PID 2>/dev/null
 ```
 
-### 5.3 连接参数
+### 5.4 连接参数
 
 ```python
 # collectors/adapters/futu_stock_adapter.py
@@ -307,15 +414,20 @@ COLLECTOR_SOURCE=futu_stock
 <futu_opend>
     <ip>127.0.0.1</ip>
     <api_port>11111</api_port>
-    <login_account>+852 52689274</login_account>
-    <login_pwd_md5>1a705dda1eb57a936deae580328022cf</login_pwd_md5>
+    <login_account>${FUTU_LOGIN_ACCOUNT}</login_account>
+    <login_pwd_md5>${FUTU_LOGIN_PWD_MD5}</login_pwd_md5>
     <lang>chs</lang>
     <log_level>info</log_level>
     <!-- 无需 WebSocket / Telnet，Job 不需要 -->
 </futu_opend>
 ```
 
-注意：**密码用 MD5 密文，不要明文存**。密文是 `Tweakdxv3s7` 的 MD5。
+> ⚠️ **密码安全：**
+> - `login_pwd_md5` 是登录密码的 **MD5 小写 32 位哈希**，由部署者通过环境变量注入
+> - 不要将任何密码（明文或 MD5）提交到代码仓库
+> - `.gitignore` 中已排除 `FutuOpenD.xml`，本地文件也需注意安全
+> - MD5 生成方式：`echo -n 'your_password' | md5sum | cut -d' ' -f1`
+> - 推荐方案：部署时通过 Terraform 的 `environment_variables` 或 Secret Manager 传入
 
 ---
 
@@ -367,9 +479,11 @@ quant/
 
 | 限制 | 影响 | 应对 |
 |------|------|------|
-| 订阅额度 100 | 同时只能看 100 只行情 | 用 query_subscription 管理, 不用的就 unsubscribe |
-| 美股 LV2 (Nasdaq Basic) 非完全实时 | 基本报价实时, 深度摆盘受限 | 日K 回测不受影响 |
+| 订阅额度 300 | 同时只能看 300 只行情 | 用 query_subscription 管理, 不用的就 unsubscribe |
+| 美股 LV3 含 NYSE Arcabook | 深度摆盘需先完成非专业问卷 | 先开通 NasBasic+TotalView, Arcabook 后续 |
+| 历史K线额度 300 (每7天重置) | 每周可回填 300 只 | 月度吞吐 1,200 只, 全 HK 回填 2 天即可 |
 | OpenD 是 x86_64 二进制 | Cloud Run 需 x86 架构 | `--platform=linux/amd64` |
 | OpenD 日志文件写入 | Cloud Run 只写 /tmp | 配置 log_path=/tmp |
 | 美股期权/期货无权限 | 后面可能用到 | 到时再买行情卡 |
-| crypto 仅限价/市价单 | 不支持止盈止损 | 策略层加 | 
+| crypto 仅限价/市价单 | 不支持止盈止损 | 策略层加 |
+| A股 LV1 仅限境内IP | Cloud Run 可能非境内 | 本地跑可加速A股回填 | 
