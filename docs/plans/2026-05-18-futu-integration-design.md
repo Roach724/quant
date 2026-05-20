@@ -3,7 +3,8 @@
 > Date: 2026-05-20
 > Status: Draft（待 Phase 0 数据管道修复完成 + Futu OpenD 接入后执行）
 > 权限依据: https://openapi.futunn.com/futu-api-doc/intro/authority.html
-> 最新政策: 无开户限制，港股 LV2 免费，美股推广期 LV3 免费，加密币免费
+> 资产状态: 已确认总资产 ≥ 1 万 HKD → 订阅额度 300 / 历史K线额度 300
+> ⚠️ 美股 API 行情与客户端权限不共用（需单独购买 Nasdaq Basic 行情卡）
 
 ---
 
@@ -29,7 +30,7 @@
 |------|------|------|------|------|---------|
 | 港股 | 股票/ETF/窝轮 | **LV2** | 实时 | 10档 | 境内IP免费 |
 | 港股 | 期权/期货 | LV2 | 实时 | — | 推广期免费 |
-| 美股 | 股票/ETF | **LV3** | 实时 | 60档(Nas) | 推广期免费* |
+| 美股 | 股票/ETF | **LV1** ⚠️ | — | 基本报价 | 需购买 Nasdaq Basic 行情卡¹ |
 | 美股 | 期权 | LV1 | — | — | 达标免费 |
 | A股 | 股票/ETF | LV1 | 实时 | — | 境内IP免费 |
 | 加密币 | 主流币种/币对 | LV1 | 实时 | 1/5/10/20/40档 | 推广期免费 |
@@ -37,9 +38,10 @@
 | 额度类型 | 数量 | 重置周期 |
 |----------|------|---------|
 | 订阅额度 | **300** | 释放即恢复 |
-| 历史K线额度 | **300** | **每7天** |
+| 历史K线额度 | **300** | **最近30天滚动**² |
 
-> \* 美股 LV3 含 Nasdaq Basic + TotalView + NYSE Arcabook。Arcabook 深度摆盘需完成[非专业用户评估问卷](https://qtcard.futunn.com/question/us?lang=zh-cn)。
+> ¹ 美股 API 行情与客户端权限不共用。LV1 = Nasdaq Basic（基本报价），需购买行情卡。LV2 = Nasdaq Basic+TotalView（含深度摆盘），也需购买。见 https://openapi.futunn.com/futu-api-doc/intro/authority.html
+> ² 历史 K 线额度释义：最近 30 天内，每请求 1 只股票的历史 K 线占用 1 个额度，**重复请求同一只不重复累计**。30 天滚动窗口，非固定周期重置。
 
 ---
 
@@ -99,7 +101,7 @@ Futu 是**新增数据源**，与 yfinance/akshare/Binance 并行，不替代任
 | 市场 | 主数据源（新增） | 备用数据源（保留） | 优先级说明 |
 |------|-----------------|-------------------|-----------|
 | 港股 | **Futu HK LV2** → 实时，10档 | yfinance（15min 延迟） / akshare（兜底） | Futu 提升最大：实时 vs 15min |
-| 美股 | **Futu LV3** → 实时，60档(Nas) | yfinance（15min 延迟） / akshare（兜底） | LV3 含 NasBasic+TotalView+Arcabook |
+| 美股 | **Futu LV1** → Nasdaq Basic 行情 | yfinance（15min 延迟） / akshare（兜底） | API 美股行情需购买 Nasdaq Basic 行情卡¹ |
 | 加密币 | **Futu LV1** / **Binance**（并行） | — | 两者并行，用户按需选源 |
 | 加密币（交易） | **Futu Crypto Broker**（实盘） | **Binance Broker**（回测+备选） | Futu 无模拟，回测用 Binance PaperBroker |
 
@@ -129,7 +131,7 @@ class FutuStockAdapter:
         """Fetch OHLCV via request_history_kline with pagination.
         
         symbols format: ["HK.00700", "HK.09988", "US.AAPL"]
-        Works for both HK (LV2) and US (LV3: NasBasic+TotalView+Arcabook).
+        Works for both HK (LV2) and US (LV1: Nasdaq Basic / LV2: TotalView).
         """
         ktype = self._map_frequency(frequency)
         records = []
@@ -480,8 +482,8 @@ quant/
 | 限制 | 影响 | 应对 |
 |------|------|------|
 | 订阅额度 300 | 同时只能看 300 只行情 | 用 query_subscription 管理, 不用的就 unsubscribe |
-| 美股 LV3 含 NYSE Arcabook | 深度摆盘需先完成非专业问卷 | 先开通 NasBasic+TotalView, Arcabook 后续 |
-| 历史K线额度 300 (每7天重置) | 每周可回填 300 只 | 月度吞吐 1,200 只, 全 HK 回填 2 天即可 |
+| 美股行情需单独购买行情卡 | API 行情与客户端不共用，Nasdaq Basic 需购买 | 先确认当前 OpenD 环境下实际可用的美股权限 |
+| 历史K线额度 300（30天滚动） | 每 30 天内最多 300 只不同标的 | 优先回填高优 symbol，重复回填不消耗额度 |
 | OpenD 是 x86_64 二进制 | Cloud Run 需 x86 架构 | `--platform=linux/amd64` |
 | OpenD 日志文件写入 | Cloud Run 只写 /tmp | 配置 log_path=/tmp |
 | 美股期权/期货无权限 | 后面可能用到 | 到时再买行情卡 |
