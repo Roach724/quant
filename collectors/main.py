@@ -21,6 +21,8 @@ from adapters.yfinance_hk_adapter import YFinanceHKAdapter
 from adapters.akshare_hk_adapter import AkshareHKAdapter
 from adapters.akshare_us_adapter import AkshareUSAdapter
 from adapters.crypto_binance_adapter import CryptoBinanceAdapter
+from adapters.futu_stock_adapter import FutuStockAdapter
+from adapters.crypto_futu_adapter import CryptoFutuAdapter
 from storage import write_bars_to_gcs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -40,6 +42,10 @@ def get_adapter(source: str, frequency: str = "1m"):
         if frequency == "1d":
             return YFinanceHKAdapter(fallback_adapter=AkshareHKAdapter())
         return YFinanceHKAdapter()
+    if source == "futu_stock":
+        return FutuStockAdapter()
+    if source == "futu_crypto":
+        return CryptoFutuAdapter()
     if source == "yfinance" and frequency == "1d":
         # US 1d: use yfinance with akshare fallback
         return YFinanceUSAdapter(fallback_adapter=AkshareUSAdapter())
@@ -70,6 +76,16 @@ def get_symbols(source: str, frequency: str) -> list[str]:
     if source == "yfinance" and frequency == "1d":
         symbols = YFinanceUSAdapter.fetch_all_symbols()
         logger.info("Auto-discovered %d US symbols", len(symbols))
+        return symbols
+
+    # Auto-discovery: Futu sources
+    if source == "futu_stock":
+        symbols = FutuStockAdapter().fetch_supported_symbols()
+        logger.info("Auto-discovered %d futu stock symbols", len(symbols))
+        return symbols
+    if source == "futu_crypto":
+        symbols = CryptoFutuAdapter().fetch_supported_symbols()
+        logger.info("Auto-discovered %d futu crypto symbols", len(symbols))
         return symbols
 
     # Fallback defaults

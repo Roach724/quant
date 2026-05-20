@@ -54,6 +54,8 @@ from adapters.crypto_binance_adapter import CryptoBinanceAdapter
 from adapters.yfinance_hk_adapter import YFinanceHKAdapter
 from adapters.akshare_hk_adapter import AkshareHKAdapter
 from adapters.akshare_us_adapter import AkshareUSAdapter
+from adapters.futu_stock_adapter import FutuStockAdapter
+from adapters.crypto_futu_adapter import CryptoFutuAdapter
 from storage import build_gcs_path, dataframe_to_parquet_bytes, write_bars_to_gcs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -277,12 +279,16 @@ def backfill(
         )
         return
 
-    # --- Standard bulk-fetch path (Alpaca, Crypto) ---
+    # --- Standard bulk-fetch path (Alpaca, Crypto, Futu) ---
     if chunk_days is None:
         chunk_days = FREQUENCY_DEFAULTS["chunk_days"].get(frequency, 7)
     chunks = max(1, (total_days + chunk_days - 1) // chunk_days)
 
-    if source == "alpaca":
+    if source == "futu_stock":
+        adapter = FutuStockAdapter()
+    elif source == "futu_crypto":
+        adapter = CryptoFutuAdapter()
+    elif source == "alpaca":
         from adapters.alpaca_adapter import AlpacaUSAdapter
         key = os.environ.get("ALPACA_API_KEY", "")
         secret = os.environ.get("ALPACA_API_SECRET", "")
@@ -375,7 +381,8 @@ if __name__ == "__main__":
                         choices=["1m", "5m", "15m", "30m", "1h", "1d"],
                         help="Bar frequency (default: 1m. Use 1d for multi-year backfill)")
     parser.add_argument("--source", default=os.environ.get("BACKFILL_SOURCE", "yfinance"),
-                        choices=["yfinance", "alpaca", "cryptobinance", "yfinancehk"],
+                        choices=["yfinance", "alpaca", "cryptobinance", "yfinancehk",
+                                 "futu_stock", "futu_crypto"],
                         help="Data source adapter (default: yfinance)")
     args = parser.parse_args()
 
@@ -392,6 +399,10 @@ if __name__ == "__main__":
         # Use the adapter that matches the selected source for symbol discovery
         if args.source == "cryptobinance":
             symbols = CryptoBinanceAdapter().fetch_supported_symbols()
+        elif args.source == "futu_stock":
+            symbols = FutuStockAdapter().fetch_supported_symbols()
+        elif args.source == "futu_crypto":
+            symbols = CryptoFutuAdapter().fetch_supported_symbols()
         elif args.source == "yfinancehk":
             symbols = YFinanceHKAdapter.fetch_all_symbols()
         elif args.source == "alpaca":

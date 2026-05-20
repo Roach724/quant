@@ -19,3 +19,17 @@ variable "environment" {
     error_message = "environment must be one of: dev, staging, prod"
   }
 }
+
+variable "futu_login_account" {
+  description = "Futu OpenD login account"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "futu_login_pwd_md5" {
+  description = "Futu OpenD login password (MD5)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}

@@ -141,3 +141,82 @@ class PaperBroker:
 
     async def get_open_orders(self):
         return [o for o in self._orders.values() if o.status in ("pending",)]
+
+
+class RouterOrderManager:
+    """Routes orders to the correct broker based on symbol prefix."""
+
+    def __init__(self, stock_broker, crypto_broker, fallback_broker=None):
+        """Initialize router with broker instances.
+        
+        Args:
+            stock_broker: Broker for HK.xxx and US.xxx (e.g. FutuStockBroker)
+            crypto_broker: Broker for crypto symbols (e.g. FutuCryptoBroker)
+            fallback_broker: Optional fallback (e.g. CryptoBinanceBroker)
+        """
+        self._stock_broker = stock_broker
+        self._crypto_broker = crypto_broker
+        self._fallback = fallback_broker
+
+    def _broker_for(self, symbol: str):
+        """Determine which broker handles a given symbol."""
+        if "/" in symbol:               # "BTC/USDT" — crypto internal format
+            return self._crypto_broker
+        if symbol.startswith("CRYPTO_"):  # "CRYPTO_BTC" — Binance-style
+            if self._fallback is not None:
+                return self._fallback
+            return self._crypto_broker
+        if symbol.startswith("HK.") or symbol.startswith("US."):
+            return self._stock_broker
+        if symbol.startswith("CC."):
+            return self._crypto_broker
+        raise ValueError(f"Unknown symbol prefix: {symbol}")
+
+    async def submit_order(self, symbol, side, qty, order_type="market",
+                           limit_price=None):
+        """Submit order to the appropriate broker."""
+        return await self._broker_for(symbol).submit_order(
+            symbol, side, qty, order_type=order_type,
+            limit_price=limit_price,
+        )
+
+    async def cancel_order(self, broker_id: str) -> bool:
+        """Cancel an order. Tries all brokers until found."""
+        for broker in (self._stock_broker, self._crypto_broker, self._fallback):
+            if broker is None:
+                continue
+            if await broker.cancel_order(broker_id):
+                return True
+        return False
+
+    async def get_order(self, broker_id: str):
+        """Query order. Tries all brokers until found."""
+        for broker in (self._stock_broker, self._crypto_broker, self._fallback):
+            if broker is None:
+                continue
+            order = await broker.get_order(broker_id)
+            if order is not None:
+                return order
+        return None
+
+    async def get_positions(self) -> list:
+        """Aggregate positions from all brokers."""
+        positions = []
+        for broker in (self._stock_broker, self._crypto_broker, self._fallback):
+            if broker is None:
+                continue
+            positions.extend(await broker.get_positions())
+        return positions
+
+    async def get_account(self):
+        """Return stock broker account (primary)."""
+        return await self._stock_broker.get_account()
+
+    async def get_open_orders(self) -> list:
+        """Aggregate open orders from all brokers."""
+        orders = []
+        for broker in (self._stock_broker, self._crypto_broker, self._fallback):
+            if broker is None:
+                continue
+            orders.extend(await broker.get_open_orders())
+        return orders

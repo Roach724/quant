@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+# 系统依赖（OpenD 需要 libc 等）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    procps ca-certificates unzip wget && \
+    rm -rf /var/lib/apt/lists/*
+
+# Python 依赖
+RUN pip install --no-cache-dir futu-api==3.8.2 pandas pyarrow
+
+# 复制 OpenD 二进制
+ARG OPEND_VERSION=7.1.7707
+ADD https://softwarefile.futunn.com/FutuOpenD_${OPEND_VERSION}_linux_x86_64.zip /tmp/opend.zip
+RUN unzip /tmp/opend.zip -d /opt/opend/ && rm /tmp/opend.zip
+
+# 启动脚本与配置模板
+COPY start_collect.sh /opt/
+COPY FutuOpenD.xml.template /opt/
+RUN chmod +x /opt/start_collect.sh
+
+# 应用代码（由 Cloud Run Build 挂载）
+COPY collectors/ /app/collectors/
+
+CMD ["/opt/start_collect.sh"]
