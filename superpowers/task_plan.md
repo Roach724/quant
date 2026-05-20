@@ -58,7 +58,7 @@ Fix two critical data pipeline issues:
 - [ ] **5.6** Delete `terraform/scheduler.tf` (merged into respective job files)
 - [ ] **5.7** `terraform fmt && terraform validate && terraform plan`
 
-### Phase 6: Deploy & Verify
+### Phase 6: Deploy & Verify ⏳
 - [ ] **6.1** `terraform apply` — provision all new resources
 - [ ] **6.2** Python tests: `python -m pytest collectors/tests/ sdk/tests/ -v`
 - [ ] **6.3** Go tests: `cd query-api && go vet ./... && go test ./... -v`
@@ -66,6 +66,8 @@ Fix two critical data pipeline issues:
 - [ ] **6.5** Trigger each BQ loader → verify no duplicate `(symbol, timestamp)` rows
 - [ ] **6.6** SDK `source="direct"` and `source="api"` — both read from new paths correctly
 - [ ] **6.7** Backfill: run for historical range → verify coexists with collector data, no duplicates
+
+> ⏳ Phase 6 待 GCP 环境就绪后执行。
 
 ## Target Resource Map
 
