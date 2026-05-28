@@ -1,24 +1,39 @@
 FROM python:3.11-slim
 
-# 系统依赖（OpenD 需要 libc 等）
+# 系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    procps ca-certificates unzip wget && \
+    procps ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Python 依赖
-RUN pip install --no-cache-dir futu-api==3.8.2 pandas pyarrow
+# Python 依赖（含 futu-api 和 GCS）
+RUN pip install --no-cache-dir futu-api pandas pyarrow google-cloud-storage
 
-# 复制 OpenD 二进制
-ARG OPEND_VERSION=7.1.7707
-ADD https://softwarefile.futunn.com/FutuOpenD_${OPEND_VERSION}_linux_x86_64.zip /tmp/opend.zip
-RUN unzip /tmp/opend.zip -d /opt/opend/ && rm /tmp/opend.zip
+# 下载 Futu OpenD (Ubuntu CLI binary)
+# 使用 redirect URL 获取最新版本
+RUN curl -L -o /tmp/opend.tar.gz \
+    "https://www.futunn.com/download/fetch-lasted-link?name=opend-ubuntu" && \
+    mkdir -p /tmp/opend_extract && \
+    tar xzf /tmp/opend.tar.gz -C /tmp/opend_extract && \
+    # Dynamically find the CLI binary directory (versioned path)
+    OPEND_DIR=$(find /tmp/opend_extract -name "FutuOpenD" -type f | head -1 | xargs dirname) && \
+    echo "Found OpenD CLI at: ${OPEND_DIR}" && \
+    mkdir -p /opt/opend && \
+    cp -r "${OPEND_DIR}"/* /opt/opend/ && \
+    rm -rf /tmp/opend.tar.gz /tmp/opend_extract
 
 # 启动脚本与配置模板
-COPY start_collect.sh /opt/
-COPY FutuOpenD.xml.template /opt/
-RUN chmod +x /opt/start_collect.sh
+COPY docker/start_collect.sh /opt/
+COPY docker/FutuOpenD.xml.template /opt/
+# Fix Windows CRLF line endings and ensure LF for scripts and configs
+RUN sed -i 's/\r$//' /opt/start_collect.sh && \
+    sed -i 's/\r$//' /opt/FutuOpenD.xml.template && \
+    chmod +x /opt/start_collect.sh
 
-# 应用代码（由 Cloud Run Build 挂载）
+# 已认证的 OpenD 会话数据（从本地已登录 OpenD 导出，跳过短信验证）
+COPY docker/AppData.dat /opt/opend/AppData.dat
+
+# 应用代码
 COPY collectors/ /app/collectors/
+WORKDIR /app
 
 CMD ["/opt/start_collect.sh"]

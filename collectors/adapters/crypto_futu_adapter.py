@@ -51,7 +51,8 @@ class CryptoFutuAdapter:
 
     def _to_futu_code(self, symbol: str) -> str:
         """Convert 'BTC/USDT' → 'CC.BTCUSD'"""
-        return "CC." + symbol.replace("/", "")
+        base = symbol.split("/")[0]
+        return f"CC.{base}USD"
 
     def _map_frequency(self, frequency: str):
         mapped = self._FREQ_MAP.get(frequency)

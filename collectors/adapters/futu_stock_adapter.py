@@ -2,6 +2,7 @@
 
 import os
 import logging
+import time as _time
 from datetime import date, time, datetime
 from typing import Optional
 
@@ -108,14 +109,47 @@ class FutuStockAdapter:
                 if page_key is None:
                     break
 
+            # Rate limit: 60 req/30s → ~0.6s per symbol
+            if len(symbols) > 50:
+                _time.sleep(0.6)
+
         return pd.DataFrame(records)
 
-    def fetch_supported_symbols(self) -> list[str]:
-        """Return known symbols from Futu.
+    _DEFAULT_SYMBOLS = [
+        # HK — 15 stocks
+        "HK.00700", "HK.09988", "HK.00941", "HK.00005", "HK.00388",
+        "HK.01299", "HK.02318", "HK.01810", "HK.00883", "HK.02382",
+        "HK.01093", "HK.03968", "HK.02269", "HK.03690", "HK.09633",
+        # US — Nasdaq 100 + S&P 500 top 150 (deduplicated, ~239)
+        "US.AAPL","US.MSFT","US.NVDA","US.AMZN","US.META","US.GOOGL","US.AVGO","US.TSLA","US.COST","US.NFLX",
+        "US.ADBE","US.AMD","US.PEP","US.CSCO","US.LIN","US.INTU","US.QCOM","US.TXN","US.AMGN","US.ISRG",
+        "US.AMAT","US.CMCSA","US.HON","US.BKNG","US.GILD","US.MU","US.LRCX","US.ADI","US.VRTX","US.SBUX",
+        "US.MDLZ","US.INTC","US.KLAC","US.REGN","US.SNPS","US.ADP","US.PANW","US.CDNS","US.MELI","US.ABNB",
+        "US.ADSK","US.CRWD","US.FTNT","US.MAR","US.CTAS","US.ORLY","US.CSX","US.MRVL","US.NXPI","US.WDAY",
+        "US.ROP","US.CEG","US.DASH","US.PCAR","US.MCHP","US.ROST","US.MNST","US.CPRT","US.AEP","US.KDP",
+        "US.PAYX","US.KHC","US.ODFL","US.FAST","US.TTD","US.GEHC","US.IDXX","US.EXC","US.BKR","US.CTSH",
+        "US.CCEP","US.DDOG","US.MRNA","US.TTWO","US.ANSS","US.AZN","US.LULU","US.CDW","US.DXCM","US.TEAM",
+        "US.BIIB","US.CHTR","US.DLTR","US.WBD","US.PDD","US.ZS","US.FANG","US.MDB","US.ON","US.WBA",
+        "US.XEL","US.CSGP","US.EA","US.ILMN","US.VRSK","US.GFS","US.BRK.B","US.JPM","US.V","US.UNH",
+        "US.XOM","US.MA","US.JNJ","US.WMT","US.PG","US.HD","US.BAC","US.CVX","US.ABBV","US.KO",
+        "US.MRK","US.WFC","US.ORCL","US.CRM","US.PFE","US.DIS","US.IBM","US.CAT","US.GS","US.NEE",
+        "US.T","US.VZ","US.RTX","US.MS","US.AXP","US.C","US.LOW","US.BLK","US.TMO","US.GE",
+        "US.UPS","US.SPGI","US.NOW","US.UBER","US.BMY","US.SYK","US.CI","US.SCHW","US.ETN","US.ELV",
+        "US.CB","US.BSX","US.MDT","US.PLD","US.DE","US.MMC","US.SO","US.TMUS","US.FI","US.DUK",
+        "US.ICE","US.MO","US.EQIX","US.WM","US.CME","US.PYPL","US.TT","US.SHW","US.WELL","US.ZTS",
+        "US.PNC","US.USB","US.APH","US.EOG","US.BDX","US.ITW","US.PH","US.CL","US.FCX","US.LMT",
+        "US.CVS","US.NOC","US.APD","US.TGT","US.MMM","US.EMR","US.AON","US.KKR","US.GD","US.HUM",
+        "US.NKE","US.SLB","US.TDG","US.ECL","US.CARR","US.DHI","US.LEN","US.MCO","US.OXY","US.AZO",
+        "US.F","US.PSA","US.JCI","US.HLT","US.KMB","US.NSC","US.MPC","US.TFC","US.AFL","US.GM",
+        "US.MET","US.D","US.AIG","US.ALL","US.TRV","US.CP","US.WMB","US.LHX","US.SRE","US.PCG",
+        "US.OKE","US.KMI","US.ED","US.VST","US.NRG","US.EIX","US.AWK","US.VLTO","US.AME","US.URI",
+        "US.IR","US.XYL","US.OTIS","US.ROK","US.PWR","US.HWM","US.MLM","US.VMC","US.FTV","US.DOV",
+        "US.GRMN","US.PPG","US.LYB","US.DD","US.DOW","US.HAL","US.NEM","US.CTRA","US.DVN",
+    ]
 
-        TODO: Implement get_plate_stock for HK dynamic symbol discovery.
-        """
-        return []
+    def fetch_supported_symbols(self) -> list[str]:
+        """Return default watchlist of HK + US stocks."""
+        return list(self._DEFAULT_SYMBOLS)
 
     def market_hours(self, d: date) -> tuple[time, time]:
         """Return trading hours.

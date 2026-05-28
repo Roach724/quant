@@ -17,6 +17,8 @@ OPEND_HOST="${OPEND_HOST:-127.0.0.1}"
 OPEND_PORT="${OPEND_PORT:-11111}"
 
 echo "[start_collect] Starting FutuOpenD..."
+# Set LD_LIBRARY_PATH so OpenD finds its bundled .so files
+export LD_LIBRARY_PATH=/opt/opend:${LD_LIBRARY_PATH}
 /opt/opend/FutuOpenD -cfg_file=/opt/opend/FutuOpenD.xml &
 OPEND_PID=$!
 
@@ -44,7 +46,7 @@ done
 
 # --- Run collector ---
 echo "[start_collect] Running collector (source=${COLLECTOR_SOURCE})..."
-python3 -m collectors.main
+cd /app && python3 -m collectors.main
 COLLECTOR_EXIT=$?
 
 # --- Shutdown OpenD ---
