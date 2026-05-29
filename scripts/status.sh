@@ -12,6 +12,23 @@ else
 fi
 
 echo ""
+echo "--- ws_collector ---"
+systemctl is-active ws-collector 2>/dev/null || echo "  NOT RUNNING"
+if systemctl is-active --quiet ws-collector 2>/dev/null; then
+    tail -3 /home/quant/logs/ws_collector.log 2>/dev/null | while read line; do
+        echo "  $line"
+    done
+fi
+
+echo ""
+echo "--- Quality Timer ---"
+systemctl list-timers quality-check.timer --no-pager 2>/dev/null | tail -3
+
+echo ""
+echo "--- Logs disk usage ---"
+du -sh /home/quant/logs/ 2>/dev/null || echo "  (no logs dir)"
+
+echo ""
 echo "--- Query API ---"
 systemctl is-active query-api 2>/dev/null || echo "  NOT RUNNING"
 

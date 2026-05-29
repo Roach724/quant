@@ -128,14 +128,14 @@ class FutuStockAdapter:
         "US.ADSK","US.CRWD","US.FTNT","US.MAR","US.CTAS","US.ORLY","US.CSX","US.MRVL","US.NXPI","US.WDAY",
         "US.ROP","US.CEG","US.DASH","US.PCAR","US.MCHP","US.ROST","US.MNST","US.CPRT","US.AEP","US.KDP",
         "US.PAYX","US.KHC","US.ODFL","US.FAST","US.TTD","US.GEHC","US.IDXX","US.EXC","US.BKR","US.CTSH",
-        "US.CCEP","US.DDOG","US.MRNA","US.TTWO","US.ANSS","US.AZN","US.LULU","US.CDW","US.DXCM","US.TEAM",
-        "US.BIIB","US.CHTR","US.DLTR","US.WBD","US.PDD","US.ZS","US.FANG","US.MDB","US.ON","US.WBA",
-        "US.XEL","US.CSGP","US.EA","US.ILMN","US.VRSK","US.GFS","US.BRK.B","US.JPM","US.V","US.UNH",
+        "US.CCEP","US.DDOG","US.MRNA","US.TTWO","US.AZN","US.LULU","US.CDW","US.DXCM","US.TEAM",
+        "US.BIIB","US.CHTR","US.DLTR",
+        "US.XEL","US.CSGP","US.EA","US.ILMN","US.VRSK","US.GFS","US.BRK.B","US.JPM","US.V","US.UNH","US.WBD","US.PDD","US.ZS","US.FANG","US.MDB","US.ON",
         "US.XOM","US.MA","US.JNJ","US.WMT","US.PG","US.HD","US.BAC","US.CVX","US.ABBV","US.KO",
         "US.MRK","US.WFC","US.ORCL","US.CRM","US.PFE","US.DIS","US.IBM","US.CAT","US.GS","US.NEE",
         "US.T","US.VZ","US.RTX","US.MS","US.AXP","US.C","US.LOW","US.BLK","US.TMO","US.GE",
         "US.UPS","US.SPGI","US.NOW","US.UBER","US.BMY","US.SYK","US.CI","US.SCHW","US.ETN","US.ELV",
-        "US.CB","US.BSX","US.MDT","US.PLD","US.DE","US.MMC","US.SO","US.TMUS","US.FI","US.DUK",
+        "US.CB","US.BSX","US.MDT","US.PLD","US.DE","US.SO","US.TMUS","US.DUK",
         "US.ICE","US.MO","US.EQIX","US.WM","US.CME","US.PYPL","US.TT","US.SHW","US.WELL","US.ZTS",
         "US.PNC","US.USB","US.APH","US.EOG","US.BDX","US.ITW","US.PH","US.CL","US.FCX","US.LMT",
         "US.CVS","US.NOC","US.APD","US.TGT","US.MMM","US.EMR","US.AON","US.KKR","US.GD","US.HUM",
@@ -144,7 +144,7 @@ class FutuStockAdapter:
         "US.MET","US.D","US.AIG","US.ALL","US.TRV","US.CP","US.WMB","US.LHX","US.SRE","US.PCG",
         "US.OKE","US.KMI","US.ED","US.VST","US.NRG","US.EIX","US.AWK","US.VLTO","US.AME","US.URI",
         "US.IR","US.XYL","US.OTIS","US.ROK","US.PWR","US.HWM","US.MLM","US.VMC","US.FTV","US.DOV",
-        "US.GRMN","US.PPG","US.LYB","US.DD","US.DOW","US.HAL","US.NEM","US.CTRA","US.DVN",
+        "US.GRMN","US.PPG","US.LYB","US.DD","US.DOW","US.HAL","US.NEM","US.DVN",
     ]
 
     def fetch_supported_symbols(self) -> list[str]:

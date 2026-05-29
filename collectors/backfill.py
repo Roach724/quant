@@ -384,6 +384,7 @@ if __name__ == "__main__":
                         choices=["yfinance", "alpaca", "cryptobinance", "yfinancehk",
                                  "futu_stock", "futu_crypto"],
                         help="Data source adapter (default: yfinance)")
+    parser.add_argument("--market", default="", choices=["us", "hk", ""], help="Filter symbols by market prefix (e.g. --market us for US. only)")
     args = parser.parse_args()
 
     if not args.start or not args.end:
@@ -415,6 +416,15 @@ if __name__ == "__main__":
         logger.info("Using all %d symbols from %s", len(symbols), args.source)
     else:
         symbols = ["SPY", "AAPL", "MSFT", "NVDA", "GOOGL"]  # minimal default
+
+    # Market filter — apply after symbol resolution
+    if args.market:
+        prefix = f"{args.market.upper()}."
+        symbols = [s for s in symbols if s.startswith(prefix)]
+        if not symbols:
+            logger.error("No symbols match market filter '%s'", args.market)
+            sys.exit(1)
+        logger.info("Filtered to %d symbols for market=%s", len(symbols), args.market.upper())
     backfill(
         start=args.start, end=args.end, symbols=symbols,
         gcs_bucket=args.gcs_bucket or None,
