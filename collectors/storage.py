@@ -30,8 +30,8 @@ def dataframe_to_parquet_bytes(df: pd.DataFrame) -> bytes:
     # Cast timestamp columns to microseconds for BigQuery compatibility
     for i, field in enumerate(table.schema):
         if pa.types.is_timestamp(field.type):
-            col = table.column(i).cast(pa.timestamp("us", tz=field.type.timezone))
-            table = table.set_column(i, field.with_type(pa.timestamp("us", tz=field.type.timezone)), col)
+            col = table.column(i).cast(pa.timestamp("us", tz=field.type.tz))
+            table = table.set_column(i, field.with_type(pa.timestamp("us", tz=field.type.tz)), col)
     buf = io.BytesIO()
     pq.write_table(table, buf, compression="snappy")
     return buf.getvalue()
