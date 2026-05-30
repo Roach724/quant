@@ -31,3 +31,18 @@ def test_get_active_returns_dataframe(registry):
         mock_query.return_value.to_dataframe.return_value = mock_df
         result = registry.get_active("us")
         assert len(result) == 2
+
+def test_evaluate_writes_to_bq(registry):
+    import numpy as np
+    n = 200
+    fv = pd.Series(np.random.randn(n))
+    f1 = pd.Series(np.random.randn(n))
+    f5 = pd.Series(np.random.randn(n))
+    f20 = pd.Series(np.random.randn(n))
+    with patch.object(registry._client, 'query') as mq, \
+         patch.object(registry._client, 'insert_rows_json') as mi:
+        mq.return_value.result.return_value = None
+        mi.return_value = []
+        result = registry.evaluate("us_momentum_20d", fv, f1, f5, f20, force=True)
+        assert result is not None
+        assert "ic_mean" in result
