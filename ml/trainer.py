@@ -73,6 +73,126 @@ class ModelTrainer:
 
         return self.factor_df
 
+    def load_from_bq(
+        self,
+        symbols: list[str],
+        start: str,
+        end: str,
+        market: str = "us",
+        factor_ids: list[str] | None = None,
+        top_n: int = 15,
+    ):
+        """Load factor data from BigQuery via FactorRegistry + FactorBuilder.
+
+        Args:
+            symbols: Stock symbols without prefix (e.g. ["AAPL", "MSFT"]).
+            start: Start date YYYY-MM-DD.
+            end: End date YYYY-MM-DD.
+            market: "us" or "hk".
+            factor_ids: Specific factor IDs from registry, or None to auto-select.
+            top_n: Max active factors to use if factor_ids not specified.
+
+        Returns:
+            Factor DataFrame with symbol, date, and feature columns.
+        """
+        from google.cloud import bigquery
+        from factors.builder import FactorBuilder
+        from factors.registry import FactorRegistry
+
+        import pandas as pd
+
+        # Step 1: Select factors from registry
+        registry = FactorRegistry()
+        active = registry.get_active(market)
+
+        if active.empty:
+            logger.warning(
+                "No active factors in registry for market=%s. Falling back to all.",
+                market,
+            )
+            factor_names = ["ret_1d", "ret_5d", "vol_5d", "vol_20d", "rsi_14"]  # fallback
+        elif factor_ids:
+            mask = active["factor_id"].isin(factor_ids)
+            selected = active[mask]
+            factor_names = [
+                f.replace(f"{market}_", "", 1) for f in selected["factor_id"].tolist()
+            ]
+        else:
+            top = active.head(top_n)
+            factor_names = [
+                f.replace(f"{market}_", "", 1) for f in top["factor_id"].tolist()
+            ]
+
+        logger.info("Using %d factors: %s", len(factor_names), factor_names[:5])
+
+        # Step 2: Load OHLCV from BQ
+        client = bigquery.Client()
+        prefix = "US." if market == "us" else "HK."
+        bq_symbols = [f"{prefix}{s}" for s in symbols]
+        table = f"{registry.project}.{registry.dataset}.{market}_bars_1d"
+
+        query = f"""
+            SELECT symbol, timestamp, open, high, low, close, volume
+            FROM `{table}`
+            WHERE symbol IN UNNEST(@symbols)
+              AND timestamp BETWEEN @start AND @end
+            ORDER BY timestamp, symbol
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ArrayQueryParameter("symbols", "STRING", bq_symbols),
+                bigquery.ScalarQueryParameter("start", "STRING", start),
+                bigquery.ScalarQueryParameter("end", "STRING", end),
+            ],
+        )
+        ohlcv = client.query(query, job_config=job_config).to_dataframe()
+        ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"])
+        ohlcv["symbol"] = ohlcv["symbol"].str.replace(prefix, "")
+
+        if ohlcv.empty:
+            logger.warning("No OHLCV data found for %s, %s-%s", symbols, start, end)
+            return pd.DataFrame()
+
+        logger.info(
+            "Loaded %d OHLCV rows for %d symbols", len(ohlcv), len(symbols)
+        )
+
+        # Step 3: Compute factors per symbol
+        fb = FactorBuilder()
+        all_frames = []
+        for sym, group in ohlcv.groupby("symbol"):
+            stock_df = group.rename(columns={"timestamp": "date"})
+            stock_df = stock_df.sort_values("date").reset_index(drop=True)
+            try:
+                factors = fb.compute(factor_names, stock_df)
+                if factors is not None and not factors.empty:
+                    factors["symbol"] = sym
+                    n = len(factors)
+                    factors["date"] = stock_df["date"].values[:n]
+                    all_frames.append(factors)
+            except Exception as e:
+                logger.warning(
+                    "Factor computation failed for %s: %s", sym, e
+                )
+
+        if not all_frames:
+            logger.warning("No factor data computed for any symbol")
+            return pd.DataFrame()
+
+        self.factor_df = pd.concat(all_frames, ignore_index=True)
+
+        # Step 4: Set feature columns
+        exclude = {"symbol", "date", "fwd_ret_5d", "fwd_ret_20d"}
+        self.feature_cols = [
+            c for c in self.factor_df.columns if c not in exclude
+        ]
+        logger.info(
+            "Loaded %d factor rows, %d features",
+            len(self.factor_df),
+            len(self.feature_cols),
+        )
+        return self.factor_df
+
     # ── Data Splitting ─────────────────────────────────────────────
 
     def split_data(
