@@ -21,8 +21,17 @@ def build_gcs_path(market: str, data_type: str, frequency: str, symbol: str, tim
 
 
 def dataframe_to_parquet_bytes(df: pd.DataFrame) -> bytes:
-    """Convert a DataFrame to Parquet bytes with Snappy compression."""
+    """Convert a DataFrame to Parquet bytes with Snappy compression.
+    
+    Timestamp columns are cast to microsecond precision for BigQuery
+    compatibility (BQ rejects nanosecond TIMESTAMP_NANOS).
+    """
     table = pa.Table.from_pandas(df, preserve_index=False)
+    # Cast timestamp columns to microseconds for BigQuery compatibility
+    for i, field in enumerate(table.schema):
+        if pa.types.is_timestamp(field.type):
+            col = table.column(i).cast(pa.timestamp("us", tz=field.type.timezone))
+            table = table.set_column(i, field.with_type(pa.timestamp("us", tz=field.type.timezone)), col)
     buf = io.BytesIO()
     pq.write_table(table, buf, compression="snappy")
     return buf.getvalue()
