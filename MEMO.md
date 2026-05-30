@@ -135,7 +135,7 @@ raw/hk/bars/freq=5m/year=2026/month=05/day=26/symbol=00700.parquet
 | 1 | **无 Live Trading Loop** | 没有 run_live.py 主循环，策略不能自动执行 |
 | 2 | **状态无持久化** | Engine/Portfolio/仓位在内存，重启丢失 |
 | 3 | **回测引擎单线程** | 大数据量回测慢 |
-| 4 | **加密币模块待部署** | crypto/ 包已开发但搁置 |
+| 4 | ~~**加密币模块待部署**~~ | ~~crypto/ 包已开发但搁置~~ |
 | 5 | **未端到端实盘验证** | Paper Runner 已就绪但未持续运行 |
 
 ---
@@ -148,7 +148,7 @@ raw/hk/bars/freq=5m/year=2026/month=05/day=26/symbol=00700.parquet
 | 数据查询 | 一律走 BigQuery，GCS 仅写入归档 |
 | 部署方式 | VM cron + systemd，不用 Cloud Run |
 | 回填策略 | 串行执行（Futu API 限速 60req/30s） |
-| 加密币 | 已开发，暂时搁置 |
+| 加密币 | 暂时搁置 |
 | 旧采集器 | yfinance/akshare 代码保留但不启用 |
 
 ---
