@@ -395,3 +395,21 @@ class TestFactorBuilder:
         assert result is not None
         # BROKEN is skipped, only OK remains
         assert set(result["symbol"].unique()) == {"OK"}
+
+    def test_compute_selects_only_requested_factors(self):
+        """compute() returns only the requested factor columns."""
+        df = pd.DataFrame({
+            "date": pd.date_range("2024-01-01", periods=50, freq="B"),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 1000000,
+        })
+        fb = FactorBuilder()
+        result = fb.compute(["ret_1d", "vol_5d"], df)
+        assert "ret_1d" in result.columns
+        assert "vol_5d" in result.columns
+        assert "ret_5d" not in result.columns
+        assert not result.empty
+

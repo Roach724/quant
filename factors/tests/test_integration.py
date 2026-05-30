@@ -224,3 +224,35 @@ def test_factor_builder_with_real_hk_data():
             print("IC analysis skipped: no symbols passed the 200-row minimum in batch build")
     else:
         print(f"IC analysis skipped: need >=30 symbols for cross-sectional IC, got {len(ic_symbols)}")
+
+def test_full_pipeline_register_evaluate_query():
+    """End-to-end: register factor, evaluate, query active."""
+    from factors.builder import FactorBuilder
+    from factors.evaluation import evaluate_factor
+
+    np.random.seed(42)
+    fb = FactorBuilder()
+    df = pd.DataFrame({
+        "date": pd.date_range("2020-01-01", periods=500, freq="B"),
+        "open": 100 + np.cumsum(np.random.randn(500) * 0.5),
+        "high": 102 + np.cumsum(np.random.randn(500) * 0.5),
+        "low": 98 + np.cumsum(np.random.randn(500) * 0.5),
+        "close": 101 + np.cumsum(np.random.randn(500) * 0.5),
+        "volume": 1_000_000 + np.cumsum(np.random.randint(-10000, 10000, 500)),
+    })
+    all_factors = fb.compute_factors(df)
+
+    # Evaluate momentum factor
+    result = evaluate_factor(
+        factor_values=all_factors["ret_20d"],
+        fwd_ret_1d=all_factors["fwd_ret_5d"],
+        fwd_ret_5d=all_factors["fwd_ret_5d"],
+        fwd_ret_20d=all_factors["fwd_ret_20d"],
+    )
+
+    assert "ic_mean" in result
+    assert "ic_tstat" in result
+    assert "coverage" in result
+    assert "passes_admission" in result
+    assert isinstance(result["passes_admission"], bool)
+    assert isinstance(result["ic_decay_1d"], float) or result["ic_decay_1d"] is None

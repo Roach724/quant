@@ -13,6 +13,7 @@ Env vars:
     LOAD_DAYS: days of historical data to load (default: 7)
 """
 
+import io
 import logging
 import os
 from datetime import datetime, timezone, timedelta
@@ -70,7 +71,10 @@ def load_market(client, bucket, market, frequency, start_date, end_date, project
 
 
 def load_day(client, bucket, market, frequency, date_str, project, dataset="quant", table="us_bars"):
-    """Load one day of Parquet files using single-level glob."""
+    """Load one day of Parquet files using single-level glob.
+
+    Falls back to pandas-based loading if BigQuery rejects nanosecond timestamps.
+    """
     pattern = (
         f"raw/{market}/bars/freq={frequency}/"
         f"year={date_str[:4]}/month={date_str[5:7]}/"
@@ -98,7 +102,76 @@ def load_day(client, bucket, market, frequency, date_str, project, dataset="quan
         load_job.result()
         logger.info("Loaded %s: %d rows", date_str, load_job.output_rows)
     except Exception as e:
-        logger.warning("Load failed for %s: %s", date_str, e)
+        err_msg = str(e)
+        if "nanoseconds" in err_msg or "NANOS" in err_msg:
+            _load_day_via_dataframe(client, uri, project, dataset, table,
+                                    date_str, err_msg)
+        else:
+            logger.warning("Load failed for %s: %s", date_str, e)
+
+
+def _load_day_via_dataframe(client, uri, project, dataset, table,
+                            date_str, original_error):
+    """Fallback: read Parquet into pandas, cast timestamp to microseconds, load."""
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from google.cloud import storage
+
+    logger.info("Falling back to pandas load for %s (ns timestamp)", date_str)
+
+    # List blobs matching the glob
+    bucket_name = uri.split("/")[2]
+    prefix = "/".join(uri.replace(f"gs://{bucket_name}/", "").replace("*.parquet", "").split("/"))
+    gcs = storage.Client()
+    blobs = list(gcs.bucket(bucket_name).list_blobs(prefix=prefix))
+    parquet_blobs = [b for b in blobs if b.name.endswith(".parquet")]
+
+    if not parquet_blobs:
+        logger.warning("No parquet files found at %s", prefix)
+        return
+
+    rows_loaded = 0
+    for blob in parquet_blobs:
+        try:
+            buf = blob.download_as_bytes()
+            table_arrow = pq.read_table(io.BytesIO(buf))
+            # Cast timestamp columns to microseconds
+            for i, field in enumerate(table_arrow.schema):
+                if pa.types.is_timestamp(field.type):
+                    col = table_arrow.column(i).cast(
+                        pa.timestamp("us", tz=field.type.tz)
+                    )
+                    table_arrow = table_arrow.set_column(
+                        i, field.with_type(pa.timestamp("us", tz=field.type.tz)), col
+                    )
+            df = table_arrow.to_pandas()
+        except Exception as read_err:
+            logger.warning("Failed to read %s: %s", blob.name, read_err)
+            continue
+
+        if df.empty:
+            continue
+
+        table_ref = f"{project}.{dataset}.{table}"
+        job_config = bigquery.LoadJobConfig(
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+            time_partitioning=bigquery.TimePartitioning(
+                type_=bigquery.TimePartitioningType.DAY,
+                field="timestamp",
+            ),
+            clustering_fields=["symbol"],
+        )
+        try:
+            load_job = client.load_table_from_dataframe(
+                df, table_ref, job_config=job_config
+            )
+            load_job.result()
+            rows_loaded += len(df)
+        except Exception as df_err:
+            logger.warning("DataFrame load failed for %s: %s", blob.name, df_err)
+
+    logger.info("Pandas fallback loaded %s: %d rows", date_str, rows_loaded)
 
 
 def dedup_table(client, project, dataset="quant", table="us_bars"):
