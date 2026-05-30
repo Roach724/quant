@@ -158,7 +158,7 @@ class PaperRunner:
         if source == "parquet":
             return self._parquet_data(symbols, start, end, data_dir)
 
-        if source == "sdk":
+        if source in ("sdk", "bq"):
             return self._sdk_data(symbols, start, end)
 
         raise ValueError(f"Unknown data source: {source!r}")
@@ -241,16 +241,43 @@ class PaperRunner:
         return DataFrameSource(close=close)
 
     def _sdk_data(self, symbols: list[str], start: str, end: str) -> DataFrameSource:
-        """Load data via the quant SDK (GCS or API)."""
-        try:
-            from quant.data import bars
-        except ImportError:
-            raise ImportError("quant SDK not installed. Run: pip install -e sdk/")
+        """Load OHLCV from BigQuery for paper-trading replay.
 
-        df = bars(symbols, start=start, end=end, market=self.market)
-        close = df.pivot_table(index="timestamp", columns="symbol", values="close")
-        log.info("SDK data: %d bars × %d symbols", len(close), len(symbols))
-        return DataFrameSource(close=close)
+        Queries {market}_bars_1d table with symbol prefix mapping.
+        US symbols get "US." prefix, HK symbols get "HK." prefix.
+        """
+        from google.cloud import bigquery
+
+        client = bigquery.Client()
+        table = f"deductive-notch-495015-c2.quant.{self.market}_bars_1d"
+
+        prefix = "US." if self.market == "us" else "HK."
+        bq_symbols = [f"{prefix}{s}" for s in symbols]
+
+        query = f"""
+            SELECT symbol, timestamp, open, high, low, close, volume
+            FROM `{table}`
+            WHERE symbol IN UNNEST(@symbols)
+              AND timestamp BETWEEN @start AND @end
+            ORDER BY timestamp, symbol
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter("symbols", "STRING", bq_symbols),
+            bigquery.ScalarQueryParameter("start", "STRING", start),
+            bigquery.ScalarQueryParameter("end", "STRING", end),
+        ])
+        df = client.query(query, job_config=job_config).to_dataframe()
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df["symbol"] = df["symbol"].str.replace(prefix, "")
+
+        close = df.pivot_table(index="timestamp", columns="symbol", values="close").ffill()
+        open_df = df.pivot_table(index="timestamp", columns="symbol", values="open").ffill()
+        high = df.pivot_table(index="timestamp", columns="symbol", values="high").ffill()
+        low = df.pivot_table(index="timestamp", columns="symbol", values="low").ffill()
+        volume = df.pivot_table(index="timestamp", columns="symbol", values="volume").fillna(0)
+
+        log.info("BQ data: %d bars x %d symbols", len(close), len(symbols))
+        return DataFrameSource(close=close, open=open_df, high=high, low=low, volume=volume)
 
     # ── Main run loop ──
 
@@ -587,7 +614,7 @@ Examples:
     p.add_argument("--symbols", type=str, nargs="*",
                    help="Symbol list (default: market default pool)")
     p.add_argument("--data-source", type=str, default="simulated",
-                   choices=["simulated", "parquet", "sdk"],
+                   choices=["simulated", "parquet", "sdk", "bq"],
                    help="Data source type (default: simulated)")
     p.add_argument("--data-dir", type=str, default="./data",
                    help="Local data directory for parquet mode")
