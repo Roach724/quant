@@ -1,0 +1,63 @@
+experiment:
+  id: "w2_ml_vs_momentum"
+  name: "W2 ML vs Momentum Walk-Forward"
+  hypothesis: "LightGBM with FactorRegistry top-15 factors outperforms SimpleMomentum"
+
+walk_forward:
+  market: us
+  train_start: "2020-01-01"
+  train_end: "2022-12-31"
+  val_start: "2023-01-01"
+  val_end: "2023-12-31"
+  test_start: "2024-01-01"
+  test_end: "2025-12-31"
+  paper_start: "2026-01-01"
+  paper_end: "2026-05-28"
+  symbols:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - META
+    - NVDA
+    - TSLA
+    - JPM
+    - V
+    - JNJ
+    - WMT
+    - PG
+    - MA
+    - HD
+    - BAC
+    - DIS
+    - NFLX
+    - ADBE
+    - CRM
+    - INTC
+  capital: 100000
+
+strategies:
+  - name: "momentum_baseline"
+    class: "SimpleMomentum"
+    params:
+      lookback: 20
+      top_k: 20
+      rebalance_every: 5
+  - name: "ml_lightgbm"
+    class: "MLPredStrategy"
+    params:
+      market: us
+      train_start: "2020-01-01"
+      train_end: "2024-12-31"
+      top_k: 10
+      rebalance_every: 5
+      model_type: lightgbm
+
+evaluation:
+  metrics:
+    - sharpe_ratio
+    - max_drawdown
+    - win_rate
+    - total_return
+    - annual_return
+  benchmark: momentum_baseline
