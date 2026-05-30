@@ -220,6 +220,7 @@ def backfill(
     sleep_seconds: float = 3.0,
     frequency: str = "1m",
     source: str = "yfinance",
+    market: str = None,
 ):
     """Fetch historical bars in chunks and write to GCS or local storage.
 
@@ -301,7 +302,8 @@ def backfill(
     else:
         adapter = YFinanceUSAdapter()
 
-    market = adapter.market.lower()
+    # Use --market arg for storage path, fallback to adapter.market
+    storage_market = market if market else adapter.market.lower()
 
     total_rows = 0
     chunk_start = start_dt
@@ -325,10 +327,10 @@ def backfill(
         else:
             total_rows += len(df)
             if gcs_bucket:
-                paths = write_bars_to_gcs(df, gcs_bucket, market=market, frequency=frequency)
+                paths = write_bars_to_gcs(df, gcs_bucket, market=storage_market, frequency=frequency)
                 logger.info("  Wrote %d rows → %d GCS objects", len(df), len(paths))
             elif local_dir:
-                _write_local(df, local_dir, market, frequency)
+                _write_local(df, local_dir, storage_market, frequency)
 
         chunk_start = chunk_end
         if i < chunks - 1:
@@ -433,4 +435,5 @@ if __name__ == "__main__":
         sleep_seconds=args.sleep,
         frequency=args.frequency,
         source=args.source,
+        market=args.market or None,
     )

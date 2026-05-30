@@ -262,7 +262,23 @@ def _flush_buffer(buffer: list, label: str):
 
     import pandas as pd
 
-    df = pd.DataFrame(buffer)
+    # Snapshot and clear buffer immediately to avoid data loss on error
+    snapshot = list(buffer)
+    buffer.clear()
+
+    if not snapshot:
+        return
+
+    # Build DataFrame with column alignment (OpenD bars may have inconsistent fields)
+    try:
+        df = pd.DataFrame(snapshot)
+    except ValueError:
+        all_keys = set()
+        for item in snapshot:
+            all_keys.update(item.keys())
+        aligned = [{k: item.get(k) for k in all_keys} for item in snapshot]
+        df = pd.DataFrame(aligned)
+
     df["market"] = df["symbol"].apply(
         lambda s: "HK" if s.startswith("HK.") else ("US" if s.startswith("US.") else "CRYPTO")
     )
@@ -281,8 +297,6 @@ def _flush_buffer(buffer: list, label: str):
         except Exception as e:
             logger.error("GCS write failed for %s: %s", market, e)
             return
-
-    buffer.clear()
 
 
 if __name__ == "__main__":
