@@ -1,0 +1,9 @@
+<futu_opend>
+    <ip>127.0.0.1</ip>
+    <api_port>11111</api_port>
+    <login_account>${FUTU_LOGIN_ACCOUNT}</login_account>
+    <login_pwd_md5>${FUTU_LOGIN_PWD_MD5}</login_pwd_md5>
+    <lang>chs</lang>
+    <log_level>info</log_level>
+    <log_path>/tmp</log_path>
+</futu_opend>

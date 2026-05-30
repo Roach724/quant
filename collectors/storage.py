@@ -38,6 +38,7 @@ def write_bars_to_gcs(
     from google.cloud import storage
 
     df = df.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
     df["_ingest_time"] = datetime.now(timezone.utc)
 
     client = storage.Client()

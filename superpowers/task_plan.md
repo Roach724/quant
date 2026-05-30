@@ -1,5 +1,7 @@
 # Task Plan: Append-Only Write + Frequency-Separated Storage
 
+> Updated: 2026-05-26 | Branch: `feature/futu-integration`
+
 ## Summary
 
 Fix two critical data pipeline issues:
@@ -12,64 +14,118 @@ Fix two critical data pipeline issues:
 
 **Frequency spec:** All 3 markets (US, HK, crypto) collect **5m** and **1d** bars.
 
+## Status Overview
+
+| Phase | Scope | Status |
+|-------|-------|--------|
+| Phase 0 | Destroy old GCP resources | ⏳ Pending (GCP access required) |
+| Phase 1 | Core Storage Layer (`collectors/storage.py`) | ✅ Code complete + tests pass |
+| Phase 2 | BigQuery Loader (`bigquery_loader/main.py`) | ✅ Code complete |
+| Phase 3 | Python SDK (`sdk/quant/direct.py`, `__init__.py`) | ✅ Code complete + 3/3 tests pass |
+| Phase 4 | Go Query API (`query-api/internal/reader/reader.go`) | ✅ Code complete (Go not local, builds in Docker) |
+| Phase 5 | Terraform (6 tables + 6 collectors + 6 BQ loaders) | ✅ IaC complete + `terraform validate` passes |
+| Phase 6 | Deploy & Verify (GCP operations) | ⏳ Pending (GCP access required) |
+
+**Code verification (2026-05-26): 254 tests passed across engine/oms/collectors/sdk/factors/ml/experiment/paper.**
+
+---
+
 ## Phases
 
-### Phase 0: Destroy Existing Resources
-- [ ] **0.1** Stop and delete all 7 Cloud Run jobs
-- [ ] **0.2** Delete all 7 Cloud Scheduler jobs
-- [ ] **0.3** Drop all BQ tables: `us_bars`, `hk_bars`, `crypto_bars`
+### Phase 0: Destroy Existing Resources ⏳
+
+> Requires: GCP project access (`deductive-notch-495015-c2`, region `asia-east2`)
+
+- [ ] **0.1** Stop and delete all existing Cloud Run jobs (old format: no freq dimension)
+- [ ] **0.2** Delete all existing Cloud Scheduler jobs
+- [ ] **0.3** Drop old BQ tables: `us_bars`, `hk_bars`, `crypto_bars` (single-table format)
 - [ ] **0.4** Clear GCS bucket (delete all objects under `raw/`)
 
-### Phase 1: Core Storage Layer
-- [ ] **1.1** Update `build_gcs_path()` in `collectors/storage.py` — add `frequency` parameter, new path format:
+### Phase 1: Core Storage Layer ✅
+
+- [x] **1.1** Update `build_gcs_path()` in `collectors/storage.py` — `frequency` parameter, new path format:
   `raw/{market}/bars/freq={freq}/year=.../month=.../day=.../symbol={S}.parquet`
-- [ ] **1.2** Add `_ingest_time` column in `write_bars_to_gcs()` before writing Parquet
-- [ ] **1.3** Update `write_bars_to_gcs()` signature — add `frequency` parameter
-- [ ] **1.4** Update `collectors/main.py` — pass `frequency` to `write_bars_to_gcs()`
-- [ ] **1.5** Update `collectors/backfill.py` — pass `frequency` to `write_bars_to_gcs()` and `build_gcs_path()`
+- [x] **1.2** Add `_ingest_time` column in `write_bars_to_gcs()` before writing Parquet
+- [x] **1.3** Update `write_bars_to_gcs()` signature — `frequency` parameter already present
+- [x] **1.4** Update `collectors/main.py` — passes `frequency` to `write_bars_to_gcs()`
+- [x] **1.5** Update `collectors/backfill.py` — passes `frequency` to `write_bars_to_gcs()` and `_write_local()`
 
-### Phase 2: BigQuery Loader
-- [ ] **2.1** Add `_ingest_time` to SCHEMA in `bigquery_loader/main.py`
-- [ ] **2.2** Add `FREQUENCY` env var support
-- [ ] **2.3** Update `load_day()` GCS glob to include `freq={FREQUENCY}/`
-- [ ] **2.4** Change `write_disposition` from `WRITE_TRUNCATE` to `WRITE_APPEND`
-- [ ] **2.5** Add dedup step after load: `CREATE OR REPLACE TABLE ... ROW_NUMBER() OVER (PARTITION BY symbol, timestamp ORDER BY _ingest_time DESC)`
+### Phase 2: BigQuery Loader ✅
 
-### Phase 3: Python SDK
-- [ ] **3.1** Add `frequency` parameter to `bars_direct()` in `sdk/quant/direct.py`
-- [ ] **3.2** Update `_cache_path()` — insert `freq={frequency}/` into all 4 path-building functions
-- [ ] **3.3** Update `sdk/quant/__init__.py` — forward `frequency` to `bars_direct()`
-- [ ] **3.4** Update `sdk/tests/test_direct.py` — test paths include `freq=5m/`
+- [x] **2.1** Add `_ingest_time` to SCHEMA in `bigquery_loader/main.py`
+- [x] **2.2** Add `FREQUENCY` env var support
+- [x] **2.3** Update `load_day()` GCS glob to include `freq={FREQUENCY}/`
+- [x] **2.4** Change `write_disposition` from `WRITE_TRUNCATE` to `WRITE_APPEND`
+- [x] **2.5** Add dedup step after load: `CREATE OR REPLACE TABLE ... ROW_NUMBER() OVER (PARTITION BY symbol, timestamp ORDER BY _ingest_time DESC)`
 
-### Phase 4: Go Query API
-- [ ] **4.1** Update `buildGCSPrefix()` in `query-api/internal/reader/reader.go` — add frequency to path
-- [ ] **4.2** Update `QueryBars()` — pass `params.Frequency` to `buildGCSPrefix()`
-- [ ] **4.3** Update `ListSymbols()` — frequency-aware prefix scanning
-- [ ] **4.4** Update handler and test files
+### Phase 3: Python SDK ✅
 
-### Phase 5: Terraform (rebuild from scratch)
-- [ ] **5.1** `bigquery.tf` — create 6 frequency-specific BQ tables:
+- [x] **3.1** Add `frequency` parameter to `bars_direct()` in `sdk/quant/direct.py`
+- [x] **3.2** Update `_cache_path()` — `freq={frequency}/` in all 4 path-building functions
+- [x] **3.3** Update `sdk/quant/__init__.py` — forwards `frequency` to `bars_direct()`
+- [x] **3.4** `sdk/tests/test_direct.py` — 3/3 tests pass with new paths
+
+### Phase 4: Go Query API ✅
+
+- [x] **4.1** Update `buildGCSPrefix()` in `query-api/internal/reader/reader.go` — frequency param in path
+- [x] **4.2** Update `QueryBars()` — passes `params.Frequency` to `buildGCSPrefix()`
+- [x] **4.3** Update `ListSymbols()` — frequency-aware prefix scanning
+- [x] **4.4** Update handler — `handler.go` passes frequency through from query params
+
+### Phase 5: Terraform (rebuild from scratch) ✅
+
+- [x] **5.1** `bigquery.tf` — 6 frequency-specific BQ tables:
   `us_bars_5m`, `us_bars_1d`, `hk_bars_5m`, `hk_bars_1d`, `crypto_bars_5m`, `crypto_bars_1d`
-  (all with `_ingest_time` TIMESTAMP column)
-- [ ] **5.2** `bigquery.tf` — create 6 BQ loader jobs (one per market+freq)
-- [ ] **5.3** `cloud_run_jobs.tf` — create 2 US collectors: `quant-collector-us-5m` + `quant-collector-us-1d` + schedulers
-- [ ] **5.4** `cloud_run_hk.tf` — create 2 HK collectors: `quant-collector-hk-5m` + `quant-collector-hk-1d` + schedulers
-- [ ] **5.5** `cloud_run_crypto.tf` — create 2 crypto collectors: `quant-collector-crypto-5m` + `quant-collector-crypto-1d` + schedulers
-- [ ] **5.6** Delete `terraform/scheduler.tf` (merged into respective job files)
-- [ ] **5.7** `terraform fmt && terraform validate && terraform plan`
+  (all with `_ingest_time` TIMESTAMP column, partitioned by `timestamp` DAY, clustered by `symbol`)
+- [x] **5.2** `bigquery.tf` — 6 BQ loader jobs via `for_each` (one per market+freq)
+- [x] **5.3** `cloud_run_jobs.tf` — 2 US collectors: `quant-collector-us-5m` + `quant-collector-us-1d` + schedulers
+- [x] **5.4** `cloud_run_hk.tf` — 2 HK collectors: `quant-collector-hk-5m` + `quant-collector-hk-1d` + schedulers
+- [x] **5.5** `cloud_run_crypto.tf` — 2 crypto collectors: `quant-collector-crypto-5m` + `quant-collector-crypto-1d` + schedulers
+- [x] **5.6** `terraform/scheduler.tf` — deleted (merged into respective job files, confirmed not present)
+- [x] **5.7** `terraform fmt && terraform validate && terraform plan` — `validate` passes
 
-### Phase 6: Deploy & Verify
-- [ ] **6.1** `terraform apply` — provision all new resources
-- [ ] **6.2** Python tests: `python -m pytest collectors/tests/ sdk/tests/ -v`
-- [ ] **6.3** Go tests: `cd query-api && go vet ./... && go test ./... -v`
-- [ ] **6.4** Trigger each collector → verify GCS path `raw/{market}/bars/freq={freq}/year=.../symbol=....parquet`
-- [ ] **6.5** Trigger each BQ loader → verify no duplicate `(symbol, timestamp)` rows
-- [ ] **6.6** SDK `source="direct"` and `source="api"` — both read from new paths correctly
-- [ ] **6.7** Backfill: run for historical range → verify coexists with collector data, no duplicates
+### Phase 6: Deploy & Verify (2026-05-27)
+
+> Status: 14/14 Cloud Run Jobs deployed. Futu collectors paused awaiting OpenD network access.
+
+- [x] **6.1** `terraform apply` — All 14 jobs + 12 schedulers + 6 BQ tables + query-api provisioned
+- [x] **6.2** Python tests: 320 tests pass (including 66 Futu tests with OpenD running)
+- [ ] **6.3** Go tests: Docker image built & pushed (query-api:latest), tests run in container
+- [x] **6.4** GCS paths verified: `raw/{market}/bars/freq={freq}/` format confirmed, data flowing
+- [x] **6.5** BQ tables: 6 freq-separated, re-accumulating after full reset (76.3k objects cleared)
+- [ ] **6.6** SDK from production: local gcsfs DNS issue; Go API (`source="api"`) works
+- [ ] **6.7** Backfill: not yet run for historical range
+- [x] **6.8** Collector image rebuilt with futu-api, pushed; Futu collectors use same image
+- [x] **6.9** BQ loader + collector + query-api images: all built & pushed
+
+**Futu blockers:** `OPEND_HOST=127.0.0.1` not reachable from Cloud Run. Options:
+A. Embed OpenD in container (Dockerfile.collector exists, needs linux/amd64 build)
+B. Expose user's OpenD to internet (ngrok/Cloudflare Tunnel)
+C. Run Futu collectors locally instead of Cloud Run
+
+---
+
+## Data Reset (2026-05-27)
+
+All 6 BQ tables truncated + 76.3k GCS objects deleted. Fresh data accumulation started:
+- US 5m: 194 rows (yfinance, during market hours) ✅
+- Crypto 5m: 240 rows (Binance, 24/7) ✅
+- HK: 0 (market closed at midnight) ⏳
+
+## Beyond Phase 0: Futu Collector Deployment
+
+Once Phase 0 is deployed with freq-separated paths, Futu collectors can be deployed:
+
+- [ ] **F1** Verify OpenD environment (local/VPS with OpenD binary + login)
+- [ ] **F2** `terraform apply` for `collector-futu-stock.tf` + `collector-futu-crypto.tf`
+- [ ] **F3** Write Futu data to `freq=futu_1m` / `freq=futu_1d` paths (parallel to yfinance/Binance)
+- [ ] **F4** End-to-end verification: OpenD → FutuStockAdapter → GCS → BQ → SDK → Engine backtest
+
+---
 
 ## Target Resource Map
 
-### Collectors (6 Cloud Run Jobs)
+### Collectors (6 + 2 Futu Cloud Run Jobs)
 | Job | Market | Freq | Lookback | Schedule |
 |---|---|---|---|---|
 | `quant-collector-us-5m` | us | 5m | 120 min | `*/5 * * * 1-5` ET |
@@ -78,6 +134,8 @@ Fix two critical data pipeline issues:
 | `quant-collector-hk-1d` | hk | 1d | 1440 min | `0 9 * * 1-5` UTC |
 | `quant-collector-crypto-5m` | crypto | 5m | 120 min | `*/5 * * * *` UTC |
 | `quant-collector-crypto-1d` | crypto | 1d | 1440 min | `0 1 * * *` UTC |
+| `quant-collector-futu-stock` | hk+us | futu_1m | — | `*/30 1-10 * * 1-5` HKT |
+| `quant-collector-futu-crypto` | crypto | futu_1m | — | `*/5 * * * *` UTC |
 
 ### BQ Loaders (6 Cloud Run Jobs)
 | Job | Market | Freq | Table | Schedule |
@@ -87,7 +145,7 @@ Fix two critical data pipeline issues:
 | `quant-bq-loader-hk-5m` | hk | 5m | `hk_bars_5m` | `30 9 * * 1-5` UTC |
 | `quant-bq-loader-hk-1d` | hk | 1d | `hk_bars_1d` | `30 9 * * 1-5` UTC |
 | `quant-bq-loader-crypto-5m` | crypto | 5m | `crypto_bars_5m` | `0 6 * * *` UTC |
-| `quant-bq-loader-crypto-1d` | crypto | 1d | `crypto_bars_1d` | `6 0 * * *` UTC |
+| `quant-bq-loader-crypto-1d` | crypto | 1d | `crypto_bars_1d` | `0 1 * * *` UTC |
 
 ### BQ Tables (6, all in `quant` dataset, partitioned by `timestamp` DAY, clustered by `symbol`)
 | Table | Market | Freq |
@@ -119,3 +177,4 @@ raw/{us,hk,crypto}/bars/freq={5m,1d}/year=YYYY/month=MM/day=DD/symbol={SYMBOL}.p
 | Crypto 1d schedule: 00:01 UTC | Binance daily candle closes at 00:00 UTC |
 | 5m lookback: 120 min (24 bars) | With append mode, only needs to cover missed runs |
 | 1d lookback: 1440 min (1 day) | Sufficient for daily bars, dedup handles overlap |
+| Futu as separate freq paths (`futu_1m`, `futu_1d`) | Parallel to yfinance/Binance, no collision, easy switch |

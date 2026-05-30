@@ -54,6 +54,8 @@ from adapters.crypto_binance_adapter import CryptoBinanceAdapter
 from adapters.yfinance_hk_adapter import YFinanceHKAdapter
 from adapters.akshare_hk_adapter import AkshareHKAdapter
 from adapters.akshare_us_adapter import AkshareUSAdapter
+from adapters.futu_stock_adapter import FutuStockAdapter
+from adapters.crypto_futu_adapter import CryptoFutuAdapter
 from storage import build_gcs_path, dataframe_to_parquet_bytes, write_bars_to_gcs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -218,6 +220,7 @@ def backfill(
     sleep_seconds: float = 3.0,
     frequency: str = "1m",
     source: str = "yfinance",
+    market: str = None,
 ):
     """Fetch historical bars in chunks and write to GCS or local storage.
 
@@ -277,12 +280,16 @@ def backfill(
         )
         return
 
-    # --- Standard bulk-fetch path (Alpaca, Crypto) ---
+    # --- Standard bulk-fetch path (Alpaca, Crypto, Futu) ---
     if chunk_days is None:
         chunk_days = FREQUENCY_DEFAULTS["chunk_days"].get(frequency, 7)
     chunks = max(1, (total_days + chunk_days - 1) // chunk_days)
 
-    if source == "alpaca":
+    if source == "futu_stock":
+        adapter = FutuStockAdapter()
+    elif source == "futu_crypto":
+        adapter = CryptoFutuAdapter()
+    elif source == "alpaca":
         from adapters.alpaca_adapter import AlpacaUSAdapter
         key = os.environ.get("ALPACA_API_KEY", "")
         secret = os.environ.get("ALPACA_API_SECRET", "")
@@ -295,7 +302,8 @@ def backfill(
     else:
         adapter = YFinanceUSAdapter()
 
-    market = adapter.market.lower()
+    # Use --market arg for storage path, fallback to adapter.market
+    storage_market = market if market else adapter.market.lower()
 
     total_rows = 0
     chunk_start = start_dt
@@ -319,10 +327,10 @@ def backfill(
         else:
             total_rows += len(df)
             if gcs_bucket:
-                paths = write_bars_to_gcs(df, gcs_bucket, market=market, frequency=frequency)
+                paths = write_bars_to_gcs(df, gcs_bucket, market=storage_market, frequency=frequency)
                 logger.info("  Wrote %d rows → %d GCS objects", len(df), len(paths))
             elif local_dir:
-                _write_local(df, local_dir, market, frequency)
+                _write_local(df, local_dir, storage_market, frequency)
 
         chunk_start = chunk_end
         if i < chunks - 1:
@@ -375,8 +383,10 @@ if __name__ == "__main__":
                         choices=["1m", "5m", "15m", "30m", "1h", "1d"],
                         help="Bar frequency (default: 1m. Use 1d for multi-year backfill)")
     parser.add_argument("--source", default=os.environ.get("BACKFILL_SOURCE", "yfinance"),
-                        choices=["yfinance", "alpaca", "cryptobinance", "yfinancehk"],
+                        choices=["yfinance", "alpaca", "cryptobinance", "yfinancehk",
+                                 "futu_stock", "futu_crypto"],
                         help="Data source adapter (default: yfinance)")
+    parser.add_argument("--market", default="", choices=["us", "hk", ""], help="Filter symbols by market prefix (e.g. --market us for US. only)")
     args = parser.parse_args()
 
     if not args.start or not args.end:
@@ -392,6 +402,10 @@ if __name__ == "__main__":
         # Use the adapter that matches the selected source for symbol discovery
         if args.source == "cryptobinance":
             symbols = CryptoBinanceAdapter().fetch_supported_symbols()
+        elif args.source == "futu_stock":
+            symbols = FutuStockAdapter().fetch_supported_symbols()
+        elif args.source == "futu_crypto":
+            symbols = CryptoFutuAdapter().fetch_supported_symbols()
         elif args.source == "yfinancehk":
             symbols = YFinanceHKAdapter.fetch_all_symbols()
         elif args.source == "alpaca":
@@ -404,6 +418,15 @@ if __name__ == "__main__":
         logger.info("Using all %d symbols from %s", len(symbols), args.source)
     else:
         symbols = ["SPY", "AAPL", "MSFT", "NVDA", "GOOGL"]  # minimal default
+
+    # Market filter — apply after symbol resolution
+    if args.market:
+        prefix = f"{args.market.upper()}."
+        symbols = [s for s in symbols if s.startswith(prefix)]
+        if not symbols:
+            logger.error("No symbols match market filter '%s'", args.market)
+            sys.exit(1)
+        logger.info("Filtered to %d symbols for market=%s", len(symbols), args.market.upper())
     backfill(
         start=args.start, end=args.end, symbols=symbols,
         gcs_bucket=args.gcs_bucket or None,
@@ -412,4 +435,5 @@ if __name__ == "__main__":
         sleep_seconds=args.sleep,
         frequency=args.frequency,
         source=args.source,
+        market=args.market or None,
     )

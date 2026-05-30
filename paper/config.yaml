@@ -1,0 +1,41 @@
+# Paper Runner Configuration Template
+# Copy this file and adjust values for your run.
+#
+# Usage:
+#   python run_paper.py --config paper/config.yaml
+#
+# CLI arguments override config file values.
+
+# ── Required ──
+market: hk           # us | hk | crypto
+strategy: BuyHold    # BuyHold | SimpleMomentum | MeanReversion
+
+# ── Capital ──
+capital: 1000000
+
+# ── Date range ──
+start: "2024-01-01"
+end: "2024-12-31"
+
+# ── Universe (omit to use market default pool) ──
+# symbols:
+#   - "0700"
+#   - "9988"
+#   - "0941"
+
+# ── Data source ──
+data_source: simulated   # simulated | parquet | sdk
+# data_dir: ./data        # only for parquet mode
+
+# ── Strategy parameters (optional overrides) ──
+# strategy_kwargs:
+#   lookback: 20
+#   top_k: 5
+#   weight_per_symbol: 0.1
+
+# ── Output ──
+# output: ./output/my_run
+
+# ── Realtime replay ──
+# realtime: false
+# realtime_interval: 0.5
