@@ -104,7 +104,10 @@ def load_day(client, bucket, market, frequency, date_str, project, dataset="quan
 def dedup_table(client, project, dataset="quant", table="us_bars"):
     """Remove duplicate (symbol, timestamp) rows, keeping the latest _ingest_time."""
     query = f"""
-        CREATE OR REPLACE TABLE `{project}.{dataset}.{table}` AS
+        CREATE OR REPLACE TABLE `{project}.{dataset}.{table}`
+        PARTITION BY DATE(timestamp)
+        CLUSTER BY symbol
+        AS
         SELECT * EXCEPT(rn) FROM (
           SELECT *, ROW_NUMBER() OVER (
             PARTITION BY symbol, timestamp ORDER BY _ingest_time DESC
