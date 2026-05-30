@@ -275,6 +275,20 @@ class FactorBuilder:
         self.factor_names = [c for c in result.columns if not c.startswith("fwd_")]
         return result
 
+    def compute(self, factor_names: list[str], df: pd.DataFrame) -> pd.DataFrame:
+        """Compute only the requested factors for a single stock.
+
+        Args:
+            factor_names: List of factor column names to compute, e.g. ["ret_1d", "vol_5d"].
+            df: OHLCV DataFrame with date, open, high, low, close, volume columns.
+
+        Returns:
+            Factor DataFrame with only the requested columns.
+        """
+        all_factors = self.compute_factors(df)
+        available = [c for c in factor_names if c in all_factors.columns]
+        return all_factors[available]
+
     def process_factors(
         self,
         factor_df: pd.DataFrame,
