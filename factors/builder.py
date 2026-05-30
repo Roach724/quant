@@ -287,6 +287,10 @@ class FactorBuilder:
         """
         all_factors = self.compute_factors(df)
         available = [c for c in factor_names if c in all_factors.columns]
+        # Always include label columns for ML training
+        for label in ["fwd_ret_5d", "fwd_ret_20d"]:
+            if label in all_factors.columns and label not in available:
+                available.append(label)
         return all_factors[available]
 
     def process_factors(
