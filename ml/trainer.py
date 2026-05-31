@@ -128,10 +128,7 @@ class ModelTrainer:
         # Step 2: Load OHLCV from BQ
         client = bigquery.Client()
         prefix = "US." if market == "us" else "HK."
-        # Build both US. and US_ variants for symbol matching
-        dot_syms = [f"{prefix}{s}" for s in symbols]
-        underscore_syms = [f"{prefix.replace('.','_')}{s}" for s in symbols]
-        all_syms = list(set(dot_syms + underscore_syms))
+        bq_symbols = [f"{prefix}{s}" for s in symbols]
         table = f"{registry.project}.{registry.dataset}.{market}_bars_1d"
 
         query = f"""
