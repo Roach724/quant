@@ -287,57 +287,58 @@ def compute_quarterly_fwd_ret(f10_dates: pd.DataFrame, horizon_days: int = 63) -
     bars["date"] = pd.to_datetime(bars["date"])
     bars = bars.sort_values(["symbol", "date"])
 
-    # Build per-symbol price lookup (date -> close)
+    # Vectorized: use searchsorted on per-symbol bar index
+    bars_indexed = bars.set_index(["symbol", "date"]).sort_index()
     results = []
+    
     for sym in symbols:
-        sym_bars = bars[bars["symbol"] == sym].set_index("date")["close"]
-        if sym_bars.empty:
+        if sym not in bars_indexed.index.get_level_values(0):
             continue
-
-        # Get this symbol's F10 dates
-        sym_f10_raw = f10_dates[f10_dates["symbol"] == sym]["date"].drop_duplicates()
-        sym_f10 = pd.to_datetime(sym_f10_raw).sort_values()
-        sym_f10 = pd.DatetimeIndex(sym_f10)  # ensure Timestamp type
-
-        for f10_date in sym_f10:
-            # Find nearest trading day >= f10_date
-            future_bars = sym_bars[sym_bars.index >= f10_date]
-            if future_bars.empty:
+        sym_bars = bars_indexed.loc[sym]
+        sym_dates_idx = sym_bars.index
+        sym_closes = sym_bars["close"].values
+        
+        sym_f10 = pd.DatetimeIndex(pd.to_datetime(
+            f10_dates[f10_dates["symbol"] == sym]["date"].drop_duplicates()
+        )).sort_values()
+        
+        if len(sym_f10) == 0 or len(sym_dates_idx) == 0:
+            continue
+        
+        entry_positions = sym_dates_idx.searchsorted(sym_f10)
+        valid_mask = entry_positions < len(sym_dates_idx)
+        if not valid_mask.any():
+            continue
+        
+        entry_positions = entry_positions[valid_mask]
+        valid_f10 = sym_f10[valid_mask]
+        entry_closes = sym_closes[entry_positions]
+        entry_dates_arr = sym_dates_idx[entry_positions]
+        
+        forward_dates = entry_dates_arr + pd.Timedelta(days=horizon_days)
+        forward_positions = sym_dates_idx.searchsorted(forward_dates)
+        
+        d5_arr = entry_dates_arr + pd.Timedelta(days=7)
+        p5_arr = sym_dates_idx.searchsorted(d5_arr)
+        
+        d20_arr = entry_dates_arr + pd.Timedelta(days=30)
+        p20_arr = sym_dates_idx.searchsorted(d20_arr)
+        
+        for i in range(len(valid_f10)):
+            if forward_positions[i] >= len(sym_closes):
                 continue
-            entry_date = future_bars.index[0]
-            entry_close = future_bars.iloc[0]
-
-            # Find close after N calendar days
-            target_dt = entry_date + datetime.timedelta(days=horizon_days)
-            forward_bars = sym_bars[sym_bars.index >= target_dt]
-            if forward_bars.empty:
-                continue
-            exit_date = forward_bars.index[0]
-            exit_close = forward_bars.iloc[0]
-
-            # Compute fwd_ret
-            fwd_ret = (exit_close - entry_close) / entry_close
-
-            # Also compute shorter horizons for comparison
-            # 5 trading days (~7 calendar days)
-            target_5d = entry_date + datetime.timedelta(days=7)
-            fwd_5d_bars = sym_bars[sym_bars.index >= target_5d]
-            fwd_ret_5d = (fwd_5d_bars.iloc[0] - entry_close) / entry_close if not fwd_5d_bars.empty else None
-
-            # 20 trading days (~30 calendar days)
-            target_20d = entry_date + datetime.timedelta(days=30)
-            fwd_20d_bars = sym_bars[sym_bars.index >= target_20d]
-            fwd_ret_20d = (fwd_20d_bars.iloc[0] - entry_close) / entry_close if not fwd_20d_bars.empty else None
-
+            fwd_ret = (sym_closes[forward_positions[i]] - entry_closes[i]) / entry_closes[i]
+            fwd5 = (sym_closes[p5_arr[i]] - entry_closes[i]) / entry_closes[i] if p5_arr[i] < len(sym_closes) else None
+            fwd20 = (sym_closes[p20_arr[i]] - entry_closes[i]) / entry_closes[i] if p20_arr[i] < len(sym_closes) else None
             results.append({
                 "symbol": sym,
-                "date": f10_date,
-                "fwd_ret_5d": fwd_ret_5d,
-                "fwd_ret_20d": fwd_ret_20d,
-                "fwd_ret_quarterly": fwd_ret,  # ~63 calendar days
+                "date": valid_f10[i],
+                "fwd_ret_5d": fwd5,
+                "fwd_ret_20d": fwd20,
+                "fwd_ret_quarterly": fwd_ret,
             })
-
-    result = pd.DataFrame(results)
+    
+result = pd.DataFrame(results)
     if not result.empty:
         result["date"] = pd.DatetimeIndex(pd.to_datetime(result["date"]))
 
