@@ -102,17 +102,31 @@ class LiveRunner:
     def _init_components(self):
         """Create broker, strategy, observer, reporter, order manager."""
         broker_cfg = self.config.get("broker", {})
-        paper_cfg = broker_cfg.get("paper", {})
 
-        initial_capital = float(paper_cfg.get("initial_capital", 100_000))
-        self._slippage_bps = float(paper_cfg.get("slippage_bps", 5))
-        self._commission_bps = float(paper_cfg.get("commission_bps", 1))
-        self._min_commission = float(paper_cfg.get("min_commission", 1.0))
-
-        # PaperBroker
-        from oms.broker import PaperBroker
-        self.broker = PaperBroker(initial_capital=initial_capital)
-        logger.info("PaperBroker initialised — capital=%.0f", initial_capital)
+        if self._mode == "paper":
+            paper_cfg = broker_cfg.get("paper", {})
+            initial_capital = float(paper_cfg.get("initial_capital", 100_000))
+            self._slippage_bps = float(paper_cfg.get("slippage_bps", 5))
+            self._commission_bps = float(paper_cfg.get("commission_bps", 1))
+            self._min_commission = float(paper_cfg.get("min_commission", 1.0))
+            from oms.broker import PaperBroker
+            self.broker = PaperBroker(initial_capital=initial_capital)
+            logger.info("PaperBroker initialised — capital=%.0f", initial_capital)
+        else:
+            live_cfg = broker_cfg.get("live", {})
+            broker_type = live_cfg.get("type", "futu_stock")
+            self._slippage_bps = float(live_cfg.get("slippage_bps", 0))
+            self._commission_bps = float(live_cfg.get("commission_bps", 1))
+            self._min_commission = float(live_cfg.get("min_commission", 1.0))
+            if broker_type == "futu_stock":
+                from oms.broker.futu_stock_broker import FutuStockBroker
+                self.broker = FutuStockBroker(
+                    host=live_cfg.get("host", "127.0.0.1"),
+                    port=int(live_cfg.get("port", 11111)),
+                )
+            else:
+                raise ValueError(f"Unknown live broker type: {broker_type}")
+            logger.info("LiveBroker initialised: %s", broker_type)
 
         # OrderManager + PositionTracker
         self.order_manager = OrderManager(self.broker)
@@ -529,11 +543,103 @@ class LiveRunner:
     # ── Live trading loop (stub) ──────────────────────────────────────
 
     def _run_live_loop(self):
-        """Live trading via real-time WebSocket feed (not yet implemented)."""
-        raise NotImplementedError(
-            "Live trading loop is not yet implemented. "
-            "WebSocket data feed integration is required before live mode can be used."
+        """Live trading via Futu OpenD WebSocket K_5M subscription."""
+        from live.datasource import LiveDataSource
+        import pandas as pd
+        import numpy as np
+
+        # Resolve symbols
+        strat_cfg = self.config.get("strategy", {})
+        symbols = strat_cfg.get("symbols", [])
+        if not symbols:
+            # Default: top 20 from factor_values
+            from google.cloud import bigquery
+            bq = bigquery.Client(project="deductive-notch-495015-c2")
+            df = bq.query(
+                "SELECT DISTINCT symbol FROM quant.factor_values "
+                "WHERE source_builder = 'tech' ORDER BY symbol LIMIT 20"
+            ).result().to_dataframe()
+            symbols = df["symbol"].tolist()
+
+        # Convert to Futu format (AAPL → US.AAPL)
+        futu_symbols = [
+            s if "." in s else f"US.{s}" for s in symbols
+        ]
+        logger.info("Live mode: %d symbols → Futu WebSocket", len(futu_symbols))
+
+        # Init strategy context with dummy portfolio for factor computation
+        from engine.portfolio import Portfolio
+        from engine.strategy import StrategyContext
+        from engine.data import DataFrameSource
+
+        portfolio = Portfolio(initial_capital=100_000)
+        # Minimal DataFrameSource for strategy.on_bar to compute factors
+        empty_close = np.full((1, len(symbols)), 0.0)
+        empty_df = pd.DataFrame({
+            "close": [dict(zip(symbols, [0.0] * len(symbols)))],
+            "open": [dict(zip(symbols, [0.0] * len(symbols)))],
+            "high": [dict(zip(symbols, [0.0] * len(symbols)))],
+            "low": [dict(zip(symbols, [0.0] * len(symbols)))],
+            "volume": [dict(zip(symbols, [0] * len(symbols)))],
+        })
+        src = DataFrameSource(empty_df)
+        ctx = StrategyContext(data=src, portfolio=portfolio, config={
+            "symbols": symbols, **strat_cfg,
+        })
+        self.strategy.on_init(ctx)
+
+        # Connect to OpenD for live data
+        self._live_bar_buffer: list[dict] = []
+
+        def on_live_bar(bar: dict):
+            """Callback: process each completed 5m bar."""
+            try:
+                futu_sym = bar["symbol"]
+                bare_sym = futu_sym.replace("US.", "").replace("HK.", "")
+                ts = bar["timestamp"]
+
+                # Build bar_data compatible format
+                bar_data = {
+                    "close": {bare_sym: bar["close"]},
+                    "open": {bare_sym: bar["open"]},
+                    "high": {bare_sym: bar["high"]},
+                    "low": {bare_sym: bar["low"]},
+                    "volume": {bare_sym: bar["volume"]},
+                }
+
+                # Mark portfolio
+                portfolio.mark_and_record(ts, bar_data)
+
+                # Snapshot
+                if self.observer.snapshot_due(ts):
+                    pos_list = []
+                    for sym, pos in portfolio.positions.items():
+                        if hasattr(pos, "size") and pos.size > 0:
+                            price = bar["close"] if bare_sym == sym else bar_data["close"].get(sym, 0)
+                            cb = getattr(pos, "cost_basis", 0) or getattr(pos, "avg_price", 0)
+                            pos_list.append({
+                                "symbol": sym, "qty": pos.size,
+                                "price": price, "cost_basis": cb,
+                                "mkt_value": pos.size * price,
+                                "pnl_pct": (price / cb - 1) * 100 if cb > 0 else 0,
+                            })
+                    self.observer.snapshot_portfolio(ts, pos_list)
+
+                # Record equity
+                eq = portfolio._mark_to_market(bar_data)
+                self.observer.record_bar(ts, eq, portfolio.cash, 0.0)
+
+            except Exception:
+                logger.exception("Live bar callback failed")
+
+        source = LiveDataSource(
+            symbols=futu_symbols,
+            host=self.config.get("broker", {}).get("live", {}).get("host", "127.0.0.1"),
+            port=int(self.config.get("broker", {}).get("live", {}).get("port", 11111)),
+            market=self._market,
         )
+        source.on_bar = on_live_bar
+        source.run()
 
     # ── Shutdown ──────────────────────────────────────────────────────
 
