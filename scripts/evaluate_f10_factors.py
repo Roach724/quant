@@ -333,6 +333,8 @@ def main():
     # Set (symbol, date) MultiIndex on transformed DataFrames
     for key in list(data_map.keys()):
         df = data_map[key]
+        # Deduplicate to avoid "Reindexing only valid with uniquely valued Index objects"
+        df = df.drop_duplicates(subset=[c for c in ["symbol", "date"] if c in df.columns])
         if not df.empty and 'symbol' in df.columns and 'date' in df.columns:
             data_map[key] = df.set_index(['symbol', 'date'])
 
