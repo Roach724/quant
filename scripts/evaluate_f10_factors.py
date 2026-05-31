@@ -48,13 +48,13 @@ F10_TABLES = list(TABLE_TO_KEY.keys())
 # Tables with JSON data column (as opposed to direct columnar schema)
 JSON_SOURCE_TABLES = {"us_financials", "us_analyst", "us_capital_flow", "us_shareholder"}
 
-# Timestamp column per table (for date filtering)
+# Timestamp column per table: (col_name, bq_date_expr_template or None for DATE(col))
 TS_COL = {
-    "us_valuation": "ingest_time",
-    "us_financials": "ingest_time",
-    "us_analyst": "ingest_time",
-    "us_capital_flow": "ingest_time",
-    "us_shareholder": "ingest_time",
+    "us_valuation": ("ingest_time", None),
+    "us_financials": ("date_time_str", "PARSE_TIMESTAMP('%Y/%m/%d', {col})"),
+    "us_analyst": ("update_time", "TIMESTAMP_SECONDS(CAST({col} AS INT64))"),
+    "us_capital_flow": ("ingest_time", None),
+    "us_shareholder": ("update_time", "TIMESTAMP_SECONDS(CAST({col} AS INT64))"),
 }
 
 
@@ -86,9 +86,13 @@ def _build_category_map(ffb):
 def load_f10_table(table: str, start: str, end: str) -> pd.DataFrame | None:
     """Load a single F10 table from BQ, returning None on failure."""
     client = bigquery.Client(project=PROJECT)
-    ts = TS_COL.get(table, "ingest_time")
-
-    date_filter = f"DATE({ts}) BETWEEN '{start}' AND '{end}'"
+    ts_entry = TS_COL.get(table, ("ingest_time", None))
+    col_name, date_expr_template = ts_entry
+    if date_expr_template:
+        ts_expr = date_expr_template.format(col=col_name)
+    else:
+        ts_expr = col_name
+    date_filter = f"DATE({ts_expr}) BETWEEN '{start}' AND '{end}'"
     query = f"""
         SELECT *
         FROM `{DATASET}.{table}`
