@@ -1,6 +1,9 @@
 from typing import Protocol, Optional
+import logging
 import pandas as pd
 from google.cloud import bigquery
+
+log = logging.getLogger(__name__)
 
 
 class DataSource(Protocol):
@@ -106,6 +109,43 @@ class BigQuery5mSource:
         )
         rows = self._client.query(query, job_config=job_config).result()
         return [row.symbol for row in rows]
+
+    def load_all(self) -> "DataFrameSource":
+        """Load all symbols as wide-format DataFrameSource for PaperRunner.
+        
+        Queries BigQuery for all symbols in the configured date range,
+        pivots to wide format (columns=symbols, index=timestamp), and
+        returns a DataFrameSource with close, open, high, low, volume.
+        """
+        syms = self.symbols()
+        if not syms:
+            raise ValueError(f"No symbols found in {self.table} for {self.start}→{self.end}")
+
+        query = f"""
+            SELECT symbol, timestamp, open, high, low, close, volume
+            FROM `{self.table}`
+            WHERE symbol IN UNNEST(@symbols)
+              AND timestamp BETWEEN @start AND @end
+            ORDER BY timestamp, symbol
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter("symbols", "STRING", syms),
+            bigquery.ScalarQueryParameter("start", "STRING", self.start),
+            bigquery.ScalarQueryParameter("end", "STRING", self.end),
+        ])
+        df = self._client.query(query, job_config=job_config).to_dataframe()
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        # Strip US. prefix for PaperRunner/strategy compatibility
+        df["symbol"] = df["symbol"].str.replace("US.", "", regex=False)
+
+        close = df.pivot_table(index="timestamp", columns="symbol", values="close").ffill()
+        open_df = df.pivot_table(index="timestamp", columns="symbol", values="open").ffill()
+        high = df.pivot_table(index="timestamp", columns="symbol", values="high").ffill()
+        low = df.pivot_table(index="timestamp", columns="symbol", values="low").ffill()
+        volume = df.pivot_table(index="timestamp", columns="symbol", values="volume").fillna(0)
+
+        log.info("BQ 5m data: %d bars x %d symbols", len(close), len(syms))
+        return DataFrameSource(close=close, open=open_df, high=high, low=low, volume=volume)
 
     def load_bars(self, symbol: str) -> pd.DataFrame:
         """Query 5-minute bars for a single symbol.
