@@ -54,8 +54,7 @@ OMS/执行 ████████████░  90%   ← Futu Stock/Crypto 
 | ws_collector (5m) | systemd | ✅ 运行 | WebSocket 推送，US 234 + HK 15 + Crypto 10 |
 | US 1d 采集 | cron (21:30 UTC) | ✅ | Futu API，Mon-Fri，收盘后 |
 | HK 1d 采集 | cron (08:30 UTC) | ✅ | Futu API，Mon-Fri，收盘后 |
-| BQ Loader ×6 | cron | ✅ | US/HK/Crypto × 1d+5m，Mon-Fri/daily |
-| query-api | systemd | ✅ | Go REST API |
+| BQ Loader ×6 | cron | ✅ | US/HK/Crypto × 1d+5m，Mon-Fri/daily；cron_wrapper.sh → /home/quant/logs/ |
 | logrotate | cron | ✅ | 30 天轮转 |
 
 ### BQ 数据状态
@@ -82,7 +81,15 @@ OMS/执行 ████████████░  90%   ← Futu Stock/Crypto 
           US=234 / HK=15 / Crypto=10
 GCS 路径: raw/{market}/bars/freq={freq}/year={YYYY}/month={MM}/day={DD}/symbol={SYMBOL}.parquet
 BQ 表:    quant.{market}_bars_{freq} — PARTITION BY DATE(timestamp), CLUSTER BY symbol
+查询层:  所有模块直接查询 BigQuery（GCS 仅写入归档）
 ```
+
+### GCP 云服务
+
+| 服务 | 用途 |
+|------|------|
+| GCS | 写入归档（Parquet 中间存储） |
+| BigQuery | 唯一查询入口（6 张行情表 + 2 张因子库表） |
 
 ---
 
@@ -195,7 +202,7 @@ BQ 表:    quant.{market}_bars_{freq} — PARTITION BY DATE(timestamp), CLUSTER 
 
 ## 十一、关键指标
 
-- **代码规模**: Python 15k+ 行 / Go ~2k 行 / Terraform ~600 行
+- **代码规模**: Python ~14.8k 行 / Terraform ~600 行
 - **测试覆盖**: 140+ Python 测试 + Go 测试
 - **因子库**: 39 因子注册 (BQ factor_registry)，准入标准 IC>0.05
 - **策略**: SimpleMomentum + MLPredStrategy (LightGBM)

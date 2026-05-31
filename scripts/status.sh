@@ -28,9 +28,6 @@ echo ""
 echo "--- Logs disk usage ---"
 du -sh /home/quant/logs/ 2>/dev/null || echo "  (no logs dir)"
 
-echo ""
-echo "--- Query API ---"
-systemctl is-active query-api 2>/dev/null || echo "  NOT RUNNING"
 
 echo ""
 echo "--- Cron jobs ---"

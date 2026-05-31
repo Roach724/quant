@@ -109,9 +109,9 @@ git commit -m "chore: remove deprecated Cloud Run jobs terraform"
 **Files:**
 - Modify: `collectors/storage.py`
 
-- [ ] **Step 1: Edit `write_bars_to_gcs` — remove JSON companion block**
+- [ ] **Step 1: Edit `write_bars_to_gcs` — remove JSON companion block + unused import**
 
-In `collectors/storage.py`, remove lines 59-66 (the JSON companion write block):
+In `collectors/storage.py`, remove the JSON companion write block (lines 69-75) AND the now-unused `import json` (line 2):
 
 ```python
 # Remove these lines:
@@ -144,7 +144,13 @@ The function should end with just the parquet write and the paths list containin
     return paths
 ```
 
-- [ ] **Step 2: Verify the edit**
+- [ ] **Step 2: Remove `import json` (now unused)**
+
+```bash
+sed -i '/^import json$/d' collectors/storage.py
+```
+
+- [ ] **Step 3: Verify the edit**
 
 ```bash
 grep -n "json" collectors/storage.py
@@ -152,7 +158,7 @@ grep -n "json" collectors/storage.py
 
 Expected: no matches.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add collectors/storage.py
@@ -313,7 +319,35 @@ conda activate quant && python -c "import ast; ast.parse(open('quality/main.py')
 
 Expected: `OK`
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Update quality-check.service — remove GCS_BUCKET, add BQ env vars**
+
+Edit `/etc/systemd/system/quality-check.service`:
+
+```ini
+# /etc/systemd/system/quality-check.service
+[Unit]
+Description=Quant Data Quality Check
+
+[Service]
+Type=oneshot
+User=quant
+WorkingDirectory=/opt/quant/quality
+Environment=GCP_PROJECT=deductive-notch-495015-c2
+Environment=MARKET=us
+Environment=FREQUENCY=1d
+ExecStart=/usr/bin/python3.12 /opt/quant/quality/main.py
+StandardOutput=append:/home/quant/logs/quality.log
+StandardError=append:/home/quant/logs/quality.log
+```
+
+Key changes: `GCS_BUCKET` → `GCP_PROJECT` + `MARKET` + `FREQUENCY`.
+(Add a second service `quality-check-hk.service` with `MARKET=hk` later if needed.)
+
+```bash
+sudo systemctl daemon-reload
+```
+
+- [ ] **Step 4: Commit**
 
 ```bash
 git add quality/main.py
@@ -831,7 +865,8 @@ jobs:
         run: |
           gcloud compute ssh quant-vm \
             --zone=${{ vars.GCP_REGION || 'asia-east2' }}-a \
-            --command="cd /opt/quant && git pull origin main && sudo systemctl restart ws-collector"
+            --command="cd /opt/quant && git fetch origin main && git reset --hard origin/main && sudo systemctl restart ws-collector" || \
+            echo "::error::VM deploy failed — check VM connectivity and git state"
 ```
 
 - [ ] **Step 2: Commit**
@@ -874,7 +909,56 @@ git commit -m "chore: remove Go query-api build and systemd from startup script"
 
 ---
 
-### Task 15: Final verification
+### Task 15: Fix BQ loader cron log paths
+
+**Problem:** All 6 BQ loader cron jobs redirect output to `/var/log/bq_loader.log` but the `quant` user has no write permission to `/var/log/`. Output is silently discarded, making it impossible to confirm success or diagnose failures.
+
+**Fix:** Rewire all 6 BQ loader cron jobs to use `cron_wrapper.sh` (same as collectors), which logs to `/home/quant/logs/` with START/OK/FAILED markers and automatic alert on failure.
+
+**Files:**
+- Modify: quant user's crontab (`sudo crontab -u quant -e`)
+
+- [ ] **Step 1: Replace 6 BQ loader cron entries**
+
+Replace the first 6 entries in quant's crontab with cron_wrapper.sh equivalents:
+
+```cron
+# BigQuery Data Loaders
+# US 5m bars (Mon-Fri, 6am UTC)
+0 6 * * 1-5 /opt/quant/scripts/cron_wrapper.sh bq_loader_us_5m env GCS_BUCKET=deductive-notch-495015-c2-quant-data GCP_PROJECT=deductive-notch-495015-c2 MARKET=us FREQUENCY=5m TABLE=us_bars_5m python3.12 -m bigquery_loader.main
+# US 1d bars
+0 6 * * 1-5 /opt/quant/scripts/cron_wrapper.sh bq_loader_us_1d env GCS_BUCKET=deductive-notch-495015-c2-quant-data GCP_PROJECT=deductive-notch-495015-c2 MARKET=us FREQUENCY=1d TABLE=us_bars_1d python3.12 -m bigquery_loader.main
+# HK 5m bars (Mon-Fri, 9:30am UTC)
+30 9 * * 1-5 /opt/quant/scripts/cron_wrapper.sh bq_loader_hk_5m env GCS_BUCKET=deductive-notch-495015-c2-quant-data GCP_PROJECT=deductive-notch-495015-c2 MARKET=hk FREQUENCY=5m TABLE=hk_bars_5m python3.12 -m bigquery_loader.main
+# HK 1d bars
+30 9 * * 1-5 /opt/quant/scripts/cron_wrapper.sh bq_loader_hk_1d env GCS_BUCKET=deductive-notch-495015-c2-quant-data GCP_PROJECT=deductive-notch-495015-c2 MARKET=hk FREQUENCY=1d TABLE=hk_bars_1d python3.12 -m bigquery_loader.main
+# Crypto 5m bars (daily, 6am UTC)
+0 6 * * * /opt/quant/scripts/cron_wrapper.sh bq_loader_crypto_5m env GCS_BUCKET=deductive-notch-495015-c2-quant-data GCP_PROJECT=deductive-notch-495015-c2 MARKET=crypto FREQUENCY=5m TABLE=crypto_bars_5m python3.12 -m bigquery_loader.main
+# Crypto 1d bars (daily, 1am UTC)
+0 1 * * * /opt/quant/scripts/cron_wrapper.sh bq_loader_crypto_1d env GCS_BUCKET=deductive-notch-495015-c2-quant-data GCP_PROJECT=deductive-notch-495015-c2 MARKET=crypto FREQUENCY=1d TABLE=crypto_bars_1d python3.12 -m bigquery_loader.main
+```
+
+- [ ] **Step 2: Clean up stale empty log files**
+
+```bash
+sudo rm -f /var/log/bq_loader.log /var/log/bq_loader_*.log
+```
+
+- [ ] **Step 3: Verify crontab is valid**
+
+```bash
+sudo crontab -u quant -l | grep bq_loader
+```
+
+Expected: 6 lines, all using `cron_wrapper.sh`, no `/var/log/` references.
+
+- [ ] **Step 4: Document in MEMO.md**
+
+Crontab changes are not tracked in git. The MEMO.md update in Task 9 will reflect the new log paths.
+
+---
+
+### Task 16: Final verification
 
 **Files:**
 - None (verification only)
@@ -926,5 +1010,6 @@ If clean, done. If not, review stragglers and commit.
 
 Tasks 1-4 are independent deletions (can run in parallel).
 Tasks 5-6 are independent modifications.
+Task 15 is independent (system config, no code dependency).
 Tasks 7-14 depend on Tasks 1-4 being done (for clean grep/verify steps).
-Task 15 runs last, after all changes.
+Task 16 runs last, after all changes.
