@@ -233,24 +233,24 @@ class DatasetManager:
         end: str,
         market: str,
     ) -> pd.DataFrame:
-        """Query and pivot factor_values into a wide DataFrame."""
-        # Resolve output column names
-        output_features, output_label = cls._resolve_feature_names(
-            bq_client, features, label, market
-        )
+        """Query and pivot factor_values into a wide DataFrame.
 
+        *features* and *label* must be **already-resolved** names (market
+        prefix stripped).  Each is looked up via ``_resolve_factor_id`` to
+        find the underlying BQ factor_id.
+        """
+        # features is already resolved — do NOT call _resolve_feature_names here.
         # Build CASE WHEN for each feature + label
-        all_input_names = list(features) + [label]
-        all_output_names = list(output_features) + [output_label]
+        all_names = list(features) + [label]
 
         case_clauses: list[str] = []
         select_cols: list[str] = []
-        for in_name, out_name in zip(all_input_names, all_output_names):
-            fid = cls._resolve_factor_id(bq_client, in_name, market)
+        for name in all_names:
+            fid = cls._resolve_factor_id(bq_client, name, market)
             case_clauses.append(
-                f"MAX(CASE WHEN factor_id = '{fid}' THEN value END) AS `{out_name}`"
+                f"MAX(CASE WHEN factor_id = '{fid}' THEN value END) AS `{name}`"
             )
-            select_cols.append(out_name)
+            select_cols.append(name)
 
         query = f"""
             SELECT symbol, date, {', '.join(case_clauses)}
@@ -345,19 +345,10 @@ class DatasetManager:
         else:
             symbols = list(config.symbols)
 
-        # Resolve features
-        if isinstance(config.features, str) and config.features.startswith(
-            "from_registry_top_"
-        ):
-            features_list = config.features
-            output_features, _ = cls._resolve_feature_names(
-                bq_client, config.features, config.label, config.market
-            )
-        else:
-            features_list = list(config.features)
-            output_features, _ = cls._resolve_feature_names(
-                bq_client, features_list, config.label, config.market
-            )
+        # Resolve features once; pass resolved names to _query_factor_data
+        output_features, output_label = cls._resolve_feature_names(
+            bq_client, config.features, config.label, config.market
+        )
 
         # Determine overall query range (union of all three)
         all_start = min(
@@ -381,8 +372,8 @@ class DatasetManager:
         )
         df = cls._query_factor_data(
             bq_client,
-            features_list,
-            config.label,
+            output_features,
+            output_label,
             symbols,
             all_start,
             all_end,
@@ -413,11 +404,7 @@ class DatasetManager:
             "n_symbols": len(symbols),
             "features": output_features,
             "n_features": len(output_features),
-            "label": (
-                config.label
-                if not config.label.startswith(f"{config.market}_")
-                else config.label[len(config.market) + 1 :]
-            ),
+            "label": output_label,
             "train_range": list(config.train_range),
             "val_range": list(config.val_range),
             "test_range": list(config.test_range),
