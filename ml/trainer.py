@@ -254,20 +254,18 @@ class ModelTrainer:
         # Load fundamental factors directly from factor_values table
         prefix = "US." if market == "us" else "HK."
         # Build both US. and US_ variants for symbol matching
-        dot_syms = [f"{prefix}{s}" for s in symbols]
-        underscore_syms = [f"{prefix.replace('.','_')}{s}" for s in symbols]
-        all_syms = list(set(dot_syms + underscore_syms))
+        bare_syms = symbols  # stripped symbols for factor_values
 
         fv_query = f"""
             SELECT factor_id, symbol, date, value
             FROM `{PROJECT}.quant.factor_values`
             WHERE source_builder = 'fundamental'
-              AND symbol IN UNNEST(@syms)
+              AND symbol IN UNNEST(@bare_syms)
               AND date BETWEEN @start AND @end
             ORDER BY symbol, date, factor_id
         """
         fv_job = bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ArrayQueryParameter("syms", "STRING", all_syms),
+            bigquery.ArrayQueryParameter("bare_syms", "STRING", symbols),
             bigquery.ScalarQueryParameter("start", "STRING", start),
             bigquery.ScalarQueryParameter("end", "STRING", end),
         ])
