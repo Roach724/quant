@@ -1,38 +1,33 @@
 #!/usr/bin/env python3.12
-"""W2 Experiment: Momentum vs LightGBM walk-forward comparison.
+"""W3 Experiment: 5m-frequency strategy validation.
 
-Runs both strategies via PaperRunner using BQ data, records metrics.
+Runs Momentum + ML strategies on us_bars_5m BQ data via PaperRunner.
+⚠️ POC only — 29 days of 5m data means limited statistical significance.
 """
 import sys, os, yaml, logging, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pandas as pd
-from run_paper import PaperRunner
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-log = logging.getLogger("w2")
+log = logging.getLogger("w3")
 
 def main():
-    import argparse as _ap
-    _cli = _ap.ArgumentParser(add_help=False)
-    _cli.add_argument("--factor-source", default="tech",
-                      choices=["tech", "fundamental", "all"],
-                      help="Factor source for ML strategy (default: tech)")
-    _cli_args, _ = _cli.parse_known_args()
-
-    config_path = os.environ.get("W2_CONFIG", "experiment/config_w2.yaml")
+    config_path = os.environ.get("W3_CONFIG", "experiment/config_w3_5m.yaml")
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
     log.info("=" * 60)
-    log.info("W2 Experiment: %s", config["experiment"]["name"])
+    log.info("W3 5m Experiment: %s", config["experiment"]["name"])
+    log.info("⚠️  POC — only %s → %s (29 days)", config["data"]["start"], config["data"]["end"])
     log.info("=" * 60)
 
     wf = config["walk_forward"]
     symbols = wf["symbols"]
     capital = wf.get("capital", 100000)
     results = {}
+
+    # Import PaperRunner (local)
+    from run_paper import PaperRunner
 
     for strat_cfg in config["strategies"]:
         name = strat_cfg["name"]
@@ -44,9 +39,7 @@ def main():
 
         strategy_kwargs = {**params}
         if cls_name == "SimpleMomentum":
-            strategy_kwargs["top_k"] = params.get("top_k", 20)
-        if cls_name == "MLLightGBM" and "factor_source" not in strategy_kwargs:
-            strategy_kwargs["factor_source"] = _cli_args.factor_source
+            strategy_kwargs["top_k"] = params.get("top_k", 10)
 
         try:
             runner = PaperRunner({
@@ -57,7 +50,7 @@ def main():
                 "start": wf["paper_start"],
                 "end": wf["paper_end"],
                 "symbols": symbols,
-                "data_source": "bq",
+                "data_source": "bq_5m",
             })
             result = runner.run()
             results[name] = result["metrics"]
@@ -76,15 +69,16 @@ def main():
     # Print comparison
     print()
     print("=" * 70)
-    print("  📊  W2 EXPERIMENT RESULTS")
+    print("  📊  W3 5M EXPERIMENT RESULTS (POC)")
     print("=" * 70)
     print(f"  Period: {wf['paper_start']} → {wf['paper_end']} | {len(symbols)} stocks | ${capital:,.0f}")
+    print(f"  ⚠️  29 days only — statistical significance limited")
     print("-" * 70)
-    print(f"  {'Metric':<22s} {'Momentum':>14s} {'ML LightGBM':>14s}")
+    print(f"  {'Metric':<22s} {'Momentum 5m':>14s} {'ML 5m':>14s}")
     print("-" * 70)
     for metric in ["total_return", "annual_return", "sharpe_ratio", "max_drawdown", "win_rate"]:
-        v1 = results.get("momentum_baseline", {}).get(metric, 0) or 0
-        v2_val = results.get("ml_lightgbm", {})
+        v1 = results.get("momentum_5m", {}).get(metric, 0) or 0
+        v2_val = results.get("ml_5m", {})
         v2 = v2_val.get(metric, 0) or 0
         if "error" in v2_val:
             v2_str = f"{'ERROR':>14s}"
@@ -93,11 +87,10 @@ def main():
         else:
             print(f"  {metric:<22s} {v1:>14.2f} {v2:>14.2f}")
     print("-" * 70)
-
-    # Check for errors
     for name in results:
         if "error" in results[name]:
             print(f"  ⚠️  {name}: {results[name]['error']}")
+    print(f"  ⚠️  Note: 29-day POC — do not draw strong conclusions")
     print("=" * 70)
 
 if __name__ == "__main__":
