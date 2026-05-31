@@ -105,6 +105,19 @@ class F10Transformer:
             if src in result.columns:
                 result[dst] = result[src]
 
+        # EARNINGS_QUALITY factors
+        # accruals_ratio = (net_income - operating_cash_flow) / total_assets
+        if all(c in result.columns for c in ["net_income", "operating_cash_flow", "total_assets"]):
+            result["accruals_ratio"] = (result["net_income"] - result["operating_cash_flow"]) / result["total_assets"].replace(0, np.nan)
+
+        # ocf_to_net_profit = operating_cash_flow / net_income
+        if "operating_cash_flow" in result.columns and "net_income" in result.columns:
+            result["ocf_to_net_profit"] = result["operating_cash_flow"] / result["net_income"].replace(0, np.nan)
+
+        # revenue_to_cash_ratio = revenue / operating_cash_flow
+        if "revenue" in result.columns and "operating_cash_flow" in result.columns:
+            result["revenue_to_cash_ratio"] = result["revenue"] / result["operating_cash_flow"].replace(0, np.nan)
+
         # Sort and clean
         result = result.sort_values(["symbol", "date"]).reset_index(drop=True)
         return result
@@ -273,7 +286,86 @@ class F10Transformer:
         agg["short_volume_pct"] = np.nan
         agg["short_utilization"] = np.nan
 
+        # SMART_MONEY factors from existing shareholder aggregation
+        # inst_ownership_change: already available as institution_change
+        if "institution_change" in agg.columns:
+            agg["inst_ownership_change"] = agg["institution_change"] / agg.get("total_institution_qty", 1).replace(0, np.nan)
+
+        # inst_accumulation_signal: sign of ownership change (+1 buying, -1 selling, 0 neutral)
+        if "inst_ownership_change" in agg.columns:
+            agg["inst_accumulation_signal"] = np.sign(agg["inst_ownership_change"])
+
+        # hedge_fund_add_ratio: approximate — use top holder pct change
+        if "max_holder_pct" in agg.columns:
+            agg["hedge_fund_add_ratio"] = agg["max_holder_pct"]
+
+        # insider_buy_ratio: approximate — use institution_change as proxy
+        if "inst_ownership_change" in agg.columns:
+            agg["insider_buy_ratio"] = agg["inst_ownership_change"].clip(lower=0)
+
+        # holder_concentration: top holders' combined ownership
+        if "max_holder_pct" in agg.columns:
+            agg["holder_concentration"] = agg["max_holder_pct"]
+
         return agg
+
+    @staticmethod
+    def transform_earnings_events(financials: pd.DataFrame, bars_data: pd.DataFrame = None) -> pd.DataFrame:
+        """Compute earnings event factors from financial report dates and stock prices.
+
+        Uses report_date from financials as proxy for earnings announcement date.
+
+        Args:
+            financials: DataFrame with (symbol, date) after pivot
+            bars_data: Optional OHLCV bar data with (symbol, date, close). If None, returns NaN placeholders.
+        """
+        if bars_data is None or bars_data.empty:
+            result = financials[["symbol", "date"]].copy() if "symbol" in financials.columns else pd.DataFrame()
+            for col in ["earnings_price_move_avg", "post_earnings_drift_5d", "earnings_volatility"]:
+                result[col] = np.nan
+            return result
+
+        bars = bars_data.copy()
+        bars["date"] = pd.to_datetime(bars["date"])
+        bars = bars.sort_values(["symbol", "date"])
+
+        results = []
+        for sym in financials["symbol"].unique():
+            sym_bars = bars[bars["symbol"] == sym].set_index("date")["close"]
+            if sym_bars.empty:
+                continue
+
+            sym_fin = financials[financials["symbol"] == sym]
+            for _, row in sym_fin.iterrows():
+                report_dt = pd.to_datetime(row["date"])
+                entry_idx = sym_bars.index.searchsorted(report_dt)
+
+                # earnings_price_move_avg: avg return over next 5 trading days
+                if entry_idx + 5 < len(sym_bars):
+                    fwd_5d = sym_bars.iloc[entry_idx + 5] / sym_bars.iloc[entry_idx] - 1 if entry_idx < len(sym_bars) else None
+                    earnings_price = fwd_5d
+                else:
+                    earnings_price = None
+
+                # post_earnings_drift_5d: same as above (alias)
+                post_drift = earnings_price
+
+                # earnings_volatility: std of returns over 10 days around report
+                if entry_idx >= 5 and entry_idx + 5 < len(sym_bars):
+                    window_returns = sym_bars.iloc[entry_idx-5:entry_idx+5].pct_change().dropna()
+                    earn_vol = window_returns.std() if len(window_returns) > 0 else None
+                else:
+                    earn_vol = None
+
+                results.append({
+                    "symbol": sym,
+                    "date": row["date"],
+                    "earnings_price_move_avg": earnings_price,
+                    "post_earnings_drift_5d": post_drift,
+                    "earnings_volatility": earn_vol,
+                })
+
+        return pd.DataFrame(results)
 
     @classmethod
     def transform_all(cls, data_map: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
@@ -302,5 +394,9 @@ class F10Transformer:
 
         if "short_interest" in data_map and not data_map["short_interest"].empty:
             result["short_interest"] = cls.transform_shareholder(data_map["short_interest"])
+
+        # Earnings event factors (requires financials data + optional bars)
+        if "financials" in result:
+            result["earnings_events"] = cls.transform_earnings_events(result["financials"], bars_data=None)
 
         return result
