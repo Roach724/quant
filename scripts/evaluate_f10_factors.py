@@ -441,6 +441,9 @@ def main():
 
     # ── 5. Summary ──
     df_results = pd.DataFrame(results)
+    # Debug: status distribution
+    status_counts = df_results['status'].value_counts()
+    log.info('Status distribution: %s', dict(status_counts))
     passing = df_results[df_results["status"] == "pass"]
     failed = df_results[df_results["status"] == "fail"]
     no_data = df_results[df_results["status"] == "no_data"]
