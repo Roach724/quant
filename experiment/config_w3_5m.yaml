@@ -1,0 +1,56 @@
+experiment:
+  id: "w3_5m_strategy_validation"
+  name: "W3 5m Strategy Validation"
+  description: "5m-frequency Momentum + ML on us_bars_5m BQ data (POC — 29 days only)"
+  hypothesis: "5m-frequency strategies viable with existing infrastructure"
+
+data:
+  source: bq_5m
+  market: us
+  start: "2026-05-01"
+  end: "2026-05-29"
+
+walk_forward:
+  market: us
+  paper_start: "2026-05-01"
+  paper_end: "2026-05-29"
+  symbols:
+    - AAPL
+    - MSFT
+    - NVDA
+    - AMZN
+    - GOOGL
+    - META
+    - TSLA
+    - AMD
+    - INTC
+    - NFLX
+  capital: 100000
+
+strategies:
+  - name: "momentum_5m"
+    class: "SimpleMomentum"
+    params:
+      lookback: 78       # ~1 trading day (78 x 5m = 390min)
+      top_k: 10
+      rebalance_every: 13  # rebalance every ~1h (13 × 5m = 65min)
+  - name: "ml_5m"
+    class: "strategies.ml_pred.MLPredStrategy"
+    params:
+      market: us
+      train_start: "2026-05-01"
+      train_end: "2026-05-29"
+      top_k: 10
+      rebalance_every: 13
+      model_type: lightgbm
+      label: fwd_ret_1h  # forward return over ~12 bars
+
+evaluation:
+  metrics:
+    - sharpe_ratio
+    - max_drawdown
+    - win_rate
+    - total_return
+    - annual_return
+  benchmark: momentum_5m
+  note: "⚠️ POC only — 29 calendar days of 5m data. Statistical significance limited."
