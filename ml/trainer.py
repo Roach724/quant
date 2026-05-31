@@ -245,71 +245,139 @@ class ModelTrainer:
                 f"Use 'tech', 'fundamental', or 'all'."
             )
 
+        import json as _json
         import pandas as pd
         from google.cloud import bigquery
         from factors.fundamental_builder import FundamentalFactorBuilder
 
-        # Load fundamental factors
         ffb = FundamentalFactorBuilder()
-
-        # For fundamental, load from BQ raw data
         client = bigquery.Client()
 
+        # ── Helpers ──────────────────────────────────────────────────
+
+        def _expand_json(df: pd.DataFrame) -> pd.DataFrame:
+            """Expand JSON 'data' column into individual factor columns."""
+            if "data" not in df.columns:
+                return df
+            parsed = df["data"].apply(
+                lambda v: _json.loads(v) if isinstance(v, str) else (
+                    v if isinstance(v, dict) else {}
+                )
+            )
+            expanded = pd.DataFrame(parsed.tolist(), index=df.index)
+            meta_cols = [c for c in df.columns if c != "data"]
+            return pd.concat([df[meta_cols], expanded], axis=1)
+
+        def _strip_prefix(df: pd.DataFrame) -> pd.DataFrame:
+            """Strip 'US.' prefix from symbol column."""
+            if "symbol" in df.columns:
+                df["symbol"] = df["symbol"].astype(str).str.replace(
+                    "US.", "", regex=False
+                )
+            return df
+
+        # ── Load F10 tables at once (bulk queries, not per-symbol) ──
+        raw_data: dict[str, pd.DataFrame] = {}
+
+        # Financials
+        fin_query = """
+            SELECT * FROM `deductive-notch-495015-c2.quant.us_financials`
+            WHERE symbol IN UNNEST(@syms)
+        """
+        fin_job = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter("syms", "STRING", symbols),
+        ])
+        financials = client.query(fin_query, job_config=fin_job).to_dataframe()
+        if not financials.empty:
+            financials = _expand_json(financials)
+            # us_financials has date_time_str (format: YYYY/MM/DD), not date
+            if "date_time_str" in financials.columns:
+                financials["date"] = pd.to_datetime(
+                    financials["date_time_str"], format="%Y/%m/%d", errors="coerce"
+                )
+            financials = _strip_prefix(financials)
+            raw_data["financials"] = financials
+
+        # Auxiliary tables (only for factor_source == "all")
+        if factor_source == "all":
+            for table_name, key in [
+                ("us_valuation", "valuation"),
+                ("us_capital_flow", "capital_flow"),
+                ("us_analyst", "analyst"),
+                ("us_shareholder", "short_interest"),
+            ]:
+                try:
+                    aux_query = f"""
+                        SELECT * FROM `deductive-notch-495015-c2.quant.{table_name}`
+                        WHERE symbol IN UNNEST(@syms)
+                    """
+                    aux_job = bigquery.QueryJobConfig(query_parameters=[
+                        bigquery.ArrayQueryParameter("syms", "STRING", symbols),
+                    ])
+                    aux_df = client.query(
+                        aux_query, job_config=aux_job
+                    ).to_dataframe()
+                    if aux_df.empty:
+                        continue
+
+                    # Preprocess based on table type
+                    if table_name in ("us_analyst", "us_capital_flow", "us_shareholder"):
+                        # JSON-source tables: expand data column
+                        aux_df = _expand_json(aux_df)
+                    elif table_name == "us_valuation":
+                        # Pivot valuation from long (valuation_type, value)
+                        # to wide (pe_percentile, pb_percentile, ...)
+                        if "valuation_type" in aux_df.columns and "value" in aux_df.columns:
+                            aux_df["date"] = pd.to_datetime(
+                                aux_df["date"], errors="coerce"
+                            ).dt.date
+                            aux_df = aux_df.pivot_table(
+                                index=["symbol", "date"],
+                                columns="valuation_type",
+                                values="value",
+                                aggfunc="first",
+                            ).reset_index()
+
+                    aux_df = _strip_prefix(aux_df)
+                    raw_data[key] = aux_df
+                except Exception as e:
+                    logger.warning("Load %s failed: %s", table_name, e)
+
+        # ── Compute factors per symbol ──────────────────────────────
         all_frames: list[pd.DataFrame] = []
         for sym in symbols:
             try:
-                # Load financials from BQ
-                fin_query = f"""
-                    SELECT * FROM `deductive-notch-495015-c2.quant.us_financials`
-                    WHERE symbol = @sym AND date BETWEEN @start AND @end
-                    ORDER BY date
-                """
-                fin_job = bigquery.QueryJobConfig(query_parameters=[
-                    bigquery.ScalarQueryParameter("sym", "STRING", sym),
-                    bigquery.ScalarQueryParameter("start", "STRING", start),
-                    bigquery.ScalarQueryParameter("end", "STRING", end),
-                ])
-                financials = client.query(fin_query, job_config=fin_job).to_dataframe()
+                # Build per-symbol data_map from preprocessed bulk data
+                sym_data: dict[str, pd.DataFrame] = {}
+                for key, df in raw_data.items():
+                    sym_df = df[df["symbol"] == sym].copy()
+                    if sym_df.empty:
+                        continue
+                    sym_data[key] = sym_df
 
-                if financials.empty:
+                if "financials" not in sym_data or sym_data["financials"].empty:
                     continue
 
-                data_map = {"financials": financials}
+                factors = ffb.compute(ffb.ALL_FACTOR_COLS, sym_data)
+                if factors.empty:
+                    continue
 
-                # Optionally load valuation, short, etc. if factor_source == "all"
-                if factor_source == "all":
-                    for table_name, key in [
-                        ("us_valuation", "valuation"),
-                        ("us_short_interest", "short_interest"),
-                        ("us_capital_flow", "capital_flow"),
-                        ("us_analyst", "analyst"),
-                    ]:
-                        try:
-                            aux_query = f"""
-                                SELECT * FROM `deductive-notch-495015-c2.quant.{table_name}`
-                                WHERE symbol = @sym AND date BETWEEN @start AND @end
-                                ORDER BY date
-                            """
-                            aux_job = bigquery.QueryJobConfig(query_parameters=[
-                                bigquery.ScalarQueryParameter("sym", "STRING", sym),
-                                bigquery.ScalarQueryParameter("start", "STRING", start),
-                                bigquery.ScalarQueryParameter("end", "STRING", end),
-                            ])
-                            aux_df = client.query(aux_query, job_config=aux_job).to_dataframe()
-                            if not aux_df.empty:
-                                data_map[key] = aux_df
-                        except Exception:
-                            pass
+                factors["symbol"] = sym
 
-                factors = ffb.compute(ffb.ALL_FACTOR_COLS, data_map)
-                if not factors.empty:
-                    factors["symbol"] = sym
-                    # Align dates from financials
+                # Date alignment: use financials date column
+                fin_sym = sym_data["financials"]
+                if "date" in fin_sym.columns:
                     n = len(factors)
-                    factors["date"] = financials["date"].values[:n]
-                    all_frames.append(factors)
+                    factors["date"] = fin_sym["date"].values[:n]
+                else:
+                    logger.warning("No date column in financials for %s", sym)
+                    continue
+
+                all_frames.append(factors)
             except Exception as e:
-                logger.warning("Fundamental factor load failed for %s: %s", sym, e)
+                logger.warning(
+                    "Fundamental factor load failed for %s: %s", sym, e
+                )
 
         if not all_frames:
             logger.warning("No fundamental factor data loaded for any symbol")
