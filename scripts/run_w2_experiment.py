@@ -14,6 +14,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 log = logging.getLogger("w2")
 
 def main():
+    import argparse as _ap
+    _cli = _ap.ArgumentParser(add_help=False)
+    _cli.add_argument("--factor-source", default="tech",
+                      choices=["tech", "fundamental", "all"],
+                      help="Factor source for ML strategy (default: tech)")
+    _cli_args, _ = _cli.parse_known_args()
+
     config_path = os.environ.get("W2_CONFIG", "experiment/config_w2.yaml")
     with open(config_path) as f:
         config = yaml.safe_load(f)
@@ -38,6 +45,8 @@ def main():
         strategy_kwargs = {**params}
         if cls_name == "SimpleMomentum":
             strategy_kwargs["top_k"] = params.get("top_k", 20)
+        if cls_name == "MLLightGBM" and "factor_source" not in strategy_kwargs:
+            strategy_kwargs["factor_source"] = _cli_args.factor_source
 
         try:
             runner = PaperRunner({
