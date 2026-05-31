@@ -1,0 +1,22 @@
+[Unit]
+Description=MLflow Tracking UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=DangXuan
+WorkingDirectory=/opt/quant
+Environment=PYTHONPATH=/opt/quant
+ExecStart=/usr/bin/python3.12 -m mlflow ui \
+  --backend-store-uri sqlite:////home/DangXuan/.mlflow/mlflow.db \
+  --default-artifact-root /opt/quant/models_artifacts \
+  --host 0.0.0.0 \
+  --port 5000
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/DangXuan/.mlflow/mlflow-ui.log
+StandardError=append:/home/DangXuan/.mlflow/mlflow-ui.log
+
+[Install]
+WantedBy=multi-user.target
