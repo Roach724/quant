@@ -440,6 +440,7 @@ def main():
             })
 
     # ── 5. Summary ──
+    too_few_df = df_results[df_results["status"] == "too_few"]
     df_results = pd.DataFrame(results)
     # Debug: status distribution
     status_counts = df_results['status'].value_counts()
@@ -455,8 +456,8 @@ def main():
     print(f"  Total factors evaluated : {len(df_results)}")
     print(f"  ✅ Passing              : {len(passing)}")
     print(f"  ❌ Failed threshold     : {len(failed)}")
-    print(f"  ⚠️  No data / too few    : {len(no_data) + len(df_results[df_results["status"] == "too_few"])} (no_data={len(no_data)}, too_few={len(df_results[df_results["status"] == "too_few"])})
-  ⚠️  No data / uncomputable: {len(no_data)}")
+    not_enough = len(no_data) + len(too_few_df)
+    print(f"  ⚠️  No data / too few    : {not_enough} (no_data={len(no_data)}, too_few={len(too_few_df)})")
     print(f"  💥 Errors               : {len(errors)}")
 
     if len(failed) > 0:
