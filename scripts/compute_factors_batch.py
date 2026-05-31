@@ -7,6 +7,7 @@ Usage:
     python scripts/compute_factors_batch.py --source tech --start 2020-01-01 --end 2026-05-30
     python scripts/compute_factors_batch.py --source fundamental --start 2024-01-01 --end 2026-05-30
     python scripts/compute_factors_batch.py --source all
+    python scripts/compute_factors_batch.py --source tech --incremental
 """
 import sys
 from pathlib import Path
@@ -15,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import argparse
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import numpy as np
 import pandas as pd
@@ -32,6 +33,29 @@ log = logging.getLogger("compute_factors")
 PROJECT = "deductive-notch-495015-c2"
 FACTOR_VALUES_TABLE = f"{PROJECT}.quant.factor_values"
 BQ_TIMEOUT_SECONDS = 600
+
+
+def load_registry_factors(source: str = None, market: str = "us") -> list[str]:
+    """Load active factor IDs from factor_registry.
+    
+    Args:
+        source: Filter by source_builder ('tech', 'fundamental', or None for all)
+        market: Filter by market
+    
+    Returns:
+        List of factor_id strings (e.g., ['us_ret_1d', 'us_vol_20d', ...])
+    """
+    client = bigquery.Client(project=PROJECT)
+    source_filter = f"AND source = '{source}'" if source else ""
+    query = f"""
+        SELECT factor_id FROM `{PROJECT}.quant.factor_registry`
+        WHERE is_active = TRUE AND market = '{market}' {source_filter}
+        ORDER BY factor_id
+    """
+    df = client.query(query).to_dataframe()
+    factor_ids = df["factor_id"].tolist()
+    log.info("Registry: %d active factors for source=%s", len(factor_ids), source or "all")
+    return factor_ids
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -196,9 +220,14 @@ def compute_tech_factors(
     processed["symbol"] = combined["symbol"].values
     processed["date"] = combined["date"].values
 
+    # Filter to only registry-registered factors
+    registry_factors = load_registry_factors(source="tech", market=market)
+    write_names = [f for f in tfb.factor_names if f"{market}_{f}" in set(registry_factors)]
+    log.info("Writing %d/%d factors (registry-filtered)", len(write_names), len(tfb.factor_names))
+
     n_written = 0
-    if write_to_bq:
-        n_written = write_factor_values(processed, "tech", tfb.factor_names, market)
+    if write_to_bq and write_names:
+        n_written = write_factor_values(processed, "tech", write_names, market)
 
     return len(tfb.factor_names), n_written
 
@@ -212,180 +241,95 @@ def compute_fundamental_factors(
     market: str = "us",
     write_to_bq: bool = True,
 ) -> tuple[int, int]:
-    """Compute fundamental factors from F10 BQ tables and write to factor_values.
+    """Compute fundamental factors using F10Transformer pipeline.
 
-    Loads F10 tables (financials, valuation, analyst, capital_flow, shareholder)
-    via bulk BQ queries, preprocesses (JSON expansion, valuation pivot), and
-    computes factors per symbol.
-
-    Returns (num_factors, num_values_written).
+    This delegates to the verified pipeline used in evaluate_f10_factors.py.
     """
-    import json
-
+    from scripts.evaluate_f10_factors import load_f10_table, preprocess_table, TABLE_TO_KEY
+    from factors.f10_transformer import F10Transformer
+    
     ffb = FundamentalFactorBuilder()
-    client = bigquery.Client(project=PROJECT)
-
-    # Get symbols from bars_1d for the date range
-    syms_query = f"""
-        SELECT DISTINCT REPLACE(symbol, 'US.', '') as symbol
-        FROM `{PROJECT}.quant.{market}_bars_1d`
-        WHERE DATE(timestamp) BETWEEN @start AND @end
-        ORDER BY symbol
-    """
-    syms_job = bigquery.QueryJobConfig(
-        query_parameters=[
-            bigquery.ScalarQueryParameter("start", "STRING", start),
-            bigquery.ScalarQueryParameter("end", "STRING", end),
-        ],
-    )
-    syms_df = client.query(syms_query, job_config=syms_job).to_dataframe()
-    symbols = syms_df["symbol"].tolist()
-    log.info("Found %d symbols with OHLCV data in date range", len(symbols))
-
-    if not symbols:
+    f10_tables = [f'us_valuation', f'us_financials', f'us_analyst', f'us_capital_flow', f'us_shareholder']
+    
+    data_map = {}
+    for tbl in f10_tables:
+        raw = load_f10_table(tbl, start, end)
+        if raw is not None and not raw.empty:
+            processed = preprocess_table(tbl, raw)
+            if not processed.empty:
+                data_map[TABLE_TO_KEY[tbl]] = processed
+    
+    if not data_map:
+        log.warning("No F10 data for %s-%s", start, end)
         return 0, 0
-
-    # ── Helpers ──
-
-    def _expand_json(df: pd.DataFrame) -> pd.DataFrame:
-        if "data" not in df.columns:
-            return df
-        parsed = df["data"].apply(
-            lambda v: json.loads(v) if isinstance(v, str) else (v if isinstance(v, dict) else {})
-        )
-        expanded = pd.DataFrame(parsed.tolist(), index=df.index)
-        meta_cols = [c for c in df.columns if c != "data"]
-        return pd.concat([df[meta_cols], expanded], axis=1)
-
-    def _strip_prefix(df: pd.DataFrame) -> pd.DataFrame:
-        if "symbol" in df.columns:
-            df["symbol"] = df["symbol"].astype(str).str.replace("US.", "", regex=False)
-        return df
-
-    # ── Bulk load F10 tables ──
-
-    raw_data: dict[str, pd.DataFrame] = {}
-
-    # Financials
-    fin_query = f"""
-        SELECT * FROM `{PROJECT}.quant.{market}_financials`
-        WHERE symbol IN UNNEST(@syms)
-    """
-    fin_job = bigquery.QueryJobConfig(
-        query_parameters=[bigquery.ArrayQueryParameter("syms", "STRING", symbols)],
-    )
-    financials = client.query(fin_query, job_config=fin_job).to_dataframe()
-    if not financials.empty:
-        financials = _expand_json(financials)
-        if "date_time_str" in financials.columns:
-            financials["date"] = pd.to_datetime(
-                financials["date_time_str"], format="%Y/%m/%d", errors="coerce"
-            )
-        financials = _strip_prefix(financials)
-        raw_data["financials"] = financials
-        log.info("financials: %d rows", len(financials))
-
-    # Aux tables
-    for table_name, key in [
-        (f"{market}_valuation", "valuation"),
-        (f"{market}_capital_flow", "capital_flow"),
-        (f"{market}_analyst", "analyst"),
-        (f"{market}_shareholder", "short_interest"),
-    ]:
-        try:
-            aux_query = f"""
-                SELECT * FROM `{PROJECT}.quant.{table_name}`
-                WHERE symbol IN UNNEST(@syms)
-            """
-            aux_job = bigquery.QueryJobConfig(
-                query_parameters=[bigquery.ArrayQueryParameter("syms", "STRING", symbols)],
-            )
-            aux_df = client.query(aux_query, job_config=aux_job).to_dataframe()
-            if aux_df.empty:
-                continue
-
-            # Preprocess
-            if table_name in (
-                f"{market}_analyst",
-                f"{market}_capital_flow",
-                f"{market}_shareholder",
-            ):
-                aux_df = _expand_json(aux_df)
-            elif table_name == f"{market}_valuation":
-                if "valuation_type" in aux_df.columns and "value" in aux_df.columns:
-                    aux_df["date"] = pd.to_datetime(aux_df["date"], errors="coerce").dt.date
-                    aux_df = aux_df.pivot_table(
-                        index=["symbol", "date"],
-                        columns="valuation_type",
-                        values="value",
-                        aggfunc="first",
-                    ).reset_index()
-
-            aux_df = _strip_prefix(aux_df)
-            raw_data[key] = aux_df
-            log.info("%s: %d rows", table_name, len(aux_df))
-        except Exception as e:
-            log.warning("Load %s failed: %s", table_name, e)
-
-    if "financials" not in raw_data:
-        log.warning("No financials data loaded; cannot compute fundamental factors")
+    
+    data_map = F10Transformer.transform_all(data_map)
+    
+    for k in list(data_map.keys()):
+        df = data_map[k]
+        if not df.empty and 'symbol' in df.columns and 'date' in df.columns:
+            df = df.drop_duplicates(subset=['symbol', 'date'])
+            data_map[k] = df.set_index(['symbol', 'date'])
+    
+    cat_keys = {
+        'financials': ffb.QUALITY_COLS + ffb.GROWTH_COLS + ffb.EARNINGS_QUALITY_COLS,
+        'valuation': ffb.VALUATION_COLS,
+        'short_interest': ffb.SHORT_COLS + ffb.SMART_MONEY_COLS,
+        'capital_flow': ffb.FLOW_COLS,
+        'analyst': ffb.ANALYST_COLS,
+        'earnings_events': ffb.EARNINGS_EVENT_COLS,
+    }
+    
+    merged = None
+    all_factor_names = []
+    
+    for key, cat_cols in cat_keys.items():
+        df = data_map.get(key)
+        if df is None or df.empty:
+            continue
+        available = [c for c in cat_cols if c in df.columns]
+        if not available:
+            continue
+        part = ffb.compute(available, {key: df})
+        if part.empty:
+            continue
+        part = part[~part.index.duplicated(keep='first')].reset_index()
+        if 'date' in part.columns:
+            part['date'] = pd.to_datetime(part['date'], errors='coerce')
+        part = part.drop_duplicates(subset=['symbol', 'date'])
+        for c in part.columns:
+            if part[c].dtype.name == 'Int64':
+                part[c] = part[c].astype(float)
+        if merged is None:
+            merged = part
+        else:
+            if 'date' in merged.columns:
+                merged['date'] = pd.to_datetime(merged['date'], errors='coerce')
+            merged = merged.merge(part, on=['symbol', 'date'], how='outer')
+        all_factor_names.extend(available)
+    
+    if merged is None:
         return 0, 0
-
-    # ── Compute factors per symbol ──
-
-    all_frames: list[pd.DataFrame] = []
-    for sym in symbols:
-        try:
-            sym_data: dict[str, pd.DataFrame] = {}
-            for key, df in raw_data.items():
-                sym_df = df[df["symbol"] == sym].copy()
-                if sym_df.empty:
-                    continue
-                sym_data[key] = sym_df
-
-            if "financials" not in sym_data:
-                continue
-
-            factors = ffb.compute(ffb.ALL_FACTOR_COLS, sym_data)
-            if factors.empty:
-                continue
-
-            factors["symbol"] = sym
-            fin_sym = sym_data["financials"]
-            if "date" in fin_sym.columns:
-                n = len(factors)
-                factors["date"] = fin_sym["date"].values[:n]
-            else:
-                continue
-
-            all_frames.append(factors)
-        except Exception as e:
-            log.warning("  %s: fundamental factor compute failed — %s", sym, e)
-
-    if not all_frames:
-        log.warning("No fundamental factors computed for any symbol")
-        return 0, 0
-
-    combined = pd.concat(all_frames, ignore_index=True)
-    log.info(
-        "Fundamental factors: %d rows x %d symbols, %d factor cols",
-        len(combined),
-        combined["symbol"].nunique(),
-        len(ffb.factor_names),
-    )
-
-    # Process: winsorize + normalize
-    processed = ffb.process_factors(combined, winsor_pct=0.01)
-    processed["symbol"] = combined["symbol"].values
-    processed["date"] = combined["date"].values
-
+    
+    factor_cols = [c for c in merged.columns if c not in ('symbol', 'date')]
+    for c in factor_cols:
+        merged[c] = merged[c].astype(float)
+    
+    log.info("Fundamental factors: %d rows x %d cols", *merged.shape)
+    processed = ffb.process_factors(merged, winsor_pct=0.01)
+    processed['symbol'] = merged['symbol'].values
+    processed['date'] = merged['date'].values
+    
+    # Registry filter
+    registry_factors = load_registry_factors(source="fundamental", market=market)
+    write_names = [f for f in all_factor_names if f"{market}_{f}" in set(registry_factors)]
+    log.info("Writing %d/%d factors (registry-filtered)", len(write_names), len(all_factor_names))
+    
     n_written = 0
-    if write_to_bq:
-        n_written = write_factor_values(
-            processed, "fundamental", ffb.factor_names, market
-        )
-
-    return len(ffb.factor_names), n_written
+    if write_to_bq and write_names:
+        n_written = write_factor_values(processed, "fundamental", write_names, market)
+    
+    return len(write_names), n_written
 
 
 # ── Main ────────────────────────────────────────────────────────────────
@@ -415,7 +359,14 @@ def main():
         action="store_true",
         help="Compute but do not write to BQ (dry-run)",
     )
+    parser.add_argument("--incremental", action="store_true",
+                        help="Incremental mode: only compute last 30 days")
     args = parser.parse_args()
+
+    if args.incremental:
+        end_dt = datetime.strptime(args.end, "%Y-%m-%d")
+        args.start = (end_dt - timedelta(days=30)).strftime("%Y-%m-%d")
+        log.info("Incremental mode: computing %s → %s", args.start, args.end)
 
     log.info("=" * 60)
     log.info("Batch Factor Computation")
