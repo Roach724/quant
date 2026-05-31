@@ -34,7 +34,8 @@ F10_CONFIG = {
 def json_table_schema():
     return [
         bigquery.SchemaField("symbol", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("data", "JSON"),
+        bigquery.SchemaField("data_type", "STRING"),
+        bigquery.SchemaField("data", "STRING"),
         bigquery.SchemaField("fetched_at", "TIMESTAMP"),
         bigquery.SchemaField("ingest_time", "TIMESTAMP"),
     ]
@@ -129,9 +130,7 @@ def load_json_source(client, bucket_name, market, table, source, project, datase
             import json
             df["data"] = df.apply(
                 lambda row: json.dumps({c: row[c] for c in val_cols}, default=str), axis=1)
-        keep = ["symbol"]
-        if "data_type" in df.columns:
-            keep.append("data_type")
+        keep = ["symbol", "data_type"]
         if "data" in df.columns:
             keep.append("data")
         if "fetched_at" in df.columns:
