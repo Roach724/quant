@@ -35,7 +35,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Git working directory
-GIT_WORK_DIR = Path("/home/node/.openclaw/workspace/quant")
+GIT_WORK_DIR = Path("/opt/quant")
 
 
 @dataclass

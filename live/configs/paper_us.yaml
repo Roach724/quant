@@ -37,3 +37,10 @@ observer:
 dashboard:
   port: 8090
   websocket: true
+
+# Optional: experiment tracking via ExperimentTracker
+experiment:
+  id: "exp_ml_paper_us"
+  name: "ML Momentum + Tech Factors — US Paper"
+  hypothesis: "LightGBM on 39 tech factors outperforms SimpleMomentum on 240 US stocks"
+  changes: ["Initial paper run with tech factor model v1"]

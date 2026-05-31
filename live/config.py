@@ -41,3 +41,45 @@ def _apply_defaults(config: dict, defaults: dict):
             config[key] = value
         elif isinstance(value, dict) and isinstance(config.get(key), dict):
             _apply_defaults(config[key], value)
+
+def record_experiment(config: dict, output_dir: str):
+    """Register this live run session in ExperimentTracker if experiment.id is configured."""
+    exp_cfg = config.get("experiment", {})
+    exp_id = exp_cfg.get("id", "")
+    if not exp_id:
+        return
+
+    try:
+        from experiment.tracker import ExperimentTracker
+        tracker = ExperimentTracker()
+
+        exp_name = exp_cfg.get("name", exp_id)
+        exp_hypothesis = exp_cfg.get("hypothesis", "")
+        exp_changes = exp_cfg.get("changes", [])
+
+        # Register experiment if not already done (idempotent)
+        tracker.register_experiment(
+            exp_id=exp_id,
+            name=exp_name,
+            hypothesis=exp_hypothesis,
+            changes=exp_changes,
+        )
+
+        # Record this session
+        from pathlib import Path
+        session_id = Path(output_dir).name
+        mode = config.get("live", {}).get("mode", "paper")
+        session_type = f"{mode}_trading"
+
+        tracker.record_session(
+            exp_id=exp_id,
+            session_id=session_id,
+            session_type=session_type,
+            path=output_dir,
+        )
+
+        logger = __import__("logging").getLogger(__name__)
+        logger.info("Session %s registered in experiment %s", session_id, exp_id)
+    except Exception:
+        logger = __import__("logging").getLogger(__name__)
+        logger.exception("Failed to record experiment session (non-fatal)")

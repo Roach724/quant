@@ -555,4 +555,11 @@ class LiveRunner:
             except Exception:
                 logger.exception("Failed to generate report")
 
+        # Register in ExperimentTracker if experiment.id is configured
+        try:
+            from live.config import record_experiment
+            record_experiment(self.config, self.output_dir)
+        except Exception:
+            logger.exception("Failed to record experiment (non-fatal)")
+
         logger.info("LiveRunner shutdown complete")
