@@ -358,8 +358,14 @@ def main():
     results: list[dict] = []
     for factor_name in all_factors:
         try:
-            factors_df = ffb.compute([factor_name], data_map)
-            if not factors_df.empty:
+            # Only pass tables that contain this factor's category
+            cat_map = {v:k for k,v in TABLE_TO_KEY.items()}
+            sub_map = {k: data_map[k] for k in data_map if factor_name in data_map[k].columns}
+            if not sub_map:
+                # Fallback: try all tables
+                sub_map = data_map
+            factors_df = ffb.compute([factor_name], sub_map)
+            if not factors_df.empty and not factors_df.index.is_unique:
                 factors_df = factors_df[~factors_df.index.duplicated(keep="first")]
             if factors_df.empty or factor_name not in factors_df.columns:
                 results.append({
