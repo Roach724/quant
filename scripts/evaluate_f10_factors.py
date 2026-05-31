@@ -207,7 +207,7 @@ def preprocess_table(table_name: str, df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     # Normalize symbol: strip "US." prefix if present
-    df["symbol"] = df["symbol"].astype(str).str.replace("US.", "", regex=False)
+    df["symbol"] = df["symbol"].astype(str).str.replace("US.", "", regex=False).str.replace("US_", "", regex=False)
 
     # Ensure date column exists; look for common date columns
     date_col = None
