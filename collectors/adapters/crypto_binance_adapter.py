@@ -1,5 +1,5 @@
 """Binance cryptocurrency market adapter via ccxt."""
-from datetime import UTC, datetime, time
+from datetime import datetime, time, timezone
 
 import ccxt
 import pandas as pd
@@ -50,7 +50,7 @@ class CryptoBinanceAdapter:
                         records.append({
                             "symbol": symbol.replace("/", ""),
                             "timestamp": datetime.fromtimestamp(
-                                ts_ms / 1000, tz=UTC
+                                ts_ms / 1000, tz=timezone.utc
                             ),
                             "open": float(row[1]),
                             "high": float(row[2]),
