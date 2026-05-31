@@ -389,6 +389,13 @@ class PaperRunner:
                 # risk_engine.check returns the approved subset (list)
                 approved = risk_engine.check(engine_orders, self.portfolio, bar_data)
 
+                # Normalize buy-signal weights to 1/n to avoid overallocation
+                n_buy = sum(1 for s in signals if s.side in ("buy", "target"))
+                if n_buy > 0:
+                    for s in signals:
+                        if s.side in ("buy", "target") and s.weight is None:
+                            s.weight = 1.0 / n_buy
+
                 for sig, order in zip(signals, engine_orders):
                     if order not in approved:
                         self.alert_manager.fire(
@@ -403,9 +410,19 @@ class PaperRunner:
                     self.broker.update_price(sig.symbol, price)
 
                     # f) Submit via OrderManager (async → sync bridge)
-                    sd = convert_signal(sig, self.portfolio)
+                    sd = convert_signal(sig, self.portfolio, price_est=price)
                     slippage = price * self.slippage_bps / 10000
                     exec_price = price + slippage if sd["side"] == "buy" else price - slippage
+
+                    # Cash constraint: cap buy qty to available cash
+                    if sd["side"] == "buy":
+                        max_affordable = max(0, int(
+                            self.portfolio.cash / (exec_price * (1 + self.commission_bps / 10000))
+                        ))
+                        sd["qty"] = min(sd["qty"], max_affordable)
+                        if sd["qty"] <= 0:
+                            continue
+
                     commission = max(
                         self.min_commission,
                         self.commission_bps / 10000 * sd["qty"] * exec_price,

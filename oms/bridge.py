@@ -9,11 +9,12 @@ import asyncio
 from engine.strategy import Signal
 
 
-def convert_signal(signal: Signal, portfolio) -> dict:
+def convert_signal(signal: Signal, portfolio, price_est: float = 100.0) -> dict:
     """Convert an engine Signal to execution-algo-compatible dict format.
 
     Maps 'close'/'target' sides to 'buy'/'sell', computes qty from weight
-    if not explicitly set on the signal.
+    and estimated price if not explicitly set on the signal.
+    For close/sell signals without explicit qty, uses the current position size.
     """
     side = signal.side
     if side == "close":
@@ -23,8 +24,14 @@ def convert_signal(signal: Signal, portfolio) -> dict:
 
     qty = signal.qty
     if qty is None:
-        weight = signal.weight or 1.0
-        qty = max(1.0, portfolio.total_equity * weight / 100.0)
+        if side == "sell":
+            # Close/sell: use actual position size, not weight-based allocation
+            pos = portfolio.positions.get(signal.symbol)
+            qty = float(pos.size) if pos and hasattr(pos, "size") and pos.size > 0 else 0.0
+        else:
+            weight = signal.weight or 1.0
+            safe_price = max(price_est, 0.01)
+            qty = max(1.0, portfolio.total_equity * weight / safe_price)
 
     return {
         "symbol": signal.symbol,
