@@ -189,3 +189,69 @@ class UniverseBuilder:
         log.info("UniverseBuilder.from_bq: %d symbols from factor %s on %s",
                  len(symbols), factor_id, date)
         return symbols
+
+
+class UniverseBuilder:
+    """Dynamic universe construction from screens, sectors, BQ rankings, or static lists."""
+
+    @staticmethod
+    def from_static(market: str) -> list[str]:
+        """Return default symbol pool for a market."""
+        if market == "us":
+            try:
+                from collectors.adapters.futu_stock_adapter import FutuStockAdapter
+                adapter = FutuStockAdapter()
+                symbols = adapter.fetch_supported_symbols("us")
+                adapter.close()
+                return symbols
+            except Exception:
+                pass
+        elif market == "hk":
+            try:
+                from collectors.adapters.futu_stock_adapter import FutuStockAdapter
+                adapter = FutuStockAdapter()
+                symbols = adapter.fetch_supported_symbols("hk")
+                adapter.close()
+                return symbols
+            except Exception:
+                pass
+        return []
+
+    @staticmethod
+    def from_plate(plate_code: str) -> list[str]:
+        """Resolve a Futu plate code to its constituent stock list.
+
+        Examples: "HSI" (恒生指数), "HSTECH" (恒生科技), "SP500" (标普500).
+
+        Uses Futu's get_plate_stock() API. Returns top 100 by market cap.
+        """
+        from futu import OpenQuoteContext, RET_OK
+        ctx = OpenQuoteContext()
+        try:
+            ret, data = ctx.get_plate_stock(plate_code, sort_field=1, ascend=False)
+            if ret != RET_OK:
+                raise ValueError(f"Plate query failed for {plate_code}: {data}")
+            return data["code"].tolist()[:100]
+        finally:
+            ctx.close()
+
+    @staticmethod
+    def from_bq(market: str, date: str, factor_id: str = "roe",
+                top_k: int = 100) -> list[str]:
+        """Select top K symbols by a factor's latest value from BQ factor_values."""
+        from google.cloud import bigquery
+        client = bigquery.Client()
+        query = f"""
+            SELECT symbol, value
+            FROM `deductive-notch-495015-c2.quant.factor_values`
+            WHERE factor_id = @factor_id AND date = @date
+            ORDER BY value DESC
+            LIMIT @top_k
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("factor_id", "STRING", factor_id),
+            bigquery.ScalarQueryParameter("date", "STRING", date),
+            bigquery.ScalarQueryParameter("top_k", "INT64", top_k),
+        ])
+        df = client.query(query, job_config=job_config).to_dataframe()
+        return df["symbol"].tolist()
