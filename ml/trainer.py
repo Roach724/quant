@@ -128,7 +128,10 @@ class ModelTrainer:
         # Step 2: Load OHLCV from BQ
         client = bigquery.Client()
         prefix = "US." if market == "us" else "HK."
-        bq_symbols = [f"{prefix}{s}" for s in symbols]
+        # Build both US. and US_ variants for symbol matching
+        dot_syms = [f"{prefix}{s}" for s in symbols]
+        underscore_syms = [f"{prefix.replace('.','_')}{s}" for s in symbols]
+        all_syms = list(set(dot_syms + underscore_syms))
         table = f"{registry.project}.{registry.dataset}.{market}_bars_1d"
 
         query = f"""
@@ -253,7 +256,10 @@ class ModelTrainer:
 
         # Load fundamental factors directly from factor_values table
         prefix = "US." if market == "us" else "HK."
-        bq_symbols = [f"{prefix}{s}" for s in symbols]
+        # Build both US. and US_ variants for symbol matching
+        dot_syms = [f"{prefix}{s}" for s in symbols]
+        underscore_syms = [f"{prefix.replace('.','_')}{s}" for s in symbols]
+        all_syms = list(set(dot_syms + underscore_syms))
 
         fv_query = f"""
             SELECT factor_id, symbol, date, value
@@ -264,7 +270,7 @@ class ModelTrainer:
             ORDER BY symbol, date, factor_id
         """
         fv_job = bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ArrayQueryParameter("syms", "STRING", bq_symbols),
+            bigquery.ArrayQueryParameter("syms", "STRING", all_syms),
             bigquery.ScalarQueryParameter("start", "STRING", start),
             bigquery.ScalarQueryParameter("end", "STRING", end),
         ])
