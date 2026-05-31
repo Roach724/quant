@@ -303,7 +303,7 @@ def main():
     MIN_ABS_IC = 0.05
     MIN_T_STAT = 3.0
     MIN_COVERAGE = 0.70
-    MIN_SAMPLES = 30
+    MIN_SAMPLES = 10  # F10 is quarterly, not daily
 
     log.info("=" * 60)
     log.info("F10 Factor IC Evaluation")
@@ -455,9 +455,16 @@ def main():
     print(f"  Total factors evaluated : {len(df_results)}")
     print(f"  ✅ Passing              : {len(passing)}")
     print(f"  ❌ Failed threshold     : {len(failed)}")
-    print(f"  ⚠️  No data / uncomputable: {len(no_data)}")
+    print(f"  ⚠️  No data / too few    : {len(no_data) + len(df_results[df_results["status"] == "too_few"])} (no_data={len(no_data)}, too_few={len(df_results[df_results["status"] == "too_few"])})
+  ⚠️  No data / uncomputable: {len(no_data)}")
     print(f"  💥 Errors               : {len(errors)}")
 
+    if len(failed) > 0:
+        print(f"
+  Failed (below threshold):")
+        for _, row in failed.sort_values("ic", key=abs, ascending=False).head(10).iterrows():
+            ic_v = row.get("ic", 0) or 0
+            print(f"  {row['factor']:30s} IC={ic_v:+.4f}")
     if len(passing) > 0:
         print(f"\n  ── Passing factors (|IC|>{MIN_ABS_IC}, |t|>{MIN_T_STAT}, "
               f"cov>{MIN_COVERAGE:.0%}) ──")
