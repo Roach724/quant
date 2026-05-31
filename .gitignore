@@ -237,3 +237,4 @@ docker/FutuOpenD.xml
 docker/AppData.dat
 *.log
 collectors/main.py.bak
+models_artifacts/
