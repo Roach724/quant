@@ -440,8 +440,8 @@ def main():
             })
 
     # ── 5. Summary ──
-    too_few_df = df_results[df_results["status"] == "too_few"]
     df_results = pd.DataFrame(results)
+    too_few_df = df_results[df_results["status"] == "too_few"]
     # Debug: status distribution
     status_counts = df_results['status'].value_counts()
     log.info('Status distribution: %s', dict(status_counts))
