@@ -357,6 +357,8 @@ def main():
     for factor_name in all_factors:
         try:
             factors_df = ffb.compute([factor_name], data_map)
+            if not factors_df.empty:
+                factors_df = factors_df[~factors_df.index.duplicated(keep="first")]
             if factors_df.empty or factor_name not in factors_df.columns:
                 results.append({
                     "factor": factor_name,
