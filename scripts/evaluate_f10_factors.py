@@ -263,10 +263,10 @@ def compute_quarterly_fwd_ret(f10_dates: pd.DataFrame, horizon_days: int = 63) -
     client = bigquery.Client(project=PROJECT)
 
     # Get date range from F10 data
-    f10_dates = f10_dates.copy(); f10_dates["date"] = pd.to_datetime(f10_dates["date"]); min_date = f10_dates["date"].min()
+    f10_dates = f10_dates.copy(); f10_dates["date"] = pd.to_datetime(f10_dates["date"]); min_date = str(f10_dates["date"].min().date())
     max_date = f10_dates["date"].max()
     # Extend range to cover forward window
-    end_date = pd.to_datetime(max_date) + datetime.timedelta(days=horizon_days + 30)
+    end_date_val = pd.to_datetime(max_date) + datetime.timedelta(days=horizon_days + 30)
 
     # Load bar data for all symbols
     symbols = sorted(f10_dates["symbol"].unique().tolist())
@@ -276,7 +276,7 @@ def compute_quarterly_fwd_ret(f10_dates: pd.DataFrame, horizon_days: int = 63) -
         SELECT symbol, DATE(timestamp) as date, close
         FROM `{DATASET}.us_bars_1d`
         WHERE symbol IN UNNEST(@symbols)
-          AND DATE(timestamp) BETWEEN '{min_date}' AND '{end_date.strftime("%Y-%m-%d")}'
+          AND DATE(timestamp) BETWEEN '{pd.to_datetime(min_date).strftime("%Y-%m-%d")}' AND '{end_date_val.strftime("%Y-%m-%d")}'
         ORDER BY symbol, date
     """
     job_config = bigquery.QueryJobConfig(query_parameters=[
