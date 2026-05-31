@@ -80,6 +80,45 @@ def main():
 
     print(f"Registered {registered}/{len(fb.factor_names)} factors successfully")
 
+    # ── F10 Fundamental Factors ──
+    from factors.fundamental_builder import FundamentalFactorBuilder
+    ffb = FundamentalFactorBuilder()
+    f10_names = ffb.ALL_FACTOR_COLS
+    print(f"Found {len(f10_names)} F10 factors to register")
+
+    # Category mapping for F10 factors
+    F10_CATEGORY_MAP = {}
+    for name in FundamentalFactorBuilder.QUALITY_COLS:
+        F10_CATEGORY_MAP[name] = "quality"
+    for name in FundamentalFactorBuilder.GROWTH_COLS:
+        F10_CATEGORY_MAP[name] = "growth"
+    for name in FundamentalFactorBuilder.EARNINGS_QUALITY_COLS:
+        F10_CATEGORY_MAP[name] = "earnings_quality"
+    for name in FundamentalFactorBuilder.VALUATION_COLS:
+        F10_CATEGORY_MAP[name] = "valuation"
+    for name in FundamentalFactorBuilder.SHORT_COLS:
+        F10_CATEGORY_MAP[name] = "short_sentiment"
+    for name in FundamentalFactorBuilder.FLOW_COLS:
+        F10_CATEGORY_MAP[name] = "capital_flow"
+    for name in FundamentalFactorBuilder.ANALYST_COLS:
+        F10_CATEGORY_MAP[name] = "analyst"
+    for name in FundamentalFactorBuilder.SMART_MONEY_COLS:
+        F10_CATEGORY_MAP[name] = "smart_money"
+    for name in FundamentalFactorBuilder.EARNINGS_EVENT_COLS:
+        F10_CATEGORY_MAP[name] = "earnings_event"
+
+    f10_registered = 0
+    for name in f10_names:
+        category = F10_CATEGORY_MAP.get(name, "unknown")
+        ok = registry.register(
+            factor_id=f"us_{name}", name=name.replace("_", " ").title(),
+            market="us", source="fundamental", category=category,
+            formula=f"factors/fundamental_builder.py::FundamentalFactorBuilder (group: {category})",
+        )
+        if ok:
+            f10_registered += 1
+    print(f"Registered {f10_registered}/{len(f10_names)} F10 factors")
+
 
 if __name__ == "__main__":
     main()

@@ -193,6 +193,157 @@ class ModelTrainer:
         )
         return self.factor_df
 
+    def load_data_from_bq(
+        self,
+        symbols: list[str],
+        start: str,
+        end: str,
+        market: str = "us",
+        factor_ids: list[str] | None = None,
+        top_n: int = 15,
+        factor_source: str = "tech",
+    ):
+        """Load factor data from BigQuery with factor_source control.
+
+        Delegates to load_from_bq for tech factors, and extends to support
+        fundamental / all factor sources.
+
+        Parameters
+        ----------
+        symbols : list[str]
+            Stock symbols without prefix (e.g. ["AAPL", "MSFT"]).
+        start : str
+            Start date YYYY-MM-DD.
+        end : str
+            End date YYYY-MM-DD.
+        market : str
+            "us" or "hk".
+        factor_ids : list[str] or None
+            Specific factor IDs, or None to auto-select.
+        top_n : int
+            Max active factors to use if factor_ids not specified.
+        factor_source : str
+            "tech" (default), "fundamental", or "all".
+            - "tech": TechFactorBuilder only (existing behaviour).
+            - "fundamental": FundamentalFactorBuilder only.
+            - "all": Both tech and fundamental factors.
+
+        Returns
+        -------
+        pd.DataFrame
+            Factor DataFrame with symbol, date, and feature columns.
+        """
+        if factor_source == "tech":
+            return self.load_from_bq(
+                symbols=symbols, start=start, end=end,
+                market=market, factor_ids=factor_ids, top_n=top_n,
+            )
+
+        if factor_source not in ("fundamental", "all"):
+            raise ValueError(
+                f"Unknown factor_source={factor_source!r}. "
+                f"Use 'tech', 'fundamental', or 'all'."
+            )
+
+        import pandas as pd
+        from google.cloud import bigquery
+        from factors.fundamental_builder import FundamentalFactorBuilder
+
+        # Load fundamental factors
+        ffb = FundamentalFactorBuilder()
+
+        # For fundamental, load from BQ raw data
+        client = bigquery.Client()
+
+        all_frames: list[pd.DataFrame] = []
+        for sym in symbols:
+            try:
+                # Load financials from BQ
+                fin_query = f"""
+                    SELECT * FROM `deductive-notch-495015-c2.quant.us_financials`
+                    WHERE symbol = @sym AND date BETWEEN @start AND @end
+                    ORDER BY date
+                """
+                fin_job = bigquery.QueryJobConfig(query_parameters=[
+                    bigquery.ScalarQueryParameter("sym", "STRING", sym),
+                    bigquery.ScalarQueryParameter("start", "STRING", start),
+                    bigquery.ScalarQueryParameter("end", "STRING", end),
+                ])
+                financials = client.query(fin_query, job_config=fin_job).to_dataframe()
+
+                if financials.empty:
+                    continue
+
+                data_map = {"financials": financials}
+
+                # Optionally load valuation, short, etc. if factor_source == "all"
+                if factor_source == "all":
+                    for table_name, key in [
+                        ("us_valuation", "valuation"),
+                        ("us_short_interest", "short_interest"),
+                        ("us_capital_flow", "capital_flow"),
+                        ("us_analyst", "analyst"),
+                    ]:
+                        try:
+                            aux_query = f"""
+                                SELECT * FROM `deductive-notch-495015-c2.quant.{table_name}`
+                                WHERE symbol = @sym AND date BETWEEN @start AND @end
+                                ORDER BY date
+                            """
+                            aux_job = bigquery.QueryJobConfig(query_parameters=[
+                                bigquery.ScalarQueryParameter("sym", "STRING", sym),
+                                bigquery.ScalarQueryParameter("start", "STRING", start),
+                                bigquery.ScalarQueryParameter("end", "STRING", end),
+                            ])
+                            aux_df = client.query(aux_query, job_config=aux_job).to_dataframe()
+                            if not aux_df.empty:
+                                data_map[key] = aux_df
+                        except Exception:
+                            pass
+
+                factors = ffb.compute(ffb.ALL_FACTOR_COLS, data_map)
+                if not factors.empty:
+                    factors["symbol"] = sym
+                    # Align dates from financials
+                    n = len(factors)
+                    factors["date"] = financials["date"].values[:n]
+                    all_frames.append(factors)
+            except Exception as e:
+                logger.warning("Fundamental factor load failed for %s: %s", sym, e)
+
+        if not all_frames:
+            logger.warning("No fundamental factor data loaded for any symbol")
+            return pd.DataFrame()
+
+        fund_df = pd.concat(all_frames, ignore_index=True)
+
+        # If "all", also load tech factors and merge
+        if factor_source == "all":
+            try:
+                tech_df = self.load_from_bq(
+                    symbols=symbols, start=start, end=end,
+                    market=market, factor_ids=factor_ids, top_n=top_n,
+                )
+                if not tech_df.empty:
+                    # Merge on symbol + date
+                    fund_df = pd.merge(
+                        fund_df, tech_df, on=["symbol", "date"],
+                        how="outer", suffixes=("", "_tech"),
+                    )
+            except Exception as e:
+                logger.warning("Tech factor merge failed: %s", e)
+
+        self.factor_df = fund_df
+        exclude = {"symbol", "date", "fwd_ret_5d", "fwd_ret_20d"}
+        self.feature_cols = [
+            c for c in self.factor_df.columns if c not in exclude
+        ]
+        logger.info(
+            "load_data_from_bq: %d rows, %d features (source=%s)",
+            len(self.factor_df), len(self.feature_cols), factor_source,
+        )
+        return self.factor_df
+
     # ── Data Splitting ─────────────────────────────────────────────
 
     def split_data(
@@ -592,3 +743,58 @@ class ModelTrainer:
         raise FileNotFoundError(
             f"Model file not found: {txt_path} or {pkl_path}"
         )
+
+
+# ── CLI ────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ML Model Trainer CLI")
+    parser.add_argument("--market", default="us", choices=["us", "hk"],
+                        help="Market (default: us)")
+    parser.add_argument("--symbols", nargs="+", default=["AAPL", "MSFT", "GOOGL"],
+                        help="Stock symbols")
+    parser.add_argument("--start", default="2020-01-01",
+                        help="Start date YYYY-MM-DD")
+    parser.add_argument("--end", default="2024-12-31",
+                        help="End date YYYY-MM-DD")
+    parser.add_argument("--factor-source", default="tech",
+                        choices=["tech", "fundamental", "all"],
+                        help="Factor source: tech, fundamental, or all (default: tech)")
+    parser.add_argument("--model", default="lightgbm",
+                        choices=["ols", "ridge", "lightgbm"],
+                        help="Model type (default: lightgbm)")
+    parser.add_argument("--output", default="./models",
+                        help="Model output directory")
+    parser.add_argument("--top-n", type=int, default=15,
+                        help="Max factors from registry")
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    trainer = ModelTrainer(factor_path=None)
+    trainer.load_data_from_bq(
+        symbols=args.symbols,
+        start=args.start,
+        end=args.end,
+        market=args.market,
+        top_n=args.top_n,
+        factor_source=args.factor_source,
+    )
+
+    train, val, test = trainer.split_data()
+
+    if args.model == "ols":
+        result = trainer.train_ols(train, val)
+    elif args.model == "ridge":
+        result = trainer.train_ridge(train, val)
+    else:
+        result = trainer.train_lightgbm(train, val)
+
+    ic_result = trainer.evaluate_ic(result["model"], test, name=args.model)
+    trainer.save_model(result["model"], f"{args.output}/{args.model}_{args.factor_source}")
+    print(f"\nTraining complete. ICIR: {ic_result['icir']:.3f}")

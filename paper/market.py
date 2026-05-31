@@ -121,3 +121,71 @@ def trading_hours_for(market: str) -> dict:
 def default_symbols_for(market: str) -> list[str]:
     """Return the default symbol list for a market."""
     return DEFAULT_SYMBOLS.get(market, [])
+
+
+class UniverseBuilder:
+    """Build stock universes from static lists or BigQuery."""
+
+    @staticmethod
+    def from_static(market: str) -> list[str]:
+        """Return default static universe for a market."""
+        return default_symbols_for(market)
+
+    @staticmethod
+    def from_bq(
+        market: str,
+        date: str,
+        factor_id: str,
+        top_k: int = 50,
+        project: str = "deductive-notch-495015-c2",
+        dataset: str = "quant",
+    ) -> list[str]:
+        """Query factor_values BQ table and return top_k symbols by factor rank.
+
+        Parameters
+        ----------
+        market : str
+            "us" or "hk".
+        date : str
+            Reference date YYYY-MM-DD.
+        factor_id : str
+            Factor column name to rank by.
+        top_k : int
+            Number of top symbols to return.
+        project, dataset : str
+            BigQuery project and dataset.
+
+        Returns
+        -------
+        list[str]
+            Top-k symbols (without market prefix).
+        """
+        from google.cloud import bigquery
+
+        client = bigquery.Client(project=project)
+        table = f"{project}.{dataset}.factor_values"
+
+        query = f"""
+            SELECT symbol, {factor_id} AS factor_val
+            FROM `{table}`
+            WHERE date = @date AND {factor_id} IS NOT NULL
+            ORDER BY factor_val DESC
+            LIMIT @top_k
+        """
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ScalarQueryParameter("date", "STRING", date),
+            bigquery.ScalarQueryParameter("top_k", "INT64", top_k),
+        ])
+        df = client.query(query, job_config=job_config).to_dataframe()
+
+        if df.empty:
+            log.warning(
+                "UniverseBuilder.from_bq: no data for %s on %s, falling back to static",
+                factor_id, date,
+            )
+            return UniverseBuilder.from_static(market)
+
+        symbols = df["symbol"].tolist()
+        log.info("UniverseBuilder.from_bq: %d symbols from factor %s on %s",
+                 len(symbols), factor_id, date)
+        return symbols
