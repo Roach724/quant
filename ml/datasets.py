@@ -332,6 +332,9 @@ class DatasetManager:
         end_ext = pd.Timestamp(end) + pd.Timedelta(days=n_days + 14)  # buffer for weekends
         end_ext_str = end_ext.strftime("%Y-%m-%d")
 
+        # Convert symbols to bars format (US.AAPL) if needed
+        bars_symbols = [s if "." in s else f"US.{s}" for s in symbols]
+
         query = f"""
             SELECT symbol, timestamp AS date, close
             FROM `{cls.DEFAULT_PROJECT}.{cls.DATASET}.us_bars_1d`
@@ -341,13 +344,16 @@ class DatasetManager:
         """
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ArrayQueryParameter("symbols", "STRING", symbols),
+                bigquery.ArrayQueryParameter("symbols", "STRING", bars_symbols),
                 bigquery.ScalarQueryParameter("start", "STRING", start),
                 bigquery.ScalarQueryParameter("end_ext", "STRING", end_ext_str),
             ],
         )
         bars = bq_client.query(query, job_config=job_config).to_dataframe()
-        bars["date"] = pd.to_datetime(bars["date"])
+        bars["date"] = pd.to_datetime(bars["date"]).dt.tz_localize(None)
+
+        # Strip market prefix to match factor data symbol format (US.AAPL → AAPL)
+        bars["symbol"] = bars["symbol"].str.replace(r"^US\.", "", regex=True)
 
         # Compute forward return per symbol
         bars = bars.sort_values(["symbol", "date"])
@@ -438,6 +444,9 @@ class DatasetManager:
             n_days = int(fwd_match.group(1))
             logger.info("Computing fwd_ret_%dd from bars data...", n_days)
             fwd_series = cls._compute_fwd_ret(bq_client, symbols, all_start, all_end, n_days)
+            # Normalize date types to avoid merge dtype mismatch
+            fwd_series["date"] = pd.to_datetime(fwd_series["date"]).dt.normalize()
+            df["date"] = pd.to_datetime(df["date"]).dt.normalize()
             df = df.drop(columns=[output_label]).merge(
                 fwd_series, on=["symbol", "date"], how="left"
             )
