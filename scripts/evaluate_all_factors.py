@@ -53,6 +53,9 @@ def compute_all_tech_factors_ic(start: str, end: str) -> list[dict]:
         log.warning('No OHLCV data')
         return []
 
+    # Ensure date is pd.Timestamp (BQ returns dbdate which breaks DatetimeIndex joins)
+    df['date'] = pd.to_datetime(df['date'])
+
     tfb = TechFactorBuilder()
     all_frames = []
 
