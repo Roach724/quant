@@ -496,8 +496,8 @@ def main():
 
             # Merge with forward returns on (symbol, date)
             merged["date"] = pd.DatetimeIndex(pd.to_datetime(merged["date"], errors="coerce"))
-            merged["date"] = pd.to_datetime(merged["date"]).normalize()
-            fwd["date"] = pd.to_datetime(fwd["date"]).normalize()
+            merged["date"] = pd.to_datetime(merged["date"]).dt.normalize()
+            fwd["date"] = pd.to_datetime(fwd["date"]).dt.normalize()
             merged = merged.merge(fwd, on=["symbol", "date"], how="inner")
 
             if len(merged) < MIN_SAMPLES:
