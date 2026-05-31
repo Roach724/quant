@@ -23,6 +23,7 @@ from google.cloud import bigquery
 from scipy.stats import spearmanr
 
 from factors.fundamental_builder import FundamentalFactorBuilder
+from factors.f10_transformer import F10Transformer
 from factors.registry import FactorRegistry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -51,7 +52,7 @@ JSON_SOURCE_TABLES = {"us_financials", "us_analyst", "us_capital_flow", "us_shar
 # Timestamp column per table: (col_name, bq_date_expr_template or None for DATE(col))
 TS_COL = {
     "us_valuation": ("ingest_time", None),
-    "us_financials": ("date_time_str", "PARSE_TIMESTAMP('%Y/%m/%d', {col})"),
+    "us_financials": ("date_time_str", "PARSE_TIMESTAMP('%Y-%m-%d', {col})"),
     "us_analyst": ("update_time", "TIMESTAMP_SECONDS(CAST({col} AS INT64))"),
     "us_capital_flow": ("ingest_time", None),
     "us_shareholder": ("update_time", "TIMESTAMP_SECONDS(CAST({col} AS INT64))"),
@@ -321,12 +322,19 @@ def main():
                 log.warning("  %s: preprocessing yielded empty; skipping", tbl)
                 continue
             key = TABLE_TO_KEY[tbl]
-            # Use (symbol, date) as index for compute() — preserves alignment
-            processed = processed.set_index(["symbol", "date"])
             data_map[key] = processed
             log.info("  -> data_map['%s']: %d rows x %d cols", key, len(processed), len(processed.columns))
         except Exception as e:
             log.warning("  %s: SKIP — %s", tbl, e)
+
+    # Transform raw data to builder-compatible format
+    data_map = F10Transformer.transform_all(data_map)
+
+    # Set (symbol, date) MultiIndex on transformed DataFrames
+    for key in list(data_map.keys()):
+        df = data_map[key]
+        if not df.empty and 'symbol' in df.columns and 'date' in df.columns:
+            data_map[key] = df.set_index(['symbol', 'date'])
 
     if not data_map:
         log.error("No F10 data loaded after preprocessing!")
