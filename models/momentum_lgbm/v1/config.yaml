@@ -26,11 +26,11 @@ hyperparams:
     verbose: -1
 
 data:
-  dataset: "us_top20_v1"
+  dataset: "us_tech_v1"
   label: "fwd_ret_5d"
 
 training:
   optuna_direction: "maximize"
   optuna_metric: "val_ic"
-  n_trials: 50
+  n_trials: 20
   cv_folds: 5
