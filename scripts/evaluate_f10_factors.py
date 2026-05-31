@@ -245,31 +245,104 @@ def preprocess_table(table_name: str, df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def load_forward_returns(start: str, end: str) -> pd.DataFrame:
-    """Compute fwd_ret_5d and fwd_ret_20d from us_bars_1d."""
+def compute_quarterly_fwd_ret(f10_dates: pd.DataFrame, horizon_days: int = 63) -> pd.DataFrame:
+    """Compute forward returns aligned to F10 report dates.
+
+    For each (symbol, F10_report_date), finds the nearest trading day,
+    then computes fwd_ret = (close after N days - close on entry) / close on entry.
+
+    Args:
+        f10_dates: DataFrame with columns [symbol, date] — F10 report dates
+        horizon_days: Number of calendar days forward (default 63 ≈ 1 quarter)
+
+    Returns:
+        DataFrame with columns [symbol, date, fwd_ret_5d, fwd_ret_20d, fwd_ret_quarterly]
+        where date is the F10 report date (not the trading date).
+    """
+    import datetime
     client = bigquery.Client(project=PROJECT)
+
+    # Get date range from F10 data
+    min_date = f10_dates["date"].min()
+    max_date = f10_dates["date"].max()
+    # Extend range to cover forward window
+    end_date = pd.to_datetime(max_date) + datetime.timedelta(days=horizon_days + 30)
+
+    # Load bar data for all symbols
+    symbols = sorted(f10_dates["symbol"].unique().tolist())
+    bq_symbols = [f"US.{s}" for s in symbols]
+
     query = f"""
-        SELECT
-            symbol,
-            DATE(timestamp) as date,
-            close,
-            (LEAD(close, 5) OVER (PARTITION BY symbol ORDER BY timestamp) - close)
-                / NULLIF(close, 0) as fwd_ret_5d,
-            (LEAD(close, 20) OVER (PARTITION BY symbol ORDER BY timestamp) - close)
-                / NULLIF(close, 0) as fwd_ret_20d
+        SELECT symbol, DATE(timestamp) as date, close
         FROM `{DATASET}.us_bars_1d`
-        WHERE DATE(timestamp) BETWEEN '{start}' AND '{end}'
-        QUALIFY fwd_ret_5d IS NOT NULL
+        WHERE symbol IN UNNEST(@symbols)
+          AND DATE(timestamp) BETWEEN '{min_date}' AND '{end_date.strftime("%Y-%m-%d")}'
         ORDER BY symbol, date
     """
-    log.info("Loading forward returns from us_bars_1d ...")
-    df = client.query(query).to_dataframe()
-    df["date"] = pd.to_datetime(df["date"]).dt.date
-    # Strip US. prefix for consistency with F10 data
-    df["symbol"] = df["symbol"].astype(str).str.replace("US.", "", regex=False)
-    log.info("  Forward returns: %d rows x %d unique symbols",
-             len(df), df["symbol"].nunique())
-    return df
+    job_config = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ArrayQueryParameter("symbols", "STRING", bq_symbols),
+    ])
+    bars = client.query(query, job_config=job_config).to_dataframe()
+    bars["symbol"] = bars["symbol"].str.replace("US.", "")
+    bars["date"] = pd.to_datetime(bars["date"])
+    bars = bars.sort_values(["symbol", "date"])
+
+    # Build per-symbol price lookup (date -> close)
+    results = []
+    for sym in symbols:
+        sym_bars = bars[bars["symbol"] == sym].set_index("date")["close"]
+        if sym_bars.empty:
+            continue
+
+        # Get this symbol's F10 dates
+        sym_f10 = f10_dates[f10_dates["symbol"] == sym]["date"].drop_duplicates()
+        sym_f10 = pd.to_datetime(sym_f10).sort_values()
+
+        for f10_date in sym_f10:
+            # Find nearest trading day >= f10_date
+            future_bars = sym_bars[sym_bars.index >= f10_date]
+            if future_bars.empty:
+                continue
+            entry_date = future_bars.index[0]
+            entry_close = future_bars.iloc[0]
+
+            # Find close after N calendar days
+            target_dt = entry_date + datetime.timedelta(days=horizon_days)
+            forward_bars = sym_bars[sym_bars.index >= target_dt]
+            if forward_bars.empty:
+                continue
+            exit_date = forward_bars.index[0]
+            exit_close = forward_bars.iloc[0]
+
+            # Compute fwd_ret
+            fwd_ret = (exit_close - entry_close) / entry_close
+
+            # Also compute shorter horizons for comparison
+            # 5 trading days (~7 calendar days)
+            target_5d = entry_date + datetime.timedelta(days=7)
+            fwd_5d_bars = sym_bars[sym_bars.index >= target_5d]
+            fwd_ret_5d = (fwd_5d_bars.iloc[0] - entry_close) / entry_close if not fwd_5d_bars.empty else None
+
+            # 20 trading days (~30 calendar days)
+            target_20d = entry_date + datetime.timedelta(days=30)
+            fwd_20d_bars = sym_bars[sym_bars.index >= target_20d]
+            fwd_ret_20d = (fwd_20d_bars.iloc[0] - entry_close) / entry_close if not fwd_20d_bars.empty else None
+
+            results.append({
+                "symbol": sym,
+                "date": f10_date,
+                "fwd_ret_5d": fwd_ret_5d,
+                "fwd_ret_20d": fwd_ret_20d,
+                "fwd_ret_quarterly": fwd_ret,  # ~63 calendar days
+            })
+
+    result = pd.DataFrame(results)
+    if not result.empty:
+        result["date"] = pd.to_datetime(result["date"])
+
+    log.info("Quarterly fwd_ret: %d rows for %d symbols from %d F10 dates",
+             len(result), result["symbol"].nunique(), len(f10_dates["date"].unique()))
+    return result
 
 
 def compute_ic(factor_values: pd.Series, fwd_ret: pd.Series) -> tuple[float, float, int]:
@@ -294,8 +367,8 @@ def main():
     parser.add_argument("--end", default="2026-05-30")
     parser.add_argument("--register", action="store_true",
                         help="Register passing factors to BQ factor_registry")
-    parser.add_argument("--label", default="fwd_ret_5d",
-                        choices=["fwd_ret_5d", "fwd_ret_20d"],
+    parser.add_argument("--label", default="fwd_ret_quarterly",
+                        choices=["fwd_ret_5d", "fwd_ret_20d", "fwd_ret_quarterly"],
                         help="Forward return horizon for IC")
     args = parser.parse_args()
 
@@ -344,8 +417,32 @@ def main():
         log.error("No F10 data loaded after preprocessing!")
         return 1
 
-    # ── 2. Load forward returns ──
-    fwd = load_forward_returns(args.start, args.end)
+    # ── 2. Compute quarterly forward returns aligned to F10 dates ──
+    # Collect all unique (symbol, date) pairs from F10 data
+    f10_dates_list = []
+    for key, df in data_map.items():
+        if df.empty:
+            continue
+        if isinstance(df.index, pd.MultiIndex) and df.index.nlevels >= 2:
+            idx_frame = df.index.to_frame(index=False)
+            if "symbol" in idx_frame.columns and "date" in idx_frame.columns:
+                f10_dates_list.append(idx_frame[["symbol", "date"]])
+        elif "symbol" in df.columns and "date" in df.columns:
+            f10_dates_list.append(df[["symbol", "date"]])
+
+    if f10_dates_list:
+        f10_dates = pd.concat(f10_dates_list).drop_duplicates()
+        log.info("F10 dates collected: %d unique (symbol,date) pairs", len(f10_dates))
+    else:
+        log.error("No F10 dates found!")
+        return 1
+
+    fwd = compute_quarterly_fwd_ret(f10_dates, horizon_days=63)
+
+    # Use fwd_ret_quarterly as the primary label (63 calendar days ≈ 1 quarter)
+    if fwd.empty:
+        log.error("No forward return data computed!")
+        return 1
 
     # ── 3. Build category map ──
     ffb = FundamentalFactorBuilder()
@@ -396,23 +493,12 @@ def main():
                     })
                     continue
 
-            # Map F10 dates to nearest trading day via calendar lookup
-            merged["date"] = pd.to_datetime(merged["date"], errors="coerce")
+            # Merge with forward returns on (symbol, date)
+            # F10 dates and fwd dates are both datetime64 — use exact merge
+            merged["date"] = pd.to_datetime(merged["date"], errors="coerce").dt.date
+            merged["date"] = pd.to_datetime(merged["date"])
             fwd["date"] = pd.to_datetime(fwd["date"])
-            # Build trading day calendar from fwd data
-            trading_dates = pd.Series(sorted(fwd["date"].unique()))
-            # Map each F10 date to the next trading day (or same day if it matches)
-            map_idx = trading_dates.searchsorted(merged["date"])
-            map_idx = map_idx.clip(0, len(trading_dates) - 1)
-            merged["trading_date"] = trading_dates.iloc[map_idx].values
-            # Inner join: (symbol, trading_date) = (symbol, date) in fwd
-            merged = merged.merge(
-                fwd, left_on=["symbol", "trading_date"],
-                right_on=["symbol", "date"], how="inner", suffixes=("", "_fwd")
-            )
-            merged["date"] = merged["trading_date"].dt.date
-            if "date_fwd" in merged.columns:
-                merged = merged.drop(columns=["date_fwd"])
+            merged = merged.merge(fwd, on=["symbol", "date"], how="inner")
 
             if len(merged) < MIN_SAMPLES:
                 results.append({
