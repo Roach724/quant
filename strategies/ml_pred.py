@@ -45,6 +45,8 @@ class MLPredStrategy(Strategy):
     rebalance_every: int = 5
     model_type: str = "lightgbm"
     factor_top_n: int = 15
+    model_name: str = "momentum_lgbm"
+    model_version: int | str = "latest"
 
     def __init__(self, **kwargs):
         super().__init__()
@@ -54,6 +56,8 @@ class MLPredStrategy(Strategy):
         self._trained = False
         self._model_trainer = None
         self._model = None
+        self._config = None
+        self._features = None
         self._last_rebalance = -self.rebalance_every
         self._all_scores_history: dict = {}
 
@@ -65,16 +69,37 @@ class MLPredStrategy(Strategy):
         self._all_scores_history: dict[int, dict[str, float]] = {}
 
         symbols = list(ctx.universe)
+        self._symbols = symbols
         if not symbols:
             logger.warning("MLPredStrategy: no symbols in universe")
             return
 
-        try:
-            self._train(symbols)
-        except Exception:
-            logger.exception("MLPredStrategy training failed")
+        self._load_model()
 
-    def _train(self, symbols):
+    def _get_symbols(self) -> list[str]:
+        """Return list of symbols from the strategy context."""
+        return self._symbols if hasattr(self, '_symbols') and self._symbols else []
+
+    def _load_model(self):
+        """Load trained model from ModelRegistry. Falls back to live training."""
+        try:
+            from ml.registry import ModelRegistry
+            bundle = ModelRegistry.load(self.model_name, self.model_version)
+            self._model = bundle.model
+            self._config = bundle.config
+            self._features = bundle.features
+            # Also store the trainer for predict
+            from ml.trainer import ModelTrainer
+            self._model_trainer = ModelTrainer(factor_path=None)
+            logger.info("Loaded %s v%d (%d features)",
+                        bundle.name, bundle.version, len(bundle.features))
+            self._trained = True
+        except Exception:
+            logger.exception("Failed to load model from registry, falling back to BQ training")
+            symbols = self._get_symbols()
+            self._fallback_train(symbols)
+
+    def _fallback_train(self, symbols):
         """Train LightGBM on historical factor data from BQ."""
         from ml.trainer import ModelTrainer
         
