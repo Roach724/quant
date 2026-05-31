@@ -295,8 +295,9 @@ def compute_quarterly_fwd_ret(f10_dates: pd.DataFrame, horizon_days: int = 63) -
             continue
 
         # Get this symbol's F10 dates
-        sym_f10 = f10_dates[f10_dates["symbol"] == sym]["date"].drop_duplicates()
-        sym_f10 = pd.to_datetime(sym_f10).sort_values()
+        sym_f10_raw = f10_dates[f10_dates["symbol"] == sym]["date"].drop_duplicates()
+        sym_f10 = pd.to_datetime(sym_f10_raw).sort_values()
+        sym_f10 = pd.DatetimeIndex(sym_f10)  # ensure Timestamp type
 
         for f10_date in sym_f10:
             # Find nearest trading day >= f10_date
@@ -338,7 +339,7 @@ def compute_quarterly_fwd_ret(f10_dates: pd.DataFrame, horizon_days: int = 63) -
 
     result = pd.DataFrame(results)
     if not result.empty:
-        result["date"] = pd.to_datetime(result["date"])
+        result["date"] = pd.DatetimeIndex(pd.to_datetime(result["date"]))
 
     log.info("Quarterly fwd_ret: %d rows for %d symbols from %d F10 dates",
              len(result), result["symbol"].nunique(), len(f10_dates["date"].unique()))
@@ -494,10 +495,9 @@ def main():
                     continue
 
             # Merge with forward returns on (symbol, date)
-            # F10 dates and fwd dates are both datetime64 — use exact merge
-            merged["date"] = pd.to_datetime(merged["date"], errors="coerce").dt.date
-            merged["date"] = pd.to_datetime(merged["date"])
-            fwd["date"] = pd.to_datetime(fwd["date"])
+            merged["date"] = pd.DatetimeIndex(pd.to_datetime(merged["date"], errors="coerce"))
+            merged["date"] = pd.to_datetime(merged["date"]).normalize()
+            fwd["date"] = pd.to_datetime(fwd["date"]).normalize()
             merged = merged.merge(fwd, on=["symbol", "date"], how="inner")
 
             if len(merged) < MIN_SAMPLES:
