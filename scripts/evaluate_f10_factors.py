@@ -396,9 +396,17 @@ def main():
                     })
                     continue
 
-            # Merge with forward returns on (symbol, date)
-            merged["date"] = pd.to_datetime(merged["date"], errors="coerce").dt.date
-            merged = merged.merge(fwd, on=["symbol", "date"], how="inner")
+            # Merge with forward returns: use asof to match F10 quarterly dates
+            # to nearest trading day (forward=next trading day after report)
+            merged["date"] = pd.to_datetime(merged["date"], errors="coerce")
+            fwd["date"] = pd.to_datetime(fwd["date"])
+            merged = merged.sort_values(["symbol", "date"])
+            fwd_sorted = fwd.sort_values(["symbol", "date"])
+            merged = pd.merge_asof(
+                merged, fwd_sorted,
+                on="date", by="symbol", direction="forward",
+            )
+            merged["date"] = merged["date"].dt.date
 
             if len(merged) < MIN_SAMPLES:
                 results.append({
