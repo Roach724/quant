@@ -304,6 +304,14 @@ class ModelTrainer:
                     fund_df, tech_df, on=["symbol", "date"],
                     how="outer", suffixes=("", "_tech"),
                 )
+                # Forward-fill F10 quarterly values to daily frequency
+                f10_cols = [c for c in fund_df.columns if c not in ("symbol", "date")]
+                all_df = all_df.sort_values(["symbol", "date"])
+                for sym in all_df["symbol"].unique():
+                    mask = all_df["symbol"] == sym
+                    for col in f10_cols:
+                        if col in all_df.columns:
+                            all_df.loc[mask, col] = all_df.loc[mask, col].ffill()
                 self.factor_df = all_df
             elif not tech_df.empty:
                 self.factor_df = tech_df
