@@ -1,6 +1,6 @@
 # Quant 项目 — 状态备忘
 
-> 更新日期: 2026-05-31 06:30 UTC · 当前分支: `feature/phase2-ml-strategy` · VM: asia-east2-a
+> 更新日期: 2026-05-31 15:00 UTC · 当前分支: `main` · VM: e2-standard-4
 
 ---
 
@@ -10,7 +10,8 @@
 数据管道 ██████████████ 100%   ← 回填全完成 + F10 基本面全入库
 因子注册 ██████████████ 100%   ← FactorRegistry BQ双表 + 39因子已入库
 Futu 接入 █████████████░  95%   ← OpenD 运行中，ws_collector + cron 1d 已部署
-策略验证 ██████████░░░░  70%   ← W1动量验证✅ + W2 ML对比✅，W3/W4待执行
+策略验证 ████████████░░  85%   ← W1/W2✅ + W3 5m POC✅ + F10 IC完成
+因子管道 ██████████████ 100%   ← 79因子 + 31.5M值 + 81评估
 回测引擎 ████████████░  90%   ← ML pred 支持已接入，walk-forward 就绪
 OMS/执行 ████████████░  90%   ← Futu Stock/Crypto Broker + Router 已实现
 实盘交易 ██████░░░░░░░  40%   ← Paper Runner 就绪，缺 Live Loop + 状态持久化
@@ -25,8 +26,9 @@ OMS/执行 ████████████░  90%   ← Futu Stock/Crypto 
 |------|------|------|------|
 | W1 | SimpleMomentum 全链路验证 | ✅ | 年化 11.00%, Sharpe 0.76, MaxDD -13.25% |
 | W2 | ML LightGBM vs 动量 walk-forward | ✅ | ML 4.00% > 动量 3.32%, Sharpe 0.64 |
-| W3 | 5m 频率 + cron 定时 | ⏳ | us_bars_5m 加载中 (122K/456K) |
-| W4 | 评估 & Live Loop 决策 | ⏳ | 待 W3 完成 |
+| W3 | 5m + cron | ✅ | Momentum 5m 20.24% (POC) |
+| W4 | 评估 & Live Loop | ⏳ | 待执行 |
+| Phase2 | F10 ML 扩展 | ✅ | 7 tasks 完成，已合并 main |
 
 ### W2 实验详情
 
@@ -57,7 +59,7 @@ OMS/执行 ████████████░  90%   ← Futu Stock/Crypto 
 | financials | 1,176,997 行 / 128 只 | 42,006 行 / 11 只 | NONE | 4 类报表 x 19 个指标，含 yoy/qoq |
 | short_interest | — | — | — | ❌ Futu API 不支持美股卖空数据 |
 
-**总计: 10 张 F10 表 + 6 张 bars 表 + 2 张因子库表 = 18 张 BQ 表**
+**总计: 10 张 F10 表 + 6 张 bars 表 + 2 张因子库表 = 19 张 BQ 表**
 
 ### Financials Adapter 修复记录
 
@@ -85,7 +87,18 @@ OMS/执行 ████████████░  90%   ← Futu Stock/Crypto 
 | BQ 不支持 ** glob | 需显式 list_blobs 传 URI 列表 |
 | us_capital_flow 分区丢失 | 第一次 autodetect+分区冲突重试时忘了补，已修复 |
 | HK financials 列类型 qoq INT32 | 整型不一致 → pandas concat + to_numeric 统一 |
-| Python 3.10 缺 datetime.UTC | 改 timezone.utc (3.10 compat) |
+| Python 3.10 缺 datetime.UTC | 改 timezone.utc (3.10 compat)；VM 已升 python3.12 |
+
+### F10 因子体系
+
+| 组件 | 状态 | 详情 |
+|------|------|------|
+| F10Transformer | ✅ | 9分类41因子，BQ原始表→builder格式 |
+| factor_registry | ✅ | 79因子 (39 tech + 40 F10) |
+| factor_values | ✅ | 31.5M行，dbdate bug已修复 |
+| factor_evaluations | ✅ | 81行IC，16因子通过准入 |
+| compute 脚本 | ✅ | registry-driven + incremental (tech每日/F10每周) |
+| cron 定时任务 | ✅ | tech每日增量 + F10每周全量 |
 
 ---
 
@@ -106,8 +119,8 @@ OMS/执行 ████████████░  90%   ← Futu Stock/Crypto 
 | 表 | 行数 | 状态 |
 |----|------|------|
 | us_bars_1d | 372,723 | ✅ 就绪 (2020-2026) |
-| us_bars_5m | 122,898 | 🔄 持续入库中 (ws_collector) |
-| hk_bars_1d | 1,513 | 🔄 fallback 加载中 |
+| us_bars_5m | 365,470 | 🔄 持续入库中 (ws_collector) |
+| hk_bars_1d | 10,342 | 🔄 fallback 加载中 |
 | hk_bars_5m | 18,950 | 🔄 持续入库中 |
 | crypto_bars_1d | 10 | ⏸️ 搁置 |
 | crypto_bars_5m | 530 | ⏸️ 搁置 |
@@ -181,7 +194,7 @@ BQ 表:    quant.{market}_{type} — PARTITION BY DATE(ingest_time), CLUSTER BY 
 | Phase 0 数据管道 | VM cron + ws_collector + backfill |
 | BQ dedup 分区冲突 | CREATE OR REPLACE TABLE 显式 PARTITION/CLUSTER |
 | Parquet 纳秒时间戳 | storage.py 微秒 + BQ loader pandas fallback |
-| 因子注册制 | FactorRegistry BQ 双表 + 39 因子 |
+| 因子注册制 | FactorRegistry BQ 双表 + 79 因子 (39 tech + 40 F10) |
 | PaperRunner 全链路 | W1 动量验证 + W2 ML 双策略 |
 | F10 基本面 | 6 种数据 × 2 市场 = 10 张 BQ 表 |
 
@@ -189,11 +202,11 @@ BQ 表:    quant.{market}_{type} — PARTITION BY DATE(ingest_time), CLUSTER BY 
 
 | # | 问题 | 说明 |
 |---|------|------|
-| 1 | **无 Live Trading Loop** | 没有 run_live.py 主循环 |
-| 2 | **状态无持久化** | Engine/Portfolio 重启丢失 |
-| 3 | **回测引擎单线程** | 大数据量回测慢 |
-| 4 | **5m 策略未验证** | W3 待执行 |
-| 5 | **未端到端实盘验证** | Paper Runner 已跑通但未持续运行 |
+| 1 | **F10 IC 偏弱** | F10 因子日频 IC 偏低 (均<0.02)，需季度fwd_ret |
+| 2 | **F10 样本量有限** | 季度财报仅覆盖~128只美股，训练集受限 |
+| 3 | **cron 未首次验证** | evaluate/compute cron 已部署但未跑过首轮 |
+| 4 | **无 Live Trading Loop** | 没有 run_live.py 主循环 |
+| 5 | **状态无持久化** | Engine/Portfolio 重启丢失 |
 
 ---
 
@@ -228,14 +241,18 @@ BQ 表:    quant.{market}_{type} — PARTITION BY DATE(ingest_time), CLUSTER BY 
 | Python 3.10 compat | datetime.UTC → timezone.utc；crypto_binance_adapter 修复 |
 | BQ autodetect 分区 | autodetect 创建的表无列级分区 → 需显式 CREATE 加 PARTITION BY |
 
+| dbdate 类型陷阱 | BQ DATE 列回 pandas 是 `dbdate` 对象，直接 `pd.DatetimeIndex` 导致 join 全 NaN → 需 `.astype(str).str.slice(0,10)` |
+| F10 symbol 前缀 | F10 用 `US_AAPL`（下划线），bars 用 `US.AAPL`（点） → factor 构建需统一 |
+| BQ streaming buffer | `insert_rows_json` 后数据在 streaming buffer ~90min 无法 UPDATE/DELETE → 因子计算需等 buffer 清空 |
+
 ---
 
 ## 十二、关键指标
 
 - **Be行**: Python ~15k 行 / Terraform ~600 行
 - **测试覆盖**: 140+ Python 测试
-- **因子库**: 39 因子注册 (BQ factor_registry)，准入标准 IC>0.05
+- **因子库**: 79 因子注册 (39 tech + 40 F10)，准入标准 IC>0.05/t-stat>3/cov>90%
 - **策略**: SimpleMomentum + MLPredStrategy (LightGBM)
 - **BQ 表**: 6 bars + 2 因子库 + 10 F10 = 18 张，分区+聚簇
 - **Git 分支**: `main` / `feature/phase2-ml-strategy` (活跃)
-- **VM**: GCE asia-east2-a, Ubuntu 24.04, python3.10
+- **VM**: GCE e2-standard-4, Ubuntu 24.04, python3.12
