@@ -613,6 +613,8 @@ Examples:
                    help="End date YYYY-MM-DD (default: yesterday)")
     p.add_argument("--symbols", type=str, nargs="*",
                    help="Symbol list (default: market default pool)")
+    p.add_argument("--universe", type=str, default="static",
+                   help="Universe source: static, plate:XXX, bq:factor_id")
     p.add_argument("--data-source", type=str, default="simulated",
                    choices=["simulated", "parquet", "sdk", "bq"],
                    help="Data source type (default: simulated)")
@@ -663,6 +665,25 @@ def _config_from_args(args) -> dict:
         start = (end_dt - timedelta(days=365)).strftime("%Y-%m-%d")
 
     symbols = args.symbols if args.symbols else default_symbols_for(market)
+
+    # Resolve --universe
+    universe_flag = getattr(args, "universe", "static") or "static"
+    if universe_flag != "static":
+        from paper.market import UniverseBuilder
+        if universe_flag.startswith("bq:"):
+            factor_id = universe_flag[3:]
+            symbols = UniverseBuilder.from_bq(market, end, factor_id)
+        elif universe_flag.startswith("plate:"):
+            plate_name = universe_flag[6:]
+            # Plate lookup: use the plate name as a symbol filter
+            # For now, resolve plate as static symbols — extend as needed
+            log.warning("Plate universe not yet backed by BQ; using static fallback")
+            symbols = default_symbols_for(market)
+        elif universe_flag == "static":
+            symbols = args.symbols if args.symbols else default_symbols_for(market)
+        else:
+            log.warning("Unknown universe flag %r; using static", universe_flag)
+            symbols = args.symbols if args.symbols else default_symbols_for(market)
 
     # Strategy kwargs from CLI overrides
     strategy_kwargs: dict = {}

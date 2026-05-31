@@ -1,4 +1,4 @@
-"""End-to-end integration test for FactorBuilder with real HK market data."""
+"""End-to-end integration test for TechFactorBuilder with real HK market data."""
 from __future__ import annotations
 
 import glob
@@ -8,13 +8,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from factors.builder import FactorBuilder
+from factors.tech_builder import TechFactorBuilder
 
 # ── Constants ─────────────────────────────────────────────────────────
 
 DATA_ROOT = "data/historical/hk/raw/hk/bars/freq=1d"
 
-# Expected columns from FactorBuilder (39 factors + 2 labels)
+# Expected columns from TechFactorBuilder (39 factors + 2 labels)
 EXPECTED_FACTOR_COLS = [
     "ret_1d", "ret_5d", "ret_10d", "ret_20d", "ret_60d", "ret_120d",
     "vol_5d", "vol_10d", "vol_20d", "vol_60d",
@@ -103,7 +103,7 @@ def _assert_expected_columns(result: pd.DataFrame):
 # ── Integration test ──────────────────────────────────────────────────
 
 def test_factor_builder_with_real_hk_data():
-    """End-to-end integration test: FactorBuilder with real HK market data."""
+    """End-to-end integration test: TechFactorBuilder with real HK market data."""
     # ── 1. Discover symbols ──────────────────────────────────────────
     all_symbols = discover_symbols(min_files=300)
     if len(all_symbols) < 3:
@@ -137,8 +137,8 @@ def test_factor_builder_with_real_hk_data():
             return pd.DataFrame()
         return df
 
-    # ── 4. Instantiate FactorBuilder ─────────────────────────────────
-    fb = FactorBuilder()
+    # ── 4. Instantiate TechFactorBuilder ─────────────────────────────────
+    fb = TechFactorBuilder()
 
     # ── 5. Build factor dataset (3 main symbols) ──────────────────────
     result = fb.build_factor_dataset(
@@ -227,11 +227,11 @@ def test_factor_builder_with_real_hk_data():
 
 def test_full_pipeline_register_evaluate_query():
     """End-to-end: register factor, evaluate, query active."""
-    from factors.builder import FactorBuilder
+    from factors.tech_builder import TechFactorBuilder
     from factors.evaluation import evaluate_factor
 
     np.random.seed(42)
-    fb = FactorBuilder()
+    fb = TechFactorBuilder()
     df = pd.DataFrame({
         "date": pd.date_range("2020-01-01", periods=500, freq="B"),
         "open": 100 + np.cumsum(np.random.randn(500) * 0.5),

@@ -75,8 +75,16 @@ class FactorRegistry:
         return True
 
     def evaluate(self, factor_id, factor_values, fwd_ret_1d, fwd_ret_5d,
-                 fwd_ret_20d, eval_period_start=None, eval_period_end=None, force=False):
-        """Evaluate a factor and write results to factor_evaluations table."""
+                 fwd_ret_20d, eval_period_start=None, eval_period_end=None, force=False,
+                 min_periods=30):
+        """Evaluate a factor and write results to factor_evaluations table.
+
+        Parameters
+        ----------
+        min_periods : int
+            Minimum number of data points required for evaluation.
+            Default 30 for daily factors; use 12 for quarterly fundamental factors.
+        """
         from factors.evaluation import evaluate_factor as _eval
 
         if not force:
@@ -85,7 +93,7 @@ class FactorRegistry:
                 logger.info("Skipping %s: evaluated recently", factor_id)
                 return None
 
-        result = _eval(factor_values, fwd_ret_1d, fwd_ret_5d, fwd_ret_20d)
+        result = _eval(factor_values, fwd_ret_1d, fwd_ret_5d, fwd_ret_20d, min_periods=min_periods)
         eval_id = f"{factor_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
         self._write_evaluation(

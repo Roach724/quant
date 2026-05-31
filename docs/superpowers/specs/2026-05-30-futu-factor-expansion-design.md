@@ -125,11 +125,26 @@ returns(6) + volatility(4) + volume(4) + momentum(8) + turnover(4) + patterns(5)
 
 ## 关键接口
 
+### Futu API 返回格式（Spike 验证 2026-05-31）
+
+| API | 返回签名 | data 类型 | 说明 |
+|-----|---------|----------|------|
+| `get_shareholders_holding_changes` | `(int, DataFrame)` | DataFrame | ✅ 标准格式 |
+| `get_research_analyst_consensus` | `(int, dict)` | 扁平 dict | 10 个 key-value |
+| `get_valuation_detail` | `(int, dict)` | 嵌套 dict | trend/market_distribution/plate_distribution 等子 dict |
+| `get_financials_statements` | `(int, dict)` | `{next_key, structure_list, report_list}` | 需 list→DataFrame 转换 |
+| `get_short_interest` | `(int, DataFrame, DataFrame)` | **3 返回值** | 多一个 aggregated_short DF |
+| `get_capital_flow` | `(int, str/-1)` | — | US 返回 -1，HK 待验证 |
+
 ### _futu_base.py（共享基类）
 
 ```python
 class FutuBaseAdapter:
-    """F10 adapter 基类 — 封装 OpenD 连接、限流、GCS 写入、BQ LOAD。"""
+    """F10 adapter 基类 — OpenD 连接、限流、symbol pool、GCS 写入。
+    
+    注意：由于 Futu F10 API 返回格式不统一（dict / DataFrame / 多返回值），
+    fetch() 返回原始类型，由各子类自行解析为 DataFrame。
+    """
 
     def __init__(self, host=None, port=None, symbols=None):
         self.host = host or os.environ.get("OPEND_HOST", "127.0.0.1")
@@ -137,12 +152,23 @@ class FutuBaseAdapter:
         self.symbols = symbols or self._default_symbols()
 
     def _get_ctx(self) -> OpenQuoteContext: ...
-    def _rate_limit(self): ...
-    def fetch(self, symbol: str) -> pd.DataFrame:  # 子类实现
+    def _rate_limit(self): ...  # 60 req/30s
+    def fetch(self, symbol: str) -> object:  # 返回原始类型（DataFrame / dict / tuple）
         raise NotImplementedError
-    def fetch_all(self) -> dict[str, pd.DataFrame]: ...
-    def write_to_gcs(self, data: dict): ...
-    def load_to_bq(self): ...
+    def fetch_all(self) -> dict[str, pd.DataFrame]: ...  # 自动限流 + 错误处理
+    def close(self): ...
+
+    # 辅助方法
+    @staticmethod
+    def _dict_to_dataframe(d: dict) -> pd.DataFrame:
+        """扁平 dict → 单行 DataFrame"""
+        return pd.DataFrame([d])
+
+    @staticmethod
+    def _report_list_to_dataframe(structure_list: list, report_list: list, next_key: str) -> pd.DataFrame:
+        """structure_list + report_list → DataFrame（用于 financials）"""
+        cols = [s["name"] for s in structure_list]
+        return pd.DataFrame(report_list, columns=cols)
 ```
 
 ### FundamentalFactorBuilder
