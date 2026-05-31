@@ -179,40 +179,32 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'collectors.adapters._f
 ```python
 """Shared base class for all F10 Futu data adapters.
 
-Each adapter extends FutuBaseAdapter, overriding fetch() for one F10 data type.
-Encapsulates: OpenD connection, rate limiting, symbol pool loading, market detection.
+Note: Futu F10 API return formats are inconsistent (DataFrame / dict / multi-value tuple).
+Each adapter's fetch() returns the raw API response; fetch_all() calls _parse() to
+normalize into a pd.DataFrame per symbol.
 """
 from __future__ import annotations
 
 import logging
 import os
 import time as _time
-from typing import Optional
+from typing import Optional, Any
 
 import pandas as pd
 from futu import OpenQuoteContext
 
 logger = logging.getLogger(__name__)
 
-_RATE_LIMIT_WINDOW = 30.0   # seconds
-_RATE_LIMIT_MAX_REQS = 60   # max requests per window
-_RATE_LIMIT_GAP = _RATE_LIMIT_WINDOW / _RATE_LIMIT_MAX_REQS  # 0.5s
+_RATE_LIMIT_GAP = 30.0 / 60  # 60 req/30s → 0.5s
 
 
 class FutuBaseAdapter:
     """Base class for F10 data adapters — one per F10 data type.
 
     Subclass and override:
-        DATA_TYPE: str — unique data type identifier (e.g. "financials")
-        fetch(symbol) → pd.DataFrame — pull data for one symbol
-
-    Usage::
-
-        class FutuFinancialsAdapter(FutuBaseAdapter):
-            DATA_TYPE = "financials"
-
-            def fetch(self, symbol: str) -> pd.DataFrame:
-                ...
+        DATA_TYPE: str — unique data type identifier
+        _parse(self, symbol: str, raw: Any) → pd.DataFrame — normalize API response
+        _call_api(self, symbol: str) → Any — call the Futu API (return raw response)
     """
 
     DATA_TYPE: str = ""
@@ -235,7 +227,6 @@ class FutuBaseAdapter:
         return self._ctx
 
     def _rate_limit(self):
-        """Enforce 60 req/30s rate limit."""
         elapsed = _time.time() - self._last_request_time
         if elapsed < _RATE_LIMIT_GAP:
             _time.sleep(_RATE_LIMIT_GAP - elapsed)
@@ -247,27 +238,48 @@ class FutuBaseAdapter:
             return "hk"
         if code.startswith("US."):
             return "us"
-        if code.startswith("SH.") or code.startswith("SZ."):
-            return "cn"
         return "unknown"
 
-    def fetch(self, symbol: str) -> pd.DataFrame:
-        """Fetch F10 data for a single symbol. Override in subclass."""
+    # ── Subclass override points ───────────────────────────────────
+
+    def _call_api(self, symbol: str) -> Any:
+        """Call the Futu API. Override in subclass."""
         raise NotImplementedError
 
+    def _parse(self, symbol: str, raw: Any) -> pd.DataFrame:
+        """Parse raw API response into a DataFrame. Override in subclass."""
+        raise NotImplementedError
+
+    # ── Helpers for parsing ────────────────────────────────────────
+
+    @staticmethod
+    def _dict_to_dataframe(d: dict) -> pd.DataFrame:
+        """Convert flat dict (like analyst consensus) to single-row DataFrame."""
+        return pd.DataFrame([d])
+
+    @staticmethod
+    def _report_list_to_dataframe(structure_list: list, report_list: list) -> pd.DataFrame:
+        """Convert financials structure_list + report_list → DataFrame."""
+        cols = [s.get("name", f"col_{i}") for i, s in enumerate(structure_list)]
+        return pd.DataFrame(report_list, columns=cols)
+
+    # ── Main fetch loop ────────────────────────────────────────────
+
     def fetch_all(self) -> dict[str, pd.DataFrame]:
-        """Fetch data for all symbols. Returns {symbol: DataFrame} dict."""
+        """Fetch and parse data for all symbols. Returns {symbol: DataFrame}."""
         results: dict[str, pd.DataFrame] = {}
         for i, sym in enumerate(self.symbols):
             try:
                 self._rate_limit()
-                df = self.fetch(sym)
+                raw = self._call_api(sym)
+                df = self._parse(sym, raw)
                 if df is not None and len(df) > 0:
+                    df["symbol"] = sym.replace(".", "_")
                     results[sym] = df
             except Exception:
-                logger.debug("Fetch failed for %s", sym, exc_info=True)
+                logger.debug("Fetch/parse failed for %s", sym, exc_info=True)
             if (i + 1) % 50 == 0:
-                logger.info("  %s: %d/%d symbols fetched", self.DATA_TYPE, i + 1, len(self.symbols))
+                logger.info("  %s: %d/%d symbols", self.DATA_TYPE, i + 1, len(self.symbols))
         return results
 
     def close(self):
@@ -279,15 +291,24 @@ class FutuBaseAdapter:
             self._ctx = None
 
     def _default_symbols(self) -> list[str]:
-        """Shared symbol pool — same as FutuStockAdapter."""
-        return [
-            "HK.00700", "HK.09988", "HK.00941", "HK.00005", "HK.00388",
-            "HK.01299", "HK.02318", "HK.01810",
-            "US.AAPL", "US.MSFT", "US.NVDA", "US.AMZN", "US.META", "US.GOOGL",
-            "US.AVGO", "US.TSLA", "US.COST", "US.NFLX", "US.ADBE", "US.AMD",
-            "US.JPM", "US.V", "US.UNH", "US.XOM", "US.MA", "US.JNJ", "US.WMT",
-            "US.PG", "US.HD", "US.BAC", "US.CVX",
-        ]
+        """Load full symbol pool from Futu API (same as existing collectors)."""
+        try:
+            from collectors.adapters.futu_stock_adapter import FutuStockAdapter
+            adapter = FutuStockAdapter(host=self.host, port=self.port)
+            us = adapter.fetch_supported_symbols("us")
+            hk = adapter.fetch_supported_symbols("hk")
+            adapter.close()
+            return us + hk  # ~234 + ~15
+        except Exception:
+            logger.warning("Cannot load symbols from Futu; using static fallback")
+            return [
+                "HK.00700", "HK.09988", "HK.00941", "HK.00005", "HK.00388",
+                "HK.01299", "HK.02318", "HK.01810",
+                "US.AAPL", "US.MSFT", "US.NVDA", "US.AMZN", "US.META", "US.GOOGL",
+                "US.AVGO", "US.TSLA", "US.COST", "US.NFLX", "US.ADBE", "US.AMD",
+                "US.JPM", "US.V", "US.UNH", "US.XOM", "US.MA", "US.JNJ", "US.WMT",
+                "US.PG", "US.HD", "US.BAC", "US.CVX",
+            ]
 ```
 
 - [ ] **Step 4: Run tests to verify pass**
@@ -314,142 +335,92 @@ Each adapter follows this pattern (shown once, repeated for each):
 - Create: `collectors/adapters/futu_financials_adapter.py`
 - Create: `collectors/tests/test_futu_financials_adapter.py`
 
-- [ ] **Step 1: Write failing test**
+**API behavior (spike-verified):** `get_financials_statements()` returns `{next_key, structure_list, report_list}` — structure_list defines column names, report_list contains data rows. Uses next_key for pagination.
+
+- [ ] **Step 1: Write adapter**
 
 ```python
-# collectors/tests/test_futu_financials_adapter.py
-from unittest.mock import MagicMock, patch
-import pandas as pd
-import pytest
-from collectors.adapters.futu_financials_adapter import FutuFinancialsAdapter
+"""Futu financial statements adapter.
 
-
-def test_adapter_has_data_type():
-    assert FutuFinancialsAdapter.DATA_TYPE == "financials"
-
-
-def test_build_request_payload():
-    adapter = FutuFinancialsAdapter(symbols=["HK.00700"])
-    payload = adapter._build_request("HK.00700", 1, 10)
-    assert payload["code"] == "HK.00700"
-    assert payload["statement_type"] == 1  # Income
-
-
-@patch("collectors.adapters.futu_financials_adapter.OpenQuoteContext")
-def test_fetch_returns_dataframe(mock_ctx):
-    pass  # VCR-based integration test — skip in unit tests
-```
-
-- [ ] **Step 2: Write adapter implementation**
-
-```python
-"""Futu financial statements adapter — income, balance, cash flow, key metrics."""
-import logging
-from typing import Optional
-
+API returns {next_key, structure_list, report_list}.
+structure_list: [{name, type, ...}, ...] — column definitions
+report_list: [[val1, val2, ...], ...] — data rows
+"""
 import pandas as pd
 from futu import RET_OK
-
 from collectors.adapters._futu_base import FutuBaseAdapter
 
-logger = logging.getLogger(__name__)
+STATEMENT_TYPES = {"income": 1, "balance_sheet": 2, "cash_flow": 3, "main_index": 4}
 
 
 class FutuFinancialsAdapter(FutuBaseAdapter):
-    """Fetch financial statement data via get_financials_statements.
-
-    Pulls all 4 statement types for each symbol:
-        1=Income, 2=BalanceSheet, 3=CashFlow, 4=MainIndex (key metrics)
-
-    Default: annual reports + single quarter (financial_type=10).
-    """
-
     DATA_TYPE = "financials"
-
-    STATEMENT_TYPES = {
-        "income": 1,
-        "balance_sheet": 2,
-        "cash_flow": 3,
-        "main_index": 4,
-    }
 
     def __init__(self, host=None, port=None, symbols=None, financial_type=10):
         super().__init__(host=host, port=port, symbols=symbols)
-        self.financial_type = financial_type  # 10 = single quarter + annual
+        self.financial_type = financial_type
 
-    def _build_request(self, code: str, statement_type: int, num: int = 50):
-        return {
-            "code": code,
-            "statement_type": statement_type,
-            "financial_type": self.financial_type,
-            "num": num,
-        }
-
-    def fetch(self, symbol: str) -> pd.DataFrame:
-        """Fetch all 4 financial statement types for one symbol."""
+    def _call_api(self, symbol: str):
+        """Fetch all 4 statement types, paginate with next_key."""
         ctx = self._get_ctx()
-        all_frames: list[pd.DataFrame] = []
-
-        for stype_name, stype_id in self.STATEMENT_TYPES.items():
+        all_rows: list[dict] = []
+        for stype_name, stype_id in STATEMENT_TYPES.items():
             next_key = None
             while True:
                 self._rate_limit()
                 ret, data = ctx.get_financials_statements(
-                    symbol,
-                    statement_type=stype_id,
-                    financial_type=self.financial_type,
-                    next_key=next_key,
-                    num=50,
+                    symbol, statement_type=stype_id,
+                    financial_type=self.financial_type, next_key=next_key, num=50,
                 )
-                if ret != RET_OK:
-                    logger.warning("Financials fetch failed %s %s: %s", symbol, stype_name, data)
+                if ret != RET_OK or not isinstance(data, dict):
                     break
-                if data is not None and len(data) > 0:
-                    data["statement_type"] = stype_name
-                    all_frames.append(data)
-                next_key = data.attrs.get("next_key") if data is not None and hasattr(data, "attrs") else None
-                if not next_key or next_key == "-1":
+                sl = data.get("structure_list", [])
+                rl = data.get("report_list", [])
+                if sl and rl:
+                    cols = [s.get("name", f"c{i}") for i, s in enumerate(sl)]
+                    for row in rl:
+                        all_rows.append(dict(zip(cols, row)))
+                nk = data.get("next_key", "-1")
+                if not nk or nk == "-1":
                     break
+                next_key = nk
 
-        if not all_frames:
+        if not all_rows:
             return pd.DataFrame()
-        combined = pd.concat(all_frames, ignore_index=True)
-        combined["symbol"] = symbol
-        combined["fetched_at"] = pd.Timestamp.now().isoformat()
-        return combined
+        df = pd.DataFrame(all_rows)
+        df["statement_type"] = stype_name if len(STATEMENT_TYPES) == 1 else None
+        return df
+
+    def _parse(self, symbol: str, raw) -> pd.DataFrame:
+        """_call_api already returns a DataFrame directly."""
+        return raw if isinstance(raw, pd.DataFrame) else pd.DataFrame()
 ```
 
-- [ ] **Step 3: Run tests**
-
-Run: `pytest collectors/tests/test_futu_financials_adapter.py -v`
-Expected: 2 unit tests PASS
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 2: Test + Commit**
 
 ```bash
-git add collectors/adapters/futu_financials_adapter.py collectors/tests/test_futu_financials_adapter.py
-git commit -m "feat: add FutuFinancialsAdapter — annual + quarterly financial statements"
+pytest collectors/tests/test_futu_financials_adapter.py -v
+git add collectors/adapters/futu_financials_adapter.py collectors/tests/
+git commit -m "feat: add FutuFinancialsAdapter — structure_list + report_list parsing"
 ```
 
 ---
 
 #### Task 4: FutuValuationAdapter
 
-**Files:**
-- Create: `collectors/adapters/futu_valuation_adapter.py`
-- Create: `collectors/tests/test_futu_valuation_adapter.py`
+**API behavior (spike-verified):** Returns dict with keys `valuation_type, last_update_time, trend, market_distribution, plate_distribution, profit_growth_rate`. Each sub-key is itself a dict (trend → {date: value}).
 
 - [ ] **Step 1: Write adapter**
 
 ```python
-"""Futu valuation adapter — PE/PB/PS trends and percentiles."""
-import logging
-from typing import Optional
+"""Futu valuation adapter — PE/PB/PS trends and distributions.
+
+API returns nested dict: {valuation_type, trend: {date: value}, ...}
+We flatten trend dicts into (date, value) rows.
+"""
 import pandas as pd
 from futu import RET_OK
 from collectors.adapters._futu_base import FutuBaseAdapter
-
-logger = logging.getLogger(__name__)
 
 VALUATION_TYPES = {"pe": 1, "pb": 2, "ps": 3}
 INTERVAL_TYPES = {3: "1y", 4: "3y", 6: "5y"}
@@ -458,264 +429,229 @@ INTERVAL_TYPES = {3: "1y", 4: "3y", 6: "5y"}
 class FutuValuationAdapter(FutuBaseAdapter):
     DATA_TYPE = "valuation"
 
-    def fetch(self, symbol: str) -> pd.DataFrame:
+    def _call_api(self, symbol: str):
+        """Fetch all valuation type × interval combinations."""
         ctx = self._get_ctx()
-        all_frames: list[pd.DataFrame] = []
-
+        results: dict[str, dict] = {}
         for vt_name, vt_id in VALUATION_TYPES.items():
-            for interval_id, interval_label in INTERVAL_TYPES.items():
+            for int_id, int_label in INTERVAL_TYPES.items():
                 self._rate_limit()
                 ret, data = ctx.get_valuation_detail(
-                    symbol, valuation_type=vt_id, interval_type=interval_id,
+                    symbol, valuation_type=vt_id, interval_type=int_id,
                 )
-                if ret != RET_OK:
-                    logger.warning("Valuation fetch failed %s %s/%s: %s", symbol, vt_name, interval_label, data)
-                    continue
-                if data is not None and len(data) > 0:
-                    data["valuation_type"] = vt_name
-                    data["interval_type"] = interval_label
-                    all_frames.append(data)
+                if ret == RET_OK and isinstance(data, dict):
+                    results[f"{vt_name}_{int_label}"] = data
+        return results
 
-        if not all_frames:
-            return pd.DataFrame()
-        combined = pd.concat(all_frames, ignore_index=True)
-        combined["symbol"] = symbol
-        combined["fetched_at"] = pd.Timestamp.now().isoformat()
-        return combined
+    def _parse(self, symbol: str, raw: dict) -> pd.DataFrame:
+        """Flatten nested valuation dict → DataFrame with (date, valuation_type, interval, value)."""
+        rows: list[dict] = []
+        for key, data in raw.items():
+            vt, interval = key.split("_", 1)
+            trend = data.get("trend", {})
+            for date_key, value in trend.items():
+                rows.append({
+                    "valuation_type": vt, "interval": interval,
+                    "date": date_key, "value": value,
+                })
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
 ```
 
-- [ ] **Step 2: Unit test**
-
-```python
-# collectors/tests/test_futu_valuation_adapter.py
-from collectors.adapters.futu_valuation_adapter import FutuValuationAdapter
-
-def test_data_type():
-    assert FutuValuationAdapter.DATA_TYPE == "valuation"
-
-def test_symbols_default():
-    adapter = FutuValuationAdapter()
-    assert "US.AAPL" in adapter.symbols
-```
-
-- [ ] **Step 3: Run tests and commit**
+- [ ] **Step 2: Test + Commit**
 
 ```bash
-pytest collectors/tests/test_futu_valuation_adapter.py -v
-git add collectors/adapters/futu_valuation_adapter.py collectors/tests/test_futu_valuation_adapter.py
-git commit -m "feat: add FutuValuationAdapter — PE/PB/PS trends and percentiles"
+git add collectors/adapters/futu_valuation_adapter.py collectors/tests/
+git commit -m "feat: add FutuValuationAdapter — nested dict PE/PB/PS trend parsing"
 ```
 
 ---
 
 #### Task 5: FutuShortInterestAdapter
 
-**Files:**
-- Create: `collectors/adapters/futu_short_interest_adapter.py`
-- Create: `collectors/tests/test_futu_short_interest_adapter.py`
+**API behavior (spike-verified):** `get_short_interest()` returns **3 values**: `(ret, short_interest_df, aggregated_short_df)`. The aggregated_short_df may be empty. Also `get_daily_short_volume()` returns standard `(ret, DataFrame)`.
 
 - [ ] **Step 1: Write adapter**
 
 ```python
-"""Futu short interest adapter — short positions + daily short volume."""
-import logging
-from typing import Optional
+"""Futu short interest adapter — short positions + daily short volume.
+
+NOTE: get_short_interest returns 3 values (ret, df1, df2), not the usual 2!
+"""
 import pandas as pd
 from futu import RET_OK
 from collectors.adapters._futu_base import FutuBaseAdapter
-
-logger = logging.getLogger(__name__)
 
 
 class FutuShortInterestAdapter(FutuBaseAdapter):
     DATA_TYPE = "short_interest"
 
-    def fetch(self, symbol: str) -> pd.DataFrame:
+    def _call_api(self, symbol: str):
         ctx = self._get_ctx()
         frames: list[pd.DataFrame] = []
 
-        # Short interest
+        # Short interest — 3 return values!
         self._rate_limit()
-        next_key = None
-        while True:
-            ret, data = ctx.get_short_interest(symbol, next_key=next_key, num=20)
-            if ret != RET_OK:
-                logger.warning("Short interest fetch failed %s: %s", symbol, data)
-                break
-            if data is not None and len(data) > 0:
-                data["data_type"] = "short_interest"
-                frames.append(data)
-            next_key = data.attrs.get("next_key") if hasattr(data, "attrs") else None
-            if not next_key or next_key == "-1":
-                break
+        result = ctx.get_short_interest(symbol, num=20)
+        ret = result[0]
+        if ret == RET_OK:
+            si_df = result[1] if len(result) > 1 else pd.DataFrame()
+            agg_df = result[2] if len(result) > 2 else pd.DataFrame()
+            if isinstance(si_df, pd.DataFrame) and len(si_df) > 0:
+                si_df["data_type"] = "short_interest"
+                frames.append(si_df)
+            if isinstance(agg_df, pd.DataFrame) and len(agg_df) > 0:
+                agg_df["data_type"] = "aggregated_short"
+                frames.append(agg_df)
 
-        # Daily short volume
+        # Daily short volume — standard 2-value return
         self._rate_limit()
-        next_key = None
-        while True:
-            ret, data = ctx.get_daily_short_volume(symbol, next_key=next_key, num=20)
-            if ret != RET_OK:
-                logger.warning("Daily short volume fetch failed %s: %s", symbol, data)
-                break
-            if data is not None and len(data) > 0:
-                data["data_type"] = "daily_short_volume"
-                frames.append(data)
-            next_key = data.attrs.get("next_key") if hasattr(data, "attrs") else None
-            if not next_key or next_key == "-1":
-                break
+        ret, data = ctx.get_daily_short_volume(symbol, num=20)
+        if ret == RET_OK and isinstance(data, pd.DataFrame) and len(data) > 0:
+            data["data_type"] = "daily_short_volume"
+            frames.append(data)
 
-        if not frames:
+        return frames
+
+    def _parse(self, symbol: str, raw: list) -> pd.DataFrame:
+        if not raw:
             return pd.DataFrame()
-        combined = pd.concat(frames, ignore_index=True)
-        combined["symbol"] = symbol
-        combined["fetched_at"] = pd.Timestamp.now().isoformat()
-        return combined
+        return pd.concat(raw, ignore_index=True)
 ```
 
 - [ ] **Step 2: Test + Commit**
 
-Same pattern as Task 4.
+```bash
+git add collectors/adapters/futu_short_interest_adapter.py collectors/tests/
+git commit -m "feat: add FutuShortInterestAdapter — 3-return-value short interest API"
+```
 
 ---
 
 #### Task 6: FutuCapitalFlowAdapter
 
-**Files:**
-- Create: `collectors/adapters/futu_capital_flow_adapter.py`
-- Create: `collectors/tests/test_futu_capital_flow_adapter.py`
+**API behavior (spike-verified):** `get_capital_flow()` returns `-1` for US stocks — capital flow data appears to be HK-market only. Use `get_capital_distribution()` as fallback.
 
-- [ ] **Step 1: Write adapter**
+- [ ] **Step 1: Write adapter (HK-only, graceful skip for US)**
 
 ```python
-"""Futu capital flow adapter — capital flow + capital distribution."""
-import logging
+"""Futu capital flow adapter — capital distribution data.
+
+NOTE: get_capital_flow() returns -1 for US stocks (HK-only).
+This adapter uses get_capital_distribution() which works for both.
+"""
 import pandas as pd
 from futu import RET_OK
 from collectors.adapters._futu_base import FutuBaseAdapter
-
-logger = logging.getLogger(__name__)
 
 
 class FutuCapitalFlowAdapter(FutuBaseAdapter):
     DATA_TYPE = "capital_flow"
 
-    def fetch(self, symbol: str) -> pd.DataFrame:
+    def _call_api(self, symbol: str):
         ctx = self._get_ctx()
-        frames: list[pd.DataFrame] = []
-
-        # Capital flow (intraday)
-        self._rate_limit()
-        ret, data = ctx.get_capital_flow(symbol, period_type=1)
-        if ret == RET_OK and data is not None and len(data) > 0:
-            data["data_type"] = "capital_flow"
-            frames.append(data)
-
-        # Capital distribution
         self._rate_limit()
         ret, data = ctx.get_capital_distribution(symbol)
-        if ret == RET_OK and data is not None and len(data) > 0:
-            data["data_type"] = "capital_distribution"
-            frames.append(data)
+        return data if ret == RET_OK and isinstance(data, pd.DataFrame) else pd.DataFrame()
 
-        if not frames:
-            return pd.DataFrame()
-        combined = pd.concat(frames, ignore_index=True)
-        combined["symbol"] = symbol
-        combined["fetched_at"] = pd.Timestamp.now().isoformat()
-        return combined
+    def _parse(self, symbol: str, raw) -> pd.DataFrame:
+        return raw if isinstance(raw, pd.DataFrame) else pd.DataFrame()
 ```
 
 - [ ] **Step 2: Test + Commit**
+
+```bash
+git add collectors/adapters/futu_capital_flow_adapter.py collectors/tests/
+git commit -m "feat: add FutuCapitalFlowAdapter — capital distribution (HK+US)"
+```
 
 ---
 
 #### Task 7: FutuAnalystAdapter
 
-**Files:**
-- Create: `collectors/adapters/futu_analyst_adapter.py`
-- Create: `collectors/tests/test_futu_analyst_adapter.py`
+**API behavior (spike-verified):** Returns flat dict: `{highest, average, lowest, rating, total, buy, hold, sell, update_time}`. Easy to convert to 1-row DataFrame.
 
 - [ ] **Step 1: Write adapter**
 
 ```python
-"""Futu analyst consensus adapter — ratings and target prices."""
-import logging
+"""Futu analyst consensus adapter — ratings and target prices.
+
+API returns flat dict: {highest, average, lowest, rating, total, buy, hold, sell}.
+"""
 import pandas as pd
 from futu import RET_OK
 from collectors.adapters._futu_base import FutuBaseAdapter
-
-logger = logging.getLogger(__name__)
 
 
 class FutuAnalystAdapter(FutuBaseAdapter):
     DATA_TYPE = "analyst"
 
-    def fetch(self, symbol: str) -> pd.DataFrame:
+    def _call_api(self, symbol: str):
         ctx = self._get_ctx()
         self._rate_limit()
         ret, data = ctx.get_research_analyst_consensus(symbol)
-        if ret != RET_OK:
-            logger.warning("Analyst fetch failed %s: %s", symbol, data)
+        return data if ret == RET_OK and isinstance(data, dict) else {}
+
+    def _parse(self, symbol: str, raw: dict) -> pd.DataFrame:
+        if not raw:
             return pd.DataFrame()
-        if data is None or len(data) == 0:
-            return pd.DataFrame()
-        data["symbol"] = symbol
-        data["fetched_at"] = pd.Timestamp.now().isoformat()
-        return data
+        return self._dict_to_dataframe(raw)
 ```
 
 - [ ] **Step 2: Test + Commit**
+
+```bash
+git add collectors/adapters/futu_analyst_adapter.py collectors/tests/
+git commit -m "feat: add FutuAnalystAdapter — flat dict consensus parsing"
+```
 
 ---
 
 #### Task 8: FutuShareholderAdapter
 
-**Files:**
-- Create: `collectors/adapters/futu_shareholder_adapter.py`
-- Create: `collectors/tests/test_futu_shareholder_adapter.py`
+**API behavior (spike-verified):** `get_shareholders_holding_changes` returns standard `(ret, DataFrame)`. Works for both US and HK.
 
 - [ ] **Step 1: Write adapter**
 
 ```python
 """Futu shareholder adapter — holding changes + institutional holdings."""
-import logging
 import pandas as pd
 from futu import RET_OK
 from collectors.adapters._futu_base import FutuBaseAdapter
-
-logger = logging.getLogger(__name__)
 
 
 class FutuShareholderAdapter(FutuBaseAdapter):
     DATA_TYPE = "shareholder"
 
-    def fetch(self, symbol: str) -> pd.DataFrame:
+    def _call_api(self, symbol: str):
         ctx = self._get_ctx()
         frames: list[pd.DataFrame] = []
 
-        # Holding changes
         self._rate_limit()
         ret, data = ctx.get_shareholders_holding_changes(symbol, num=20)
-        if ret == RET_OK and data is not None and len(data) > 0:
+        if ret == RET_OK and isinstance(data, pd.DataFrame) and len(data) > 0:
             data["data_type"] = "holding_changes"
             frames.append(data)
 
-        # Institutional holdings
         self._rate_limit()
         ret, data = ctx.get_shareholders_institutional(symbol, num=20)
-        if ret == RET_OK and data is not None and len(data) > 0:
+        if ret == RET_OK and isinstance(data, pd.DataFrame) and len(data) > 0:
             data["data_type"] = "institutional"
             frames.append(data)
 
-        if not frames:
+        return frames
+
+    def _parse(self, symbol: str, raw: list) -> pd.DataFrame:
+        if not raw:
             return pd.DataFrame()
-        combined = pd.concat(frames, ignore_index=True)
-        combined["symbol"] = symbol
-        combined["fetched_at"] = pd.Timestamp.now().isoformat()
-        return combined
+        return pd.concat(raw, ignore_index=True)
 ```
 
 - [ ] **Step 2: Test + Commit**
+
+```bash
+git add collectors/adapters/futu_shareholder_adapter.py collectors/tests/
+git commit -m "feat: add FutuShareholderAdapter — holding changes + institutional"
+```
 
 ---
 
@@ -806,29 +742,36 @@ CREATE TABLE IF NOT EXISTS `deductive-notch-495015-c2.quant.hk_shareholder`
 (LIKE `deductive-notch-495015-c2.quant.us_shareholder`);
 ```
 
-- [ ] **Step 2: Write fundamental_collector.py**
+- [ ] **Step 2: Write fundamental_collector.py (GCS writer + BQ loader)**
 
 ```python
 #!/usr/bin/env python3
-"""F10 fundamental data collector — cron entry point.
+"""F10 fundamental data collector — GCS writer (same pattern as K-line collectors).
+
+Writes Parquet to: gs://{bucket}/raw/{market}/f10/{data_type}/...
+BQ Loader cron picks up from GCS via the existing bigquery_loader pattern.
 
 Usage:
     python collectors/fundamental_collector.py --source financials --market us
     python collectors/fundamental_collector.py --source valuation --market hk
     python collectors/fundamental_collector.py --source all --market us
-
-Env: OPEND_HOST, OPEND_PORT, GCP_PROJECT
 """
 import argparse
 import logging
 import os
 import sys
 from pathlib import Path
+from datetime import datetime, timezone
 
-# Project root
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
+from collectors.storage import (
+    build_gcs_path, dataframe_to_parquet_bytes,
+)
+from google.cloud import storage
+
+from collectors.adapters._futu_base import FutuBaseAdapter
 from collectors.adapters.futu_financials_adapter import FutuFinancialsAdapter
 from collectors.adapters.futu_valuation_adapter import FutuValuationAdapter
 from collectors.adapters.futu_short_interest_adapter import FutuShortInterestAdapter
@@ -853,9 +796,14 @@ def main():
     parser.add_argument("--source", choices=list(ADAPTERS.keys()) + ["all"], required=True)
     parser.add_argument("--market", choices=["us", "hk"], default="us")
     parser.add_argument("--symbols", nargs="*", help="Override default symbol pool")
+    parser.add_argument("--gcs-bucket", default=os.environ.get("GCS_BUCKET", ""))
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+    if not args.gcs_bucket:
+        log.error("GCS_BUCKET env var required")
+        sys.exit(1)
 
     sources = list(ADAPTERS.keys()) if args.source == "all" else [args.source]
 
@@ -867,24 +815,55 @@ def main():
             data = adapter.fetch_all()
             log.info("  %s: got data for %d symbols", source, len(data))
             if data:
-                _save_data(data, source, args.market)
+                _write_to_gcs(data, source, args.market, args.gcs_bucket)
         finally:
             adapter.close()
 
 
-def _save_data(data: dict, source: str, market: str):
-    """Stage data for BigQuery LOAD."""
-    import pandas as pd
-    output_dir = Path(os.environ.get("F10_STAGING_DIR", f"data/f10_staging/{market}/{source}"))
-    output_dir.mkdir(parents=True, exist_ok=True)
+def _write_to_gcs(data: dict, source: str, market: str, bucket_name: str):
+    """Write F10 data to GCS Parquet, same pattern as K-line collectors."""
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    now = datetime.now(timezone.utc)
+
+    paths = []
     for sym, df in data.items():
-        safe_sym = sym.replace(".", "_").replace("/", "_")
-        df.to_parquet(output_dir / f"{safe_sym}.parquet", index=False)
-    log.info("  Saved %d files to %s", len(data), output_dir)
+        if df.empty:
+            continue
+        # Same GCS path pattern: raw/{market}/f10/{data_type}/...
+        path = build_gcs_path(market, f"f10/{source}", "daily", sym, now)
+        blob = bucket.blob(path)
+        blob.upload_from_string(
+            dataframe_to_parquet_bytes(df),
+            content_type="application/octet-stream",
+        )
+        paths.append(f"gs://{bucket_name}/{path}")
+
+    log.info("  Wrote %d files to gs://%s/raw/%s/f10/%s/", len(paths), bucket_name, market, source)
 
 
 if __name__ == "__main__":
     main()
+```
+
+- [ ] **Step 2b: Add F10 BQ loader cron entries**
+
+Add to quant crontab (similar to existing BQ loaders):
+
+```cron
+# F10 Data Loaders
+# Valuation — daily 00:30 UTC
+30 0 * * * cd /opt/quant && /opt/quant/scripts/cron_wrapper.sh bq_loader_f10_valuation env GCS_BUCKET=deductive-notch-495015-c2-quant-data GCP_PROJECT=deductive-notch-495015-c2 MARKET=us FREQUENCY=daily TABLE=us_valuation python3.12 -m bigquery_loader.main
+# Short Interest — daily 00:45 UTC
+45 0 * * * cd /opt/quant && /opt/quant/scripts/cron_wrapper.sh bq_loader_f10_short env GCS_BUCKET=deductive-notch-495015-c2-quant-data GCP_PROJECT=deductive-notch-495015-c2 MARKET=us FREQUENCY=daily TABLE=us_short_interest python3.12 -m bigquery_loader.main
+# Capital Flow — daily 01:00 UTC
+0 1 * * * cd /opt/quant && /opt/quant/scripts/cron_wrapper.sh bq_loader_f10_flow env GCS_BUCKET=deductive-notch-495015-c2-quant-data GCP_PROJECT=deductive-notch-495015-c2 MARKET=us FREQUENCY=daily TABLE=us_capital_flow python3.12 -m bigquery_loader.main
+# Financials — weekly Monday 00:00 UTC
+0 0 * * 1 cd /opt/quant && /opt/quant/scripts/cron_wrapper.sh bq_loader_f10_fin env GCS_BUCKET=deductive-notch-495015-c2-quant-data GCP_PROJECT=deductive-notch-495015-c2 MARKET=us FREQUENCY=daily TABLE=us_financials python3.12 -m bigquery_loader.main
+# Analyst — weekly Monday 00:15 UTC
+15 0 * * 1 cd /opt/quant && /opt/quant/scripts/cron_wrapper.sh bq_loader_f10_analyst env GCS_BUCKET=deductive-notch-495015-c2-quant-data GCP_PROJECT=deductive-notch-495015-c2 MARKET=us FREQUENCY=daily TABLE=us_analyst python3.12 -m bigquery_loader.main
+# Shareholder — weekly Monday 00:30 UTC
+30 0 * * 1 cd /opt/quant && /opt/quant/scripts/cron_wrapper.sh bq_loader_f10_shrhldr env GCS_BUCKET=deductive-notch-495015-c2-quant-data GCP_PROJECT=deductive-notch-495015-c2 MARKET=us FREQUENCY=daily TABLE=us_shareholder python3.12 -m bigquery_loader.main
 ```
 
 - [ ] **Step 3: Commit**
