@@ -47,7 +47,7 @@ TABLE_TO_KEY = {
 F10_TABLES = list(TABLE_TO_KEY.keys())
 
 # Tables with JSON data column (as opposed to direct columnar schema)
-JSON_SOURCE_TABLES = {"us_financials", "us_analyst", "us_capital_flow", "us_shareholder"}
+JSON_SOURCE_TABLES = {"us_analyst", "us_capital_flow", "us_shareholder"}
 
 # Timestamp column per table: (col_name, bq_date_expr_template or None for DATE(col))
 TS_COL = {
