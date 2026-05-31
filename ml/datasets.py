@@ -147,7 +147,7 @@ class DatasetManager:
         """Resolve feature names and label to BQ factor_ids.
 
         - If *features* is ``"from_registry_top_N"``, query top N.
-        - If a feature name does not exist in BQ, prepend ``{market}_`` and retry.
+        - Feature names are kept as-is (BQ factor_id format, e.g. us_ret_5d).
         - Returns (list_of_output_column_names, label_output_column_name).
         """
         if isinstance(features, str) and features.startswith("from_registry_top_"):
@@ -155,35 +155,13 @@ class DatasetManager:
                 n = int(features.split("_")[-1])
             except ValueError:
                 n = 15
-            raw = cls._top_features_from_registry(bq_client, n, exclude={label})
-            # Strip market prefix for output column names
-            output_features = []
-            for fid in raw:
-                if fid.startswith(f"{market}_"):
-                    output_features.append(fid[len(market) + 1 :])
-                else:
-                    output_features.append(fid)
-            if label.startswith(f"{market}_"):
-                output_label = label[len(market) + 1 :]
-            else:
-                output_label = label
+            output_features = cls._top_features_from_registry(bq_client, n, exclude={label})
+            output_label = label
             return output_features, output_label
 
-        # Direct feature list
-        # Determine output column names (strip market prefix if present)
-        output_features = []
-        for f in features:
-            if f.startswith(f"{market}_"):
-                output_features.append(f[len(market) + 1 :])
-            else:
-                output_features.append(f)
-
-        if label.startswith(f"{market}_"):
-            output_label = label[len(market) + 1 :]
-        else:
-            output_label = label
-
-        return output_features, output_label
+        # Direct feature list — keep as-is
+        output_label = label
+        return list(features), output_label
 
     @classmethod
     def _resolve_factor_id(

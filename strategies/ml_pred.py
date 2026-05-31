@@ -91,6 +91,8 @@ class MLPredStrategy(Strategy):
             # Also store the trainer for predict
             from ml.trainer import ModelTrainer
             self._model_trainer = ModelTrainer(factor_path=None)
+            # Set feature_cols so predict() finds the right columns
+            self._model_trainer.feature_cols = self._features
             logger.info("Loaded %s v%d (%d features)",
                         bundle.name, bundle.version, len(bundle.features))
             self._trained = True
@@ -176,16 +178,19 @@ class MLPredStrategy(Strategy):
     def _predict_scores(self, ctx, bar: int, symbols: list[str]) -> dict[str, float]:
         """Predict expected return for each symbol at current bar."""
         from factors.tech_builder import TechFactorBuilder
-        from factors.registry import FactorRegistry
 
-        registry = FactorRegistry()
-        active = registry.get_active(self.market)
-        if active.empty:
-            factor_names = ["ret_1d", "ret_5d", "vol_5d", "vol_20d", "rsi_14"]
-        else:
-            top = active.head(self.factor_top_n)
-            factor_names = [f.replace(f"{self.market}_", "", 1)
-                          for f in top["factor_id"].tolist()]
+        # Use the EXACT features the model was trained on
+        factor_names = self._features if self._features else []
+        if not factor_names:
+            # Fallback: use registry top N
+            from factors.registry import FactorRegistry
+            registry = FactorRegistry()
+            active = registry.get_active(self.market)
+            if active.empty:
+                factor_names = ["ret_1d", "ret_5d", "vol_5d", "vol_20d", "rsi_14"]
+            else:
+                top = active.head(self.factor_top_n)
+                factor_names = top["factor_id"].tolist()
 
         # Build OHLCV history window per symbol for factor computation
         window = 100
