@@ -161,6 +161,9 @@ class PaperRunner:
         if source in ("sdk", "bq"):
             return self._sdk_data(symbols, start, end)
 
+        if source == "bq_5m":
+            return self._bq_5m_data(symbols, start, end)
+
         raise ValueError(f"Unknown data source: {source!r}")
 
     def _simulated_data(self, symbols: list[str], start: str, end: str) -> DataFrameSource:
@@ -278,6 +281,24 @@ class PaperRunner:
 
         log.info("BQ data: %d bars x %d symbols", len(close), len(symbols))
         return DataFrameSource(close=close, open=open_df, high=high, low=low, volume=volume)
+
+    def _bq_5m_data(self, symbols: list[str], start: str, end: str) -> DataFrameSource:
+        """Load 5-minute OHLCV from BigQuery for paper-trading replay.
+
+        Uses BigQuery5mSource.load_all() to query us_bars_5m and return
+        wide-format DataFrameSource.
+        """
+        from engine.data import BigQuery5mSource
+
+        # Use US. prefix for BQ query
+        bq_symbols = [f"US.{s}" for s in symbols]
+        src = BigQuery5mSource(
+            market=self.market,
+            start=start,
+            end=end,
+            symbols=bq_symbols,
+        )
+        return src.load_all()
 
     # ── Main run loop ──
 
