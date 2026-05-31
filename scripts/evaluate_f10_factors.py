@@ -263,7 +263,7 @@ def compute_quarterly_fwd_ret(f10_dates: pd.DataFrame, horizon_days: int = 63) -
     client = bigquery.Client(project=PROJECT)
 
     # Get date range from F10 data
-    min_date = f10_dates["date"].min()
+    f10_dates = f10_dates.copy(); f10_dates["date"] = pd.to_datetime(f10_dates["date"]); min_date = f10_dates["date"].min()
     max_date = f10_dates["date"].max()
     # Extend range to cover forward window
     end_date = pd.to_datetime(max_date) + datetime.timedelta(days=horizon_days + 30)
