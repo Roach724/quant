@@ -164,7 +164,9 @@ def compute_tech_factors(
     all_frames: list[pd.DataFrame] = []
 
     for sym, group in df.groupby("symbol"):
-        stock_df = group.sort_values("date").reset_index(drop=True)
+        stock_df = group.sort_values("date")
+        stock_df["date"] = pd.to_datetime(stock_df["date"])
+        stock_df = stock_df.drop_duplicates(subset=["date"]).reset_index(drop=True)
         try:
             factors = tfb.compute_factors(stock_df)
             if factors is not None and not factors.empty:
