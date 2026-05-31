@@ -337,15 +337,14 @@ def compute_quarterly_fwd_ret(f10_dates: pd.DataFrame, horizon_days: int = 63) -
                 "fwd_ret_20d": fwd20,
                 "fwd_ret_quarterly": fwd_ret,
             })
-    
-result = pd.DataFrame(results)
+        
+    result = pd.DataFrame(results)
     if not result.empty:
         result["date"] = pd.DatetimeIndex(pd.to_datetime(result["date"]))
 
     log.info("Quarterly fwd_ret: %d rows for %d symbols from %d F10 dates",
              len(result), result["symbol"].nunique(), len(f10_dates["date"].unique()))
     return result
-
 
 def compute_ic(factor_values: pd.Series, fwd_ret: pd.Series) -> tuple[float, float, int]:
     """Calculate Spearman rank IC, t-statistic, and sample count.
