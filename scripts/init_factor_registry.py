@@ -1,5 +1,5 @@
 #!/usr/bin/env python3.12
-"""Seed the factor_registry BigQuery table with existing FactorBuilder factors.
+"""Seed the factor_registry BigQuery table with existing TechFactorBuilder factors.
 
 Run once:
     python3.12 scripts/init_factor_registry.py
@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
-from factors.builder import FactorBuilder
+from factors.tech_builder import TechFactorBuilder
 from factors.registry import FactorRegistry
 
 CATEGORY_MAP = {
@@ -48,8 +48,8 @@ def classify_factor(name: str) -> str:
 
 
 def main():
-    # Initialize FactorBuilder and compute to populate factor_names
-    fb = FactorBuilder()
+    # Initialize TechFactorBuilder and compute to populate factor_names
+    fb = TechFactorBuilder()
     dummy = pd.DataFrame({
         "date": pd.date_range("2024-01-01", periods=100, freq="B"),
         "open": 100.0,
@@ -71,9 +71,9 @@ def main():
             name=name.replace("_", " ").title(),
             market="us",
             source="Alpha158",
-            formula=f"factors/builder.py::FactorBuilder.compute_factors (group: {category})",
+            formula=f"factors/builder.py::TechFactorBuilder.compute_factors (group: {category})",
             category=category,
-            description=f"Auto-registered from FactorBuilder. Category: {category}",
+            description=f"Auto-registered from TechFactorBuilder. Category: {category}",
         )
         if ok:
             registered += 1

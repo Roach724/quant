@@ -1,10 +1,10 @@
-"""End-to-end integration test: FactorBuilder → ModelTrainer → Engine with ML predictions."""
+"""End-to-end integration test: TechFactorBuilder → ModelTrainer → Engine with ML predictions."""
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from factors.builder import FactorBuilder
+from factors.tech_builder import TechFactorBuilder
 from ml.trainer import ModelTrainer
 from engine.data import DataFrameSource
 from engine.engine import Engine
@@ -62,7 +62,7 @@ class MLFactorStrategy(Strategy):
 @pytest.mark.slow
 def test_full_ml_to_engine_pipeline():
     """
-    End-to-end: FactorBuilder → ModelTrainer → Engine with ML predictions.
+    End-to-end: TechFactorBuilder → ModelTrainer → Engine with ML predictions.
 
     Verifies:
       1. Factors are computed from synthetic data
@@ -75,7 +75,7 @@ def test_full_ml_to_engine_pipeline():
     symbols = [f"STOCK_{chr(65+i)}" for i in range(20)]  # 20 symbols for cross-sectional signal
 
     # ── 1. Build factor dataset for all symbols ──────────────────────
-    fb = FactorBuilder()
+    fb = TechFactorBuilder()
 
     # Store original close prices separately (before factor processing)
     close_records = []

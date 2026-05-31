@@ -1,6 +1,6 @@
 """MLPredStrategy — LightGBM prediction-driven stock selection.
 
-Uses FactorRegistry + FactorBuilder + ModelTrainer to train a model
+Uses FactorRegistry + TechFactorBuilder + ModelTrainer to train a model
 on historical data, then predicts top-K stocks each rebalance period.
 """
 from __future__ import annotations
@@ -150,7 +150,7 @@ class MLPredStrategy(Strategy):
 
     def _predict_scores(self, ctx, bar: int, symbols: list[str]) -> dict[str, float]:
         """Predict expected return for each symbol at current bar."""
-        from factors.builder import FactorBuilder
+        from factors.tech_builder import TechFactorBuilder
         from factors.registry import FactorRegistry
 
         registry = FactorRegistry()
@@ -198,7 +198,7 @@ class MLPredStrategy(Strategy):
         if self._is_trainer_broken():
             return {}
 
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         scores: dict[str, float] = {}
         for sym in symbols:
             rows = symbol_ohlcv.get(sym, [])

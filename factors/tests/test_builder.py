@@ -1,4 +1,4 @@
-"""TDD tests for FactorBuilder — ported from hk-quant/src/factor_builder.py.
+"""TDD tests for TechFactorBuilder — ported from hk-quant/src/factor_builder.py.
 
 Follows the factor definitions from the design doc:
   1. _returns: ret_1d, ret_5d, ret_10d, ret_20d, ret_60d, ret_120d (6)
@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from factors.builder import FactorBuilder
+from factors.tech_builder import TechFactorBuilder
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -79,19 +79,19 @@ def make_ohlcv(n_days: int = 200, seed: int = 42, start_price: float = 100.0) ->
 # ── Tests ────────────────────────────────────────────────────────────
 
 class TestFactorBuilder:
-    """Core tests for FactorBuilder."""
+    """Core tests for TechFactorBuilder."""
 
     def test_from_init(self):
-        """FactorBuilder can be instantiated."""
-        fb = FactorBuilder()
+        """TechFactorBuilder can be instantiated."""
+        fb = TechFactorBuilder()
         assert fb is not None
-        assert isinstance(fb, FactorBuilder)
+        assert isinstance(fb, TechFactorBuilder)
         assert fb.factor_names == []
 
     def test_compute_factors_has_all_columns(self):
         """compute_factors() outputs all 39 factor cols + 2 labels = 41 columns."""
         df = make_ohlcv(200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.compute_factors(df)
 
         # All expected columns present
@@ -114,7 +114,7 @@ class TestFactorBuilder:
     def test_compute_factors_no_nan_labels(self):
         """Forward return labels (fwd_ret_5d, fwd_ret_20d) exist and are not all-NaN."""
         df = make_ohlcv(200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.compute_factors(df)
 
         # Labels should exist, though tail will be NaN (no future data)
@@ -124,7 +124,7 @@ class TestFactorBuilder:
     def test_returns_values(self):
         """ret_1d matches close.pct_change(1)."""
         df = make_ohlcv(200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.compute_factors(df)
 
         expected_ret_1d = df.set_index("date")["close"].pct_change(1)
@@ -135,7 +135,7 @@ class TestFactorBuilder:
     def test_momentum_rsi_bounds(self):
         """RSI(14) is between 0 and 100 (approximately)."""
         df = make_ohlcv(200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.compute_factors(df)
 
         valid = result["rsi_14"].dropna()
@@ -146,7 +146,7 @@ class TestFactorBuilder:
     def test_volatility_nonnegative(self):
         """All volatility factors are >= 0."""
         df = make_ohlcv(200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.compute_factors(df)
 
         for col in ["vol_5d", "vol_10d", "vol_20d", "vol_60d"]:
@@ -156,7 +156,7 @@ class TestFactorBuilder:
     def test_daily_range_nonnegative(self):
         """daily_range = (high-low)/close >= 0."""
         df = make_ohlcv(200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.compute_factors(df)
         valid = result["daily_range"].dropna()
         assert (valid >= -1e-10).all()
@@ -164,7 +164,7 @@ class TestFactorBuilder:
     def test_skew_kurt_expected_count(self):
         """_skew_kurt produces 6 columns for periods [20, 60, 120]."""
         df = make_ohlcv(200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.compute_factors(df)
 
         skew_kurt_cols = [c for c in result.columns if c.startswith("skew_") or c.startswith("kurt_")]
@@ -174,7 +174,7 @@ class TestFactorBuilder:
     def test_process_factors_handles_outliers(self):
         """Winsorization clips extreme values."""
         df = make_ohlcv(200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         raw = fb.compute_factors(df)
 
         # Inject an extreme outlier by modifying ret_1d
@@ -190,7 +190,7 @@ class TestFactorBuilder:
     def test_process_factors_standardizes(self):
         """After process_factors, factor columns have mean≈0, std≈1."""
         df = make_ohlcv(200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         raw = fb.compute_factors(df)
         processed = fb.process_factors(raw, winsor_pct=0.01)
 
@@ -211,7 +211,7 @@ class TestFactorBuilder:
     def test_process_factors_fills_nan(self):
         """process_factors fills remaining NaN with 0."""
         df = make_ohlcv(200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         raw = fb.compute_factors(df)
         processed = fb.process_factors(raw)
 
@@ -225,7 +225,7 @@ class TestFactorBuilder:
             return make_ohlcv(200, seed=hash(symbol) % 2**31)
 
         symbols = ["AAPL", "GOOGL"]
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.build_factor_dataset(symbols, "2023-01-01", "2023-12-31", mock_loader)
 
         assert result is not None
@@ -243,7 +243,7 @@ class TestFactorBuilder:
                 return make_ohlcv(50)  # insufficient history
             return make_ohlcv(200)
 
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.build_factor_dataset(["SHORT", "OK"], "2023-01-01", "2023-12-31", mock_loader)
 
         assert "SHORT" not in result["symbol"].values
@@ -254,14 +254,14 @@ class TestFactorBuilder:
         def mock_loader(symbol: str, start: str, end: str) -> pd.DataFrame:
             return make_ohlcv(50)
 
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.build_factor_dataset([], "2023-01-01", "2023-12-31", mock_loader)
         assert len(result) == 0
 
     def test_save_load_factors_roundtrip(self):
         """save_factors + load_factors roundtrip preserves data."""
         df = make_ohlcv(200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         factors = fb.compute_factors(df)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -269,7 +269,7 @@ class TestFactorBuilder:
             fb.save_factors(factors, path)
             assert os.path.exists(path)
 
-            loaded = FactorBuilder.load_factors(path)
+            loaded = TechFactorBuilder.load_factors(path)
             assert isinstance(loaded, pd.DataFrame)
             assert len(loaded) == len(factors)
             for col in ALL_EXPECTED_COLS:
@@ -278,7 +278,7 @@ class TestFactorBuilder:
     def test_save_factors_default_path(self):
         """save_factors with default path works without error."""
         df = make_ohlcv(200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         factors = fb.compute_factors(df)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -292,7 +292,7 @@ class TestFactorBuilder:
 
     def _make_factor_dataset(self, n_stocks: int = 50, n_days: int = 200, seed: int = 42) -> pd.DataFrame:
         """Create cross-sectional factor dataset with symbol+date columns for IC tests."""
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         all_factors = []
         for i in range(n_stocks):
             df = make_ohlcv(n_days, seed=seed + i)
@@ -307,7 +307,7 @@ class TestFactorBuilder:
     def test_compute_ic_returns_dataframe(self):
         """compute_ic() returns DataFrame with date, factor, rank_ic columns."""
         dataset = self._make_factor_dataset(n_stocks=50, n_days=200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
 
         # compute_ic needs already-computed factors
         processed = fb.process_factors(dataset)
@@ -322,7 +322,7 @@ class TestFactorBuilder:
     def test_compute_ic_with_few_stocks(self):
         """compute_ic() skips dates with < 30 stocks, returns empty."""
         dataset = self._make_factor_dataset(n_stocks=10, n_days=50)  # only 10 stocks
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         processed = fb.process_factors(dataset)
         ic_df = fb.compute_ic(processed)
 
@@ -333,7 +333,7 @@ class TestFactorBuilder:
     def test_ic_summary_statistics(self):
         """ic_summary() includes mean, std, count, icir, abs_mean_ic columns."""
         dataset = self._make_factor_dataset(n_stocks=50, n_days=200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         processed = fb.process_factors(dataset)
         ic_df = fb.compute_ic(processed)
         summary = fb.ic_summary(ic_df)
@@ -349,7 +349,7 @@ class TestFactorBuilder:
     def test_factor_correlation_square(self):
         """factor_correlation() returns a square correlation matrix."""
         dataset = self._make_factor_dataset(n_stocks=50, n_days=200)
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         processed = fb.process_factors(dataset)
         corr = fb.factor_correlation(processed)
 
@@ -367,14 +367,14 @@ class TestFactorBuilder:
         df = make_ohlcv(200)
         # Drop a required column
         bad_df = df.drop(columns=["volume"])
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         with pytest.raises(ValueError, match="Missing required columns"):
             fb.compute_factors(bad_df)
 
     def test_compute_factors_short_dataframe(self):
         """compute_factors() works with short data (< rolling window length)."""
         df = make_ohlcv(n_days=10)  # only 10 days, much shorter than 120d windows
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.compute_factors(df)
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 10
@@ -388,7 +388,7 @@ class TestFactorBuilder:
                 raise RuntimeError("Data source unavailable")
             return make_ohlcv(200)
 
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.build_factor_dataset(
             ["BROKEN", "OK"], "2023-01-01", "2023-12-31", broken_loader
         )
@@ -406,7 +406,7 @@ class TestFactorBuilder:
             "close": 100.5,
             "volume": 1000000,
         })
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         result = fb.compute(["ret_1d", "vol_5d"], df)
         assert "ret_1d" in result.columns
         assert "vol_5d" in result.columns

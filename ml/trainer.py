@@ -82,7 +82,7 @@ class ModelTrainer:
         factor_ids: list[str] | None = None,
         top_n: int = 15,
     ):
-        """Load factor data from BigQuery via FactorRegistry + FactorBuilder.
+        """Load factor data from BigQuery via FactorRegistry + TechFactorBuilder.
 
         Args:
             symbols: Stock symbols without prefix (e.g. ["AAPL", "MSFT"]).
@@ -96,7 +96,7 @@ class ModelTrainer:
             Factor DataFrame with symbol, date, and feature columns.
         """
         from google.cloud import bigquery
-        from factors.builder import FactorBuilder
+        from factors.tech_builder import TechFactorBuilder
         from factors.registry import FactorRegistry
 
         import pandas as pd
@@ -158,7 +158,7 @@ class ModelTrainer:
         )
 
         # Step 3: Compute factors per symbol
-        fb = FactorBuilder()
+        fb = TechFactorBuilder()
         all_frames = []
         for sym, group in ohlcv.groupby("symbol"):
             stock_df = group.rename(columns={"timestamp": "date"})
