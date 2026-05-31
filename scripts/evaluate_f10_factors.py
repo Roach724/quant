@@ -461,8 +461,8 @@ def main():
     print(f"  💥 Errors               : {len(errors)}")
 
     if len(failed) > 0:
-        print(f"
-  Failed (below threshold):")
+        print()
+        print('  Failed (below threshold IC):')
         for _, row in failed.sort_values("ic", key=abs, ascending=False).head(10).iterrows():
             ic_v = row.get("ic", 0) or 0
             print(f"  {row['factor']:30s} IC={ic_v:+.4f}")
