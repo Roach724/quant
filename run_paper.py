@@ -518,6 +518,30 @@ class PaperRunner:
         except Exception:
             log.warning("HTML report generation failed", exc_info=True)
 
+        # 6b. Register in ExperimentTracker if experiment.id is configured
+        exp_cfg = cfg.get("experiment", {})
+        exp_id = exp_cfg.get("id", "")
+        if exp_id:
+            try:
+                from experiment.tracker import ExperimentTracker
+                tracker = ExperimentTracker()
+                tracker.register_experiment(
+                    exp_id=exp_id,
+                    name=exp_cfg.get("name", exp_id),
+                    hypothesis=exp_cfg.get("hypothesis", ""),
+                    changes=exp_cfg.get("changes", []),
+                )
+                session_id = os.path.basename(output_dir)
+                tracker.record_session(
+                    exp_id=exp_id,
+                    session_id=session_id,
+                    session_type="paper_trading",
+                    path=output_dir,
+                )
+                log.info("Session %s registered in experiment %s", session_id, exp_id)
+            except Exception:
+                log.warning("Experiment tracking failed (non-fatal)", exc_info=True)
+
         # 7. Summary
         self.print_summary(metrics, output_dir)
 
@@ -676,6 +700,9 @@ Examples:
     p.add_argument("--weight-per-symbol", type=float, help="BuyHold weight per symbol")
     p.add_argument("--entry-threshold", type=float, help="Z-score entry (MeanReversion)")
     p.add_argument("--exit-threshold", type=float, help="Z-score exit (MeanReversion)")
+    # Experiment tracking
+    p.add_argument("--experiment-id", type=str, help="ExperimentTracker experiment ID")
+    p.add_argument("--experiment-name", type=str, help="Experiment name for tracking")
 
     return p
 
@@ -746,6 +773,10 @@ def _config_from_args(args) -> dict:
         "output": args.output or None,
         "realtime": args.realtime,
         "realtime_interval": args.realtime_interval,
+        "experiment": {
+            "id": getattr(args, "experiment_id", None) or "",
+            "name": getattr(args, "experiment_name", None) or "",
+        },
     }
 
 
@@ -796,6 +827,10 @@ def main():
             config["data_source"] = args.data_source
         if args.output:
             config["output"] = args.output
+        if getattr(args, "experiment_id", None):
+            config.setdefault("experiment", {})["id"] = args.experiment_id
+        if getattr(args, "experiment_name", None):
+            config.setdefault("experiment", {})["name"] = args.experiment_name
         config.setdefault("output", None)
         config.setdefault("strategy_kwargs", {})
     else:
