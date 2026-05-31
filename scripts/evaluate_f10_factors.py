@@ -198,7 +198,7 @@ def preprocess_table(table_name: str, df: pd.DataFrame) -> pd.DataFrame:
     if table_name in JSON_SOURCE_TABLES:
         df = expand_json_data(df)
 
-    if table_name == "us_valuation":
+    if table_name == "us_valuation" and False:  # handled by F10Transformer
         df = pivot_valuation(df)
 
     # Ensure symbol column exists
