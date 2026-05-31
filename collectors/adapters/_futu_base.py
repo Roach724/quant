@@ -112,18 +112,16 @@ class FutuBaseAdapter:
             self._ctx = None
 
     def _default_symbols(self) -> list[str]:
-        """Load full symbol pool from Futu API (same as K-line collectors)."""
+        """Load symbol pool from FutuStockAdapter static list (no OpenD needed)."""
         try:
             from collectors.adapters.futu_stock_adapter import FutuStockAdapter
-            adapter = FutuStockAdapter(host=self.host, port=self.port)
-            us = adapter.fetch_supported_symbols("us")
-            hk = adapter.fetch_supported_symbols("hk")
-            adapter.close()
-            result = us + hk
-            logger.info("Loaded %d symbols from Futu API (%d US + %d HK)", len(result), len(us), len(hk))
-            return result
+            syms = list(FutuStockAdapter._DEFAULT_SYMBOLS)
+            us_count = sum(1 for s in syms if s.startswith("US."))
+            hk_count = sum(1 for s in syms if s.startswith("HK."))
+            logger.info("Loaded %d symbols (%d US + %d HK) from static list", len(syms), us_count, hk_count)
+            return syms
         except Exception:
-            logger.warning("Cannot load symbols from Futu; using static fallback")
+            logger.warning("Cannot load symbols; using static fallback")
             return [
                 "HK.00700", "HK.09988", "HK.00941", "HK.00005", "HK.00388",
                 "HK.01299", "HK.02318", "HK.01810",
