@@ -1,0 +1,39 @@
+live:
+  mode: live
+  market: us
+  output_dir: output/live/
+
+broker:
+  live:
+    type: futu_stock
+    host: 127.0.0.1
+    port: 11111
+    max_position_pct: 0.2
+
+strategy:
+  name: MLPredStrategy
+  model_name: momentum_lgbm
+  model_version: latest
+  top_k: 5
+  rebalance_every: 5
+  fallback_strategy: SimpleMomentum
+
+schedule:
+  pre_market_warmup: 300
+  bar_interval: 300
+  market_close_offset: 600
+
+risk:
+  max_drawdown: 0.15
+  max_daily_loss: 0.05
+  position_size_pct: 0.2
+
+observer:
+  log_dir: output/live/
+  snapshot_interval: 60
+  trade_log: true
+  equity_curve: true
+
+dashboard:
+  port: 8090
+  websocket: true
