@@ -90,6 +90,30 @@ class FundamentalFactorBuilder:
                 df[col] = analyst[col]
         return df
 
+    @staticmethod
+    def _earnings_quality_factors(financials: pd.DataFrame) -> pd.DataFrame:
+        df = pd.DataFrame(index=financials.index)
+        for col in FundamentalFactorBuilder.EARNINGS_QUALITY_COLS:
+            if col in financials.columns:
+                df[col] = financials[col]
+        return df
+
+    @staticmethod
+    def _smart_money_factors(shareholder: pd.DataFrame) -> pd.DataFrame:
+        df = pd.DataFrame(index=shareholder.index)
+        for col in FundamentalFactorBuilder.SMART_MONEY_COLS:
+            if col in shareholder.columns:
+                df[col] = shareholder[col]
+        return df
+
+    @staticmethod
+    def _earnings_event_factors(earnings: pd.DataFrame) -> pd.DataFrame:
+        df = pd.DataFrame(index=earnings.index)
+        for col in FundamentalFactorBuilder.EARNINGS_EVENT_COLS:
+            if col in earnings.columns:
+                df[col] = earnings[col]
+        return df
+
     def compute(self, factor_names: list[str], data_map: dict[str, pd.DataFrame]) -> pd.DataFrame:
         result = pd.DataFrame()
 
@@ -112,6 +136,21 @@ class FundamentalFactorBuilder:
         an = data_map.get("analyst", pd.DataFrame())
         if not an.empty:
             result = pd.concat([result, self._analyst_factors(an)], axis=1)
+
+        # Earnings quality from financials
+        fin2 = data_map.get("financials", pd.DataFrame())
+        if not fin2.empty:
+            result = pd.concat([result, self._earnings_quality_factors(fin2)], axis=1)
+
+        # Smart money from shareholder data
+        si2 = data_map.get("short_interest", pd.DataFrame())
+        if not si2.empty:
+            result = pd.concat([result, self._smart_money_factors(si2)], axis=1)
+
+        # Earnings event data
+        earn = data_map.get("earnings_events", pd.DataFrame())
+        if not earn.empty:
+            result = pd.concat([result, self._earnings_event_factors(earn)], axis=1)
 
         available = [c for c in factor_names if c in result.columns]
         self.factor_names = available
