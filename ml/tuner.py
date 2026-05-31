@@ -55,10 +55,15 @@ class OptunaTuner:
                     params[name] = trial.suggest_float(name, low, high)
             
             import lightgbm as lgb
-            train_X = dataset.train[feature_cols].values
-            train_y = dataset.train[label].values
-            val_X = dataset.val[feature_cols].values
-            val_y = dataset.val[label].values
+            # Get clean train/val data (drop NaN in features + label)
+            t = dataset.train.dropna(subset=feature_cols + [label])
+            v = dataset.val.dropna(subset=feature_cols + [label])
+            if len(t) == 0 or len(v) == 0:
+                return float("nan")
+            train_X = t[feature_cols].values
+            train_y = t[label].values
+            val_X = v[feature_cols].values
+            val_y = v[label].values
             
             train_data = lgb.Dataset(train_X, label=train_y)
             val_data = lgb.Dataset(val_X, label=val_y, reference=train_data)
@@ -80,15 +85,20 @@ class OptunaTuner:
         )
         study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
         
-        # Train best model
+        # Train best model on clean data
         best_params = {**fixed_params, **study.best_params}
+        logger.info("Best params: %s", study.best_params)
+        logger.info("Best %s: %.4f", metric_name, study.best_value)
         import lightgbm as lgb
-        train_X = dataset.train[feature_cols].values
-        train_y = dataset.train[label].values
-        val_X = dataset.val[feature_cols].values
-        val_y = dataset.val[label].values
-        test_X = dataset.test[feature_cols].values
-        test_y = dataset.test[label].values
+        t = dataset.train.dropna(subset=feature_cols + [label])
+        v = dataset.val.dropna(subset=feature_cols + [label])
+        ts = dataset.test.dropna(subset=feature_cols + [label])
+        train_X = t[feature_cols].values
+        train_y = t[label].values
+        val_X = v[feature_cols].values
+        val_y = v[label].values
+        test_X = ts[feature_cols].values
+        test_y = ts[label].values
         
         train_data = lgb.Dataset(train_X, label=train_y)
         val_data = lgb.Dataset(val_X, label=val_y, reference=train_data)

@@ -310,6 +310,56 @@ class DatasetManager:
             pass
         return None
 
+    # ── Forward return computation ──────────────────────────────────────
+
+    @classmethod
+    def _compute_fwd_ret(
+        cls,
+        bq_client: bigquery.Client,
+        symbols: list[str],
+        start: str,
+        end: str,
+        n_days: int,
+    ) -> "pd.DataFrame":
+        """Compute forward return label from bars data.
+
+        fwd_ret_Nd = close[t+N] / close[t] - 1
+        Returns DataFrame with columns: symbol, date, fwd_ret_{N}d
+        """
+        import pandas as pd
+
+        # Extend end date by n_days to have forward-looking prices
+        end_ext = pd.Timestamp(end) + pd.Timedelta(days=n_days + 14)  # buffer for weekends
+        end_ext_str = end_ext.strftime("%Y-%m-%d")
+
+        query = f"""
+            SELECT symbol, timestamp AS date, close
+            FROM `{cls.DEFAULT_PROJECT}.{cls.DATASET}.us_bars_1d`
+            WHERE symbol IN UNNEST(@symbols)
+              AND timestamp BETWEEN @start AND @end_ext
+            ORDER BY symbol, timestamp
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ArrayQueryParameter("symbols", "STRING", symbols),
+                bigquery.ScalarQueryParameter("start", "STRING", start),
+                bigquery.ScalarQueryParameter("end_ext", "STRING", end_ext_str),
+            ],
+        )
+        bars = bq_client.query(query, job_config=job_config).to_dataframe()
+        bars["date"] = pd.to_datetime(bars["date"])
+
+        # Compute forward return per symbol
+        bars = bars.sort_values(["symbol", "date"])
+        bars["fwd_close"] = bars.groupby("symbol")["close"].shift(-n_days)
+        label_name = f"fwd_ret_{n_days}d"
+        bars[label_name] = bars["fwd_close"] / bars["close"] - 1.0
+
+        result = bars[["symbol", "date", label_name]].copy()
+        # Trim to original date range
+        result = result[(result["date"] >= start) & (result["date"] <= end)]
+        return result
+
     # ── Create ──────────────────────────────────────────────────────────
 
     @classmethod
@@ -380,6 +430,25 @@ class DatasetManager:
             config.market,
         )
         logger.info("Queried %d rows × %d columns", len(df), len(df.columns))
+
+        # Compute forward-return labels from bars if needed
+        import re
+        fwd_match = re.match(r"fwd_ret_(\d+)d", output_label)
+        if fwd_match and output_label in df.columns and df[output_label].isna().all():
+            n_days = int(fwd_match.group(1))
+            logger.info("Computing fwd_ret_%dd from bars data...", n_days)
+            fwd_series = cls._compute_fwd_ret(bq_client, symbols, all_start, all_end, n_days)
+            df = df.drop(columns=[output_label]).merge(
+                fwd_series, on=["symbol", "date"], how="left"
+            )
+            logger.info("fwd_ret_%dd computed: %.1f%% non-null", n_days,
+                        df[output_label].notna().mean() * 100)
+
+        # Drop rows where label is NaN
+        n_before = len(df)
+        df = df.dropna(subset=[output_label])
+        logger.info("Dropped %d rows with NaN label (before=%d, after=%d)",
+                    n_before - len(df), n_before, len(df))
 
         # Split
         train, val, test = cls._split_by_date(
