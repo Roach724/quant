@@ -23,6 +23,7 @@ from google.cloud import bigquery
 from scipy.stats import spearmanr
 
 from factors.fundamental_builder import FundamentalFactorBuilder
+from factors.f10_transformer import F10Transformer
 from factors.registry import FactorRegistry
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -46,12 +47,12 @@ TABLE_TO_KEY = {
 F10_TABLES = list(TABLE_TO_KEY.keys())
 
 # Tables with JSON data column (as opposed to direct columnar schema)
-JSON_SOURCE_TABLES = {"us_financials", "us_analyst", "us_capital_flow", "us_shareholder"}
+JSON_SOURCE_TABLES = {"us_analyst", "us_capital_flow", "us_shareholder"}
 
 # Timestamp column per table: (col_name, bq_date_expr_template or None for DATE(col))
 TS_COL = {
     "us_valuation": ("ingest_time", None),
-    "us_financials": ("date_time_str", "PARSE_TIMESTAMP('%Y/%m/%d', {col})"),
+    "us_financials": ("date_time_str", "PARSE_TIMESTAMP('%Y-%m-%d', {col})"),
     "us_analyst": ("update_time", "TIMESTAMP_SECONDS(CAST({col} AS INT64))"),
     "us_capital_flow": ("ingest_time", None),
     "us_shareholder": ("update_time", "TIMESTAMP_SECONDS(CAST({col} AS INT64))"),
@@ -197,7 +198,7 @@ def preprocess_table(table_name: str, df: pd.DataFrame) -> pd.DataFrame:
     if table_name in JSON_SOURCE_TABLES:
         df = expand_json_data(df)
 
-    if table_name == "us_valuation":
+    if table_name == "us_valuation" and False:  # handled by F10Transformer
         df = pivot_valuation(df)
 
     # Ensure symbol column exists
@@ -206,7 +207,7 @@ def preprocess_table(table_name: str, df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     # Normalize symbol: strip "US." prefix if present
-    df["symbol"] = df["symbol"].astype(str).str.replace("US.", "", regex=False)
+    df["symbol"] = df["symbol"].astype(str).str.replace("US.", "", regex=False).str.replace("US_", "", regex=False)
 
     # Ensure date column exists; look for common date columns
     date_col = None
@@ -235,6 +236,8 @@ def preprocess_table(table_name: str, df: pd.DataFrame) -> pd.DataFrame:
 
     # Drop duplicates keeping first
     dedup_cols = ["symbol", "date"]
+    if "field_id" in df.columns:
+        dedup_cols.append("field_id")
     if "data_type" in df.columns:
         dedup_cols.append("data_type")
     df = df.drop_duplicates(subset=[c for c in dedup_cols if c in df.columns], keep="first")
@@ -242,32 +245,106 @@ def preprocess_table(table_name: str, df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def load_forward_returns(start: str, end: str) -> pd.DataFrame:
-    """Compute fwd_ret_5d and fwd_ret_20d from us_bars_1d."""
+def compute_quarterly_fwd_ret(f10_dates: pd.DataFrame, horizon_days: int = 63) -> pd.DataFrame:
+    """Compute forward returns aligned to F10 report dates.
+
+    For each (symbol, F10_report_date), finds the nearest trading day,
+    then computes fwd_ret = (close after N days - close on entry) / close on entry.
+
+    Args:
+        f10_dates: DataFrame with columns [symbol, date] — F10 report dates
+        horizon_days: Number of calendar days forward (default 63 ≈ 1 quarter)
+
+    Returns:
+        DataFrame with columns [symbol, date, fwd_ret_5d, fwd_ret_20d, fwd_ret_quarterly]
+        where date is the F10 report date (not the trading date).
+    """
+    import datetime
     client = bigquery.Client(project=PROJECT)
+
+    # Get date range from F10 data
+    f10_dates = f10_dates.copy(); f10_dates["date"] = pd.to_datetime(f10_dates["date"]); min_date = str(f10_dates["date"].min().date())
+    max_date = f10_dates["date"].max()
+    # Extend range to cover forward window
+    end_date_val = pd.to_datetime(max_date) + datetime.timedelta(days=horizon_days + 30)
+
+    # Load bar data for all symbols
+    symbols = sorted(f10_dates["symbol"].unique().tolist())
+    bq_symbols = [f"US.{s}" for s in symbols]
+
     query = f"""
-        SELECT
-            symbol,
-            DATE(timestamp) as date,
-            close,
-            (LEAD(close, 5) OVER (PARTITION BY symbol ORDER BY timestamp) - close)
-                / NULLIF(close, 0) as fwd_ret_5d,
-            (LEAD(close, 20) OVER (PARTITION BY symbol ORDER BY timestamp) - close)
-                / NULLIF(close, 0) as fwd_ret_20d
+        SELECT symbol, DATE(timestamp) as date, close
         FROM `{DATASET}.us_bars_1d`
-        WHERE DATE(timestamp) BETWEEN '{start}' AND '{end}'
-        QUALIFY fwd_ret_5d IS NOT NULL
+        WHERE symbol IN UNNEST(@symbols)
+          AND DATE(timestamp) BETWEEN '{pd.to_datetime(min_date).strftime("%Y-%m-%d")}' AND '{end_date_val.strftime("%Y-%m-%d")}'
         ORDER BY symbol, date
     """
-    log.info("Loading forward returns from us_bars_1d ...")
-    df = client.query(query).to_dataframe()
-    df["date"] = pd.to_datetime(df["date"]).dt.date
-    # Strip US. prefix for consistency with F10 data
-    df["symbol"] = df["symbol"].astype(str).str.replace("US.", "", regex=False)
-    log.info("  Forward returns: %d rows x %d unique symbols",
-             len(df), df["symbol"].nunique())
-    return df
+    job_config = bigquery.QueryJobConfig(query_parameters=[
+        bigquery.ArrayQueryParameter("symbols", "STRING", bq_symbols),
+    ])
+    bars = client.query(query, job_config=job_config).to_dataframe()
+    bars["symbol"] = bars["symbol"].str.replace("US.", "")
+    bars["date"] = pd.to_datetime(bars["date"])
+    bars = bars.sort_values(["symbol", "date"])
 
+    # Vectorized: use searchsorted on per-symbol bar index
+    bars_indexed = bars.set_index(["symbol", "date"]).sort_index()
+    results = []
+    
+    for sym in symbols:
+        if sym not in bars_indexed.index.get_level_values(0):
+            continue
+        sym_bars = bars_indexed.loc[sym]
+        sym_dates_idx = sym_bars.index
+        sym_closes = sym_bars["close"].values
+        
+        sym_f10 = pd.DatetimeIndex(pd.to_datetime(
+            f10_dates[f10_dates["symbol"] == sym]["date"].drop_duplicates()
+        )).sort_values()
+        
+        if len(sym_f10) == 0 or len(sym_dates_idx) == 0:
+            continue
+        
+        entry_positions = sym_dates_idx.searchsorted(sym_f10)
+        valid_mask = entry_positions < len(sym_dates_idx)
+        if not valid_mask.any():
+            continue
+        
+        entry_positions = entry_positions[valid_mask]
+        valid_f10 = sym_f10[valid_mask]
+        entry_closes = sym_closes[entry_positions]
+        entry_dates_arr = sym_dates_idx[entry_positions]
+        
+        forward_dates = entry_dates_arr + pd.Timedelta(days=horizon_days)
+        forward_positions = sym_dates_idx.searchsorted(forward_dates)
+        
+        d5_arr = entry_dates_arr + pd.Timedelta(days=7)
+        p5_arr = sym_dates_idx.searchsorted(d5_arr)
+        
+        d20_arr = entry_dates_arr + pd.Timedelta(days=30)
+        p20_arr = sym_dates_idx.searchsorted(d20_arr)
+        
+        for i in range(len(valid_f10)):
+            if forward_positions[i] >= len(sym_closes):
+                continue
+            fwd_ret = (sym_closes[forward_positions[i]] - entry_closes[i]) / entry_closes[i]
+            fwd5 = (sym_closes[p5_arr[i]] - entry_closes[i]) / entry_closes[i] if p5_arr[i] < len(sym_closes) else None
+            fwd20 = (sym_closes[p20_arr[i]] - entry_closes[i]) / entry_closes[i] if p20_arr[i] < len(sym_closes) else None
+            results.append({
+                "symbol": sym,
+                "date": valid_f10[i],
+                "fwd_ret_5d": fwd5,
+                "fwd_ret_20d": fwd20,
+                "fwd_ret_quarterly": fwd_ret,
+            })
+        
+    result = pd.DataFrame(results)
+    if not result.empty:
+        result["date"] = pd.DatetimeIndex(pd.to_datetime(result["date"]))
+
+    log.info("Quarterly fwd_ret: %d rows for %d symbols from %d F10 dates",
+             len(result), result["symbol"].nunique(), len(f10_dates["date"].unique()))
+    return result
 
 def compute_ic(factor_values: pd.Series, fwd_ret: pd.Series) -> tuple[float, float, int]:
     """Calculate Spearman rank IC, t-statistic, and sample count.
@@ -291,8 +368,8 @@ def main():
     parser.add_argument("--end", default="2026-05-30")
     parser.add_argument("--register", action="store_true",
                         help="Register passing factors to BQ factor_registry")
-    parser.add_argument("--label", default="fwd_ret_5d",
-                        choices=["fwd_ret_5d", "fwd_ret_20d"],
+    parser.add_argument("--label", default="fwd_ret_quarterly",
+                        choices=["fwd_ret_5d", "fwd_ret_20d", "fwd_ret_quarterly"],
                         help="Forward return horizon for IC")
     args = parser.parse_args()
 
@@ -300,7 +377,7 @@ def main():
     MIN_ABS_IC = 0.05
     MIN_T_STAT = 3.0
     MIN_COVERAGE = 0.70
-    MIN_SAMPLES = 30
+    MIN_SAMPLES = 10  # F10 is quarterly, not daily
 
     log.info("=" * 60)
     log.info("F10 Factor IC Evaluation")
@@ -321,19 +398,52 @@ def main():
                 log.warning("  %s: preprocessing yielded empty; skipping", tbl)
                 continue
             key = TABLE_TO_KEY[tbl]
-            # Use (symbol, date) as index for compute() — preserves alignment
-            processed = processed.set_index(["symbol", "date"])
             data_map[key] = processed
             log.info("  -> data_map['%s']: %d rows x %d cols", key, len(processed), len(processed.columns))
         except Exception as e:
             log.warning("  %s: SKIP — %s", tbl, e)
 
+    # Transform raw data to builder-compatible format
+    data_map = F10Transformer.transform_all(data_map)
+
+    # Set (symbol, date) MultiIndex on transformed DataFrames
+    for key in list(data_map.keys()):
+        df = data_map[key]
+        # Deduplicate to avoid "Reindexing only valid with uniquely valued Index objects"
+        df = df.drop_duplicates(subset=[c for c in ["symbol", "date"] if c in df.columns])
+        if not df.empty and 'symbol' in df.columns and 'date' in df.columns:
+            data_map[key] = df.set_index(['symbol', 'date'])
+
     if not data_map:
         log.error("No F10 data loaded after preprocessing!")
         return 1
 
-    # ── 2. Load forward returns ──
-    fwd = load_forward_returns(args.start, args.end)
+    # ── 2. Compute quarterly forward returns aligned to F10 dates ──
+    # Collect all unique (symbol, date) pairs from F10 data
+    f10_dates_list = []
+    for key, df in data_map.items():
+        if df.empty:
+            continue
+        if isinstance(df.index, pd.MultiIndex) and df.index.nlevels >= 2:
+            idx_frame = df.index.to_frame(index=False)
+            if "symbol" in idx_frame.columns and "date" in idx_frame.columns:
+                f10_dates_list.append(idx_frame[["symbol", "date"]])
+        elif "symbol" in df.columns and "date" in df.columns:
+            f10_dates_list.append(df[["symbol", "date"]])
+
+    if f10_dates_list:
+        f10_dates = pd.concat(f10_dates_list).drop_duplicates()
+        log.info("F10 dates collected: %d unique (symbol,date) pairs", len(f10_dates))
+    else:
+        log.error("No F10 dates found!")
+        return 1
+
+    fwd = compute_quarterly_fwd_ret(f10_dates, horizon_days=63)
+
+    # Use fwd_ret_quarterly as the primary label (63 calendar days ≈ 1 quarter)
+    if fwd.empty:
+        log.error("No forward return data computed!")
+        return 1
 
     # ── 3. Build category map ──
     ffb = FundamentalFactorBuilder()
@@ -346,7 +456,15 @@ def main():
     results: list[dict] = []
     for factor_name in all_factors:
         try:
-            factors_df = ffb.compute([factor_name], data_map)
+            # Only pass tables that contain this factor's category
+            cat_map = {v:k for k,v in TABLE_TO_KEY.items()}
+            sub_map = {k: data_map[k] for k in data_map if factor_name in data_map[k].columns}
+            if not sub_map:
+                # Fallback: try all tables
+                sub_map = data_map
+            factors_df = ffb.compute([factor_name], sub_map)
+            if not factors_df.empty and not factors_df.index.is_unique:
+                factors_df = factors_df[~factors_df.index.duplicated(keep="first")]
             if factors_df.empty or factor_name not in factors_df.columns:
                 results.append({
                     "factor": factor_name,
@@ -377,7 +495,9 @@ def main():
                     continue
 
             # Merge with forward returns on (symbol, date)
-            merged["date"] = pd.to_datetime(merged["date"], errors="coerce").dt.date
+            merged["date"] = pd.DatetimeIndex(pd.to_datetime(merged["date"], errors="coerce"))
+            merged["date"] = pd.to_datetime(merged["date"]).dt.normalize()
+            fwd["date"] = pd.to_datetime(fwd["date"]).dt.normalize()
             merged = merged.merge(fwd, on=["symbol", "date"], how="inner")
 
             if len(merged) < MIN_SAMPLES:
@@ -421,6 +541,10 @@ def main():
 
     # ── 5. Summary ──
     df_results = pd.DataFrame(results)
+    too_few_df = df_results[df_results["status"] == "too_few"]
+    # Debug: status distribution
+    status_counts = df_results['status'].value_counts()
+    log.info('Status distribution: %s', dict(status_counts))
     passing = df_results[df_results["status"] == "pass"]
     failed = df_results[df_results["status"] == "fail"]
     no_data = df_results[df_results["status"] == "no_data"]
@@ -432,9 +556,16 @@ def main():
     print(f"  Total factors evaluated : {len(df_results)}")
     print(f"  ✅ Passing              : {len(passing)}")
     print(f"  ❌ Failed threshold     : {len(failed)}")
-    print(f"  ⚠️  No data / uncomputable: {len(no_data)}")
+    not_enough = len(no_data) + len(too_few_df)
+    print(f"  ⚠️  No data / too few    : {not_enough} (no_data={len(no_data)}, too_few={len(too_few_df)})")
     print(f"  💥 Errors               : {len(errors)}")
 
+    if len(failed) > 0:
+        print()
+        print('  Failed (below threshold IC):')
+        for _, row in failed.sort_values("ic", key=abs, ascending=False).head(10).iterrows():
+            ic_v = row.get("ic", 0) or 0
+            print(f"  {row['factor']:30s} IC={ic_v:+.4f}")
     if len(passing) > 0:
         print(f"\n  ── Passing factors (|IC|>{MIN_ABS_IC}, |t|>{MIN_T_STAT}, "
               f"cov>{MIN_COVERAGE:.0%}) ──")
