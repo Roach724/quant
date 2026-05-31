@@ -245,163 +245,72 @@ class ModelTrainer:
                 f"Use 'tech', 'fundamental', or 'all'."
             )
 
-        import json as _json
         import pandas as pd
         from google.cloud import bigquery
-        from factors.fundamental_builder import FundamentalFactorBuilder
 
-        ffb = FundamentalFactorBuilder()
-        client = bigquery.Client()
+        PROJECT = "deductive-notch-495015-c2"
+        client = bigquery.Client(project=PROJECT)
 
-        # ── Helpers ──────────────────────────────────────────────────
+        # Load fundamental factors directly from factor_values table
+        prefix = "US." if market == "us" else "HK."
+        bq_symbols = [f"{prefix}{s}" for s in symbols]
 
-        def _expand_json(df: pd.DataFrame) -> pd.DataFrame:
-            """Expand JSON 'data' column into individual factor columns."""
-            if "data" not in df.columns:
-                return df
-            parsed = df["data"].apply(
-                lambda v: _json.loads(v) if isinstance(v, str) else (
-                    v if isinstance(v, dict) else {}
-                )
-            )
-            expanded = pd.DataFrame(parsed.tolist(), index=df.index)
-            meta_cols = [c for c in df.columns if c != "data"]
-            return pd.concat([df[meta_cols], expanded], axis=1)
-
-        def _strip_prefix(df: pd.DataFrame) -> pd.DataFrame:
-            """Strip 'US.' prefix from symbol column."""
-            if "symbol" in df.columns:
-                df["symbol"] = df["symbol"].astype(str).str.replace(
-                    "US.", "", regex=False
-                )
-            return df
-
-        # ── Load F10 tables at once (bulk queries, not per-symbol) ──
-        raw_data: dict[str, pd.DataFrame] = {}
-
-        # Financials
-        fin_query = """
-            SELECT * FROM `deductive-notch-495015-c2.quant.us_financials`
-            WHERE symbol IN UNNEST(@syms)
+        fv_query = f"""
+            SELECT factor_id, symbol, date, value
+            FROM `{PROJECT}.quant.factor_values`
+            WHERE source_builder = 'fundamental'
+              AND symbol IN UNNEST(@syms)
+              AND date BETWEEN @start AND @end
+            ORDER BY symbol, date, factor_id
         """
-        fin_job = bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ArrayQueryParameter("syms", "STRING", symbols),
+        fv_job = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter("syms", "STRING", bq_symbols),
+            bigquery.ScalarQueryParameter("start", "STRING", start),
+            bigquery.ScalarQueryParameter("end", "STRING", end),
         ])
-        financials = client.query(fin_query, job_config=fin_job).to_dataframe()
-        if not financials.empty:
-            financials = _expand_json(financials)
-            # us_financials has date_time_str (format: YYYY/MM/DD), not date
-            if "date_time_str" in financials.columns:
-                financials["date"] = pd.to_datetime(
-                    financials["date_time_str"], format="%Y/%m/%d", errors="coerce"
-                )
-            financials = _strip_prefix(financials)
-            raw_data["financials"] = financials
+        fv_df = client.query(fv_query, job_config=fv_job).to_dataframe()
+        fv_df["symbol"] = fv_df["symbol"].astype(str).str.replace(
+            "US.", "", regex=False
+        ).str.replace("US_", "", regex=False)
 
-        # Auxiliary tables (only for factor_source == "all")
-        if factor_source == "all":
-            for table_name, key in [
-                ("us_valuation", "valuation"),
-                ("us_capital_flow", "capital_flow"),
-                ("us_analyst", "analyst"),
-                ("us_shareholder", "short_interest"),
-            ]:
-                try:
-                    aux_query = f"""
-                        SELECT * FROM `deductive-notch-495015-c2.quant.{table_name}`
-                        WHERE symbol IN UNNEST(@syms)
-                    """
-                    aux_job = bigquery.QueryJobConfig(query_parameters=[
-                        bigquery.ArrayQueryParameter("syms", "STRING", symbols),
-                    ])
-                    aux_df = client.query(
-                        aux_query, job_config=aux_job
-                    ).to_dataframe()
-                    if aux_df.empty:
-                        continue
-
-                    # Preprocess based on table type
-                    if table_name in ("us_analyst", "us_capital_flow", "us_shareholder"):
-                        # JSON-source tables: expand data column
-                        aux_df = _expand_json(aux_df)
-                    elif table_name == "us_valuation":
-                        # Pivot valuation from long (valuation_type, value)
-                        # to wide (pe_percentile, pb_percentile, ...)
-                        if "valuation_type" in aux_df.columns and "value" in aux_df.columns:
-                            aux_df["date"] = pd.to_datetime(
-                                aux_df["date"], errors="coerce"
-                            ).dt.date
-                            aux_df = aux_df.pivot_table(
-                                index=["symbol", "date"],
-                                columns="valuation_type",
-                                values="value",
-                                aggfunc="first",
-                            ).reset_index()
-
-                    aux_df = _strip_prefix(aux_df)
-                    raw_data[key] = aux_df
-                except Exception as e:
-                    logger.warning("Load %s failed: %s", table_name, e)
-
-        # ── Compute factors per symbol ──────────────────────────────
-        all_frames: list[pd.DataFrame] = []
-        for sym in symbols:
-            try:
-                # Build per-symbol data_map from preprocessed bulk data
-                sym_data: dict[str, pd.DataFrame] = {}
-                for key, df in raw_data.items():
-                    sym_df = df[df["symbol"] == sym].copy()
-                    if sym_df.empty:
-                        continue
-                    sym_data[key] = sym_df
-
-                if "financials" not in sym_data or sym_data["financials"].empty:
-                    continue
-
-                factors = ffb.compute(ffb.ALL_FACTOR_COLS, sym_data)
-                if factors.empty:
-                    continue
-
-                factors["symbol"] = sym
-
-                # Date alignment: use financials date column
-                fin_sym = sym_data["financials"]
-                if "date" in fin_sym.columns:
-                    n = len(factors)
-                    factors["date"] = fin_sym["date"].values[:n]
-                else:
-                    logger.warning("No date column in financials for %s", sym)
-                    continue
-
-                all_frames.append(factors)
-            except Exception as e:
-                logger.warning(
-                    "Fundamental factor load failed for %s: %s", sym, e
-                )
-
-        if not all_frames:
-            logger.warning("No fundamental factor data loaded for any symbol")
-            return pd.DataFrame()
-
-        fund_df = pd.concat(all_frames, ignore_index=True)
+        fund_df = pd.DataFrame()
+        if not fv_df.empty:
+            fund_df = fv_df.pivot_table(
+                index=["symbol", "date"],
+                columns="factor_id",
+                values="value",
+                aggfunc="first",
+            ).reset_index()
+            fund_df.columns = [
+                c.replace("us_", "", 1) if isinstance(c, str) and c.startswith("us_")
+                else c for c in fund_df.columns
+            ]
+            fund_df["date"] = pd.to_datetime(fund_df["date"])
+            logger.info(
+                "F10 factors from factor_values: %d rows x %d cols",
+                len(fund_df), len(fund_df.columns) - 2,
+            )
 
         # If "all", also load tech factors and merge
         if factor_source == "all":
-            try:
-                tech_df = self.load_from_bq(
-                    symbols=symbols, start=start, end=end,
-                    market=market, factor_ids=factor_ids, top_n=top_n,
+            tech_df = self.load_from_bq(
+                symbols=symbols, start=start, end=end,
+                market=market, factor_ids=factor_ids, top_n=top_n,
+            )
+            if not tech_df.empty and not fund_df.empty:
+                tech_df["date"] = pd.to_datetime(tech_df["date"])
+                all_df = pd.merge(
+                    fund_df, tech_df, on=["symbol", "date"],
+                    how="outer", suffixes=("", "_tech"),
                 )
-                if not tech_df.empty:
-                    # Merge on symbol + date
-                    fund_df = pd.merge(
-                        fund_df, tech_df, on=["symbol", "date"],
-                        how="outer", suffixes=("", "_tech"),
-                    )
-            except Exception as e:
-                logger.warning("Tech factor merge failed: %s", e)
+                self.factor_df = all_df
+            elif not tech_df.empty:
+                self.factor_df = tech_df
+            else:
+                self.factor_df = fund_df
+        else:
+            self.factor_df = fund_df
 
-        self.factor_df = fund_df
         exclude = {"symbol", "date", "fwd_ret_5d", "fwd_ret_20d"}
         self.feature_cols = [
             c for c in self.factor_df.columns if c not in exclude
