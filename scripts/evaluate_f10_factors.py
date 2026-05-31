@@ -236,6 +236,8 @@ def preprocess_table(table_name: str, df: pd.DataFrame) -> pd.DataFrame:
 
     # Drop duplicates keeping first
     dedup_cols = ["symbol", "date"]
+    if "field_id" in df.columns:
+        dedup_cols.append("field_id")
     if "data_type" in df.columns:
         dedup_cols.append("data_type")
     df = df.drop_duplicates(subset=[c for c in dedup_cols if c in df.columns], keep="first")
