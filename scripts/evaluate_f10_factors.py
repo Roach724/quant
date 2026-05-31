@@ -396,23 +396,23 @@ def main():
                     })
                     continue
 
-            # Merge with forward returns: use asof to match F10 quarterly dates
-            # to nearest trading day (forward=next trading day after report)
+            # Map F10 dates to nearest trading day via calendar lookup
             merged["date"] = pd.to_datetime(merged["date"], errors="coerce")
-            fwd_tmp = fwd.copy()
-            fwd_tmp["date"] = pd.to_datetime(fwd_tmp["date"])
-            # Sort both by (symbol, date) for merge_asof
-            merged = merged.sort_values(["symbol", "date"]).reset_index(drop=True)
-            fwd_tmp = fwd_tmp.sort_values(["symbol", "date"]).reset_index(drop=True)
-            merged = pd.merge_asof(
-                merged, fwd_tmp,
-                on="date", by="symbol", direction="forward",
+            fwd["date"] = pd.to_datetime(fwd["date"])
+            # Build trading day calendar from fwd data
+            trading_dates = pd.Series(sorted(fwd["date"].unique()))
+            # Map each F10 date to the next trading day (or same day if it matches)
+            map_idx = trading_dates.searchsorted(merged["date"])
+            map_idx = map_idx.clip(0, len(trading_dates) - 1)
+            merged["trading_date"] = trading_dates.iloc[map_idx].values
+            # Inner join: (symbol, trading_date) = (symbol, date) in fwd
+            merged = merged.merge(
+                fwd, left_on=["symbol", "trading_date"],
+                right_on=["symbol", "date"], how="inner", suffixes=("", "_fwd")
             )
-            merged["date"] = merged["date"].dt.date
-            # Drop forward return columns we don't need
-            for extra_col in ["close", "symbol_x", "symbol_y"]:
-                if extra_col in merged.columns:
-                    merged = merged.drop(columns=[extra_col])
+            merged["date"] = merged["trading_date"].dt.date
+            if "date_fwd" in merged.columns:
+                merged = merged.drop(columns=["date_fwd"])
 
             if len(merged) < MIN_SAMPLES:
                 results.append({
