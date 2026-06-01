@@ -543,16 +543,20 @@ class LiveRunner:
     # ── Live trading loop (stub) ──────────────────────────────────────
 
     def _run_live_loop(self):
-        """Live trading via Futu OpenD WebSocket K_5M subscription."""
+        """Live trading via Futu OpenD WebSocket K_5M subscription.
+
+        Accumulates bars in a rolling buffer, rebuilds StrategyContext each
+        bar, runs strategy.on_bar(), processes signals, and submits orders
+        through the live broker (FutuStockBroker).
+        """
         from live.datasource import LiveDataSource
         import pandas as pd
-        import numpy as np
+        import asyncio
 
         # Resolve symbols
         strat_cfg = self.config.get("strategy", {})
         symbols = strat_cfg.get("symbols", [])
         if not symbols:
-            # Default: top 20 from factor_values
             from google.cloud import bigquery
             bq = bigquery.Client(project="deductive-notch-495015-c2")
             df = bq.query(
@@ -561,26 +565,21 @@ class LiveRunner:
             ).result().to_dataframe()
             symbols = df["symbol"].tolist()
 
-        # Convert to Futu format (AAPL → US.AAPL)
-        futu_symbols = [
-            s if "." in s else f"US.{s}" for s in symbols
-        ]
-        logger.info("Live mode: %d symbols → Futu WebSocket", len(futu_symbols))
+        futu_symbols = [s if "." in s else f"US.{s}" for s in symbols]
+        logger.info("Live mode: %d symbols", len(futu_symbols))
 
-        # Init strategy context with dummy portfolio for factor computation
-        from engine.portfolio import Portfolio
+        # State
+        from engine.portfolio import Portfolio, Position
         from engine.strategy import StrategyContext
         from engine.data import DataFrameSource
+        from oms.bridge import convert_signal
 
         portfolio = Portfolio(initial_capital=100_000)
-        # Minimal DataFrameSource for strategy.on_bar to compute factors
-        empty_close = np.full((1, len(symbols)), 0.0)
+        self._live_bars: list[dict] = []
+
+        # Strategy init
         empty_df = pd.DataFrame({
-            "close": [dict(zip(symbols, [0.0] * len(symbols)))],
-            "open": [dict(zip(symbols, [0.0] * len(symbols)))],
-            "high": [dict(zip(symbols, [0.0] * len(symbols)))],
-            "low": [dict(zip(symbols, [0.0] * len(symbols)))],
-            "volume": [dict(zip(symbols, [0] * len(symbols)))],
+            "close": [{}], "open": [{}], "high": [{}], "low": [{}], "volume": [{}],
         })
         src = DataFrameSource(empty_df)
         ctx = StrategyContext(data=src, portfolio=portfolio, config={
@@ -588,45 +587,120 @@ class LiveRunner:
         })
         self.strategy.on_init(ctx)
 
-        # Connect to OpenD for live data
-        self._live_bar_buffer: list[dict] = []
+        def _rebuild_ctx() -> StrategyContext:
+            """Rebuild StrategyContext from accumulated live bars."""
+            n = len(self._live_bars)
+            df = pd.DataFrame({
+                "close": [self._live_bars[i].get("close", {}) for i in range(n)],
+                "open": [self._live_bars[i].get("open", {}) for i in range(n)],
+                "high": [self._live_bars[i].get("high", {}) for i in range(n)],
+                "low": [self._live_bars[i].get("low", {}) for i in range(n)],
+                "volume": [self._live_bars[i].get("volume", {}) for i in range(n)],
+            })
+            src2 = DataFrameSource(df)
+            src2.timestamp = [self._live_bars[i].get("timestamp", "") for i in range(n)]
+            return StrategyContext(data=src2, portfolio=portfolio, config={
+                "symbols": symbols, **strat_cfg,
+            })
 
         def on_live_bar(bar: dict):
-            """Callback: process each completed 5m bar."""
             try:
                 futu_sym = bar["symbol"]
                 bare_sym = futu_sym.replace("US.", "").replace("HK.", "")
                 ts = bar["timestamp"]
 
-                # Build bar_data compatible format
-                bar_data = {
+                bar_entry = {
                     "close": {bare_sym: bar["close"]},
                     "open": {bare_sym: bar["open"]},
                     "high": {bare_sym: bar["high"]},
                     "low": {bare_sym: bar["low"]},
                     "volume": {bare_sym: bar["volume"]},
+                    "timestamp": ts,
                 }
 
-                # Mark portfolio
-                portfolio.mark_and_record(ts, bar_data)
+                # Merge into existing timestamp or append
+                merged = False
+                for i in range(len(self._live_bars) - 1, max(len(self._live_bars) - 5, -1), -1):
+                    if self._live_bars[i].get("timestamp") == ts:
+                        self._live_bars[i]["close"][bare_sym] = bar["close"]
+                        self._live_bars[i]["open"][bare_sym] = bar["open"]
+                        self._live_bars[i]["high"][bare_sym] = bar["high"]
+                        self._live_bars[i]["low"][bare_sym] = bar["low"]
+                        self._live_bars[i]["volume"][bare_sym] = bar["volume"]
+                        merged = True
+                        break
+                if not merged:
+                    self._live_bars.append(bar_entry)
+                    # Keep only last 500 bars (≈ 2 weeks of 5m data)
+                    if len(self._live_bars) > 500:
+                        self._live_bars = self._live_bars[-500:]
 
-                # Snapshot
+                bar_data = bar_entry
+                portfolio.mark_and_record(ts, bar_data)
+                eq = portfolio._mark_to_market(bar_data)
+
+                # Rebuild context and run strategy
+                live_ctx = _rebuild_ctx()
+                bar_idx = len(self._live_bars) - 1
+                signals = self.strategy.on_bar(live_ctx, bar_idx)
+
+                if signals:
+                    n_buy = sum(1 for s in signals if s.side in ("buy", "target"))
+                    if n_buy > 0:
+                        for s in signals:
+                            if s.side in ("buy", "target") and s.weight is None:
+                                s.weight = 1.0 / n_buy
+
+                    for sig in signals:
+                        price = bar_data["close"].get(sig.symbol, bar.get("close", 100))
+                        sd = convert_signal(sig, portfolio, price_est=price)
+
+                        if sd["side"] == "buy":
+                            max_qty = max(0, int(portfolio.cash / (price * 1.0001)))
+                            sd["qty"] = min(sd["qty"], max_qty)
+                            if sd["qty"] <= 0:
+                                continue
+
+                        tracked = asyncio.run(
+                            self.order_manager.submit(
+                                sd["symbol"], sd["side"], sd["qty"],
+                                strategy_name=type(self.strategy).__name__,
+                                signal_id=sd.get("signal_id"),
+                            )
+                        )
+                        self.observer.record_signal(ts, sd["symbol"], sd["side"], 0, 1)
+
+                        if tracked and tracked.filled_qty > 0:
+                            pos = portfolio.positions.get(tracked.symbol)
+                            if pos is None:
+                                pos = Position(symbol=tracked.symbol)
+                                portfolio.positions[tracked.symbol] = pos
+                            delta = tracked.filled_qty if tracked.side == "buy" else -tracked.filled_qty
+                            pos.add(delta, price)
+                            if tracked.side == "buy":
+                                portfolio.cash -= price * tracked.filled_qty
+                            else:
+                                portfolio.cash += price * tracked.filled_qty
+                            self.observer.record_trade(
+                                ts, tracked.symbol, tracked.side,
+                                int(tracked.filled_qty), price,
+                            )
+
+                # Periodic snapshot
                 if self.observer.snapshot_due(ts):
                     pos_list = []
                     for sym, pos in portfolio.positions.items():
                         if hasattr(pos, "size") and pos.size > 0:
-                            price = bar["close"] if bare_sym == sym else bar_data["close"].get(sym, 0)
+                            px = bar_data["close"].get(sym, 0)
                             cb = getattr(pos, "cost_basis", 0) or getattr(pos, "avg_price", 0)
                             pos_list.append({
                                 "symbol": sym, "qty": pos.size,
-                                "price": price, "cost_basis": cb,
-                                "mkt_value": pos.size * price,
-                                "pnl_pct": (price / cb - 1) * 100 if cb > 0 else 0,
+                                "price": px, "cost_basis": cb,
+                                "mkt_value": pos.size * px,
+                                "pnl_pct": (px / cb - 1) * 100 if cb > 0 else 0,
                             })
                     self.observer.snapshot_portfolio(ts, pos_list)
 
-                # Record equity
-                eq = portfolio._mark_to_market(bar_data)
                 self.observer.record_bar(ts, eq, portfolio.cash, 0.0)
 
             except Exception:
