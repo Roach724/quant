@@ -9,10 +9,18 @@ DEFAULT_VALUES = {
         "paper": {"initial_capital": 100000, "slippage_bps": 5, "commission_bps": 1, "min_commission": 1.0},
         "live": {"type": "futu_stock", "host": "127.0.0.1", "port": 11111, "max_position_pct": 0.2},
     },
-    "schedule": {"pre_market_warmup": 300, "bar_interval": 300, "market_close_offset": 600},
+    "schedule": {
+        "pre_market_warmup": 300,
+        "bar_interval": 300,
+        "market_close_offset": 600,
+        "multi_day": False,
+        "max_trading_days": 0,
+        "max_duration_per_day": 390,
+    },
     "risk": {"max_drawdown": 0.15, "max_daily_loss": 0.05, "position_size_pct": 0.2},
     "observer": {"log_dir": "output/live/", "snapshot_interval": 60, "trade_log": True, "equity_curve": True},
     "dashboard": {"port": 8090, "websocket": True},
+    "state": {"enabled": True, "dir": "output/live/state/", "checkpoint_interval": 300},
 }
 
 

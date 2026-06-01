@@ -4,10 +4,15 @@ Uses existing ws_collector → GCS → BQ loader pipeline. Requires the
 BQ loader to run frequently during market hours (every 5-10 min) so that
 completed 5m bars are available with acceptable latency.
 
+Supports multi-day runs: calling run() after a previous run() exited
+(at market close) will resume polling with the same last_ts watermark.
+
 Usage:
     source = BQDataSource(symbols=["AAPL", "MSFT", ...], market="us")
     source.on_bar = lambda bar: strategy.on_bar(bar)
-    source.run()  # blocking until market close or stop()
+    source.run()  # blocking until market close, stop(), or stop_check
+    # Next day:
+    source.run()  # resumes — remembers last_ts from previous day
 """
 from __future__ import annotations
 
@@ -19,13 +24,9 @@ from typing import Callable
 import pandas as pd
 from google.cloud import bigquery
 
-logger = logging.getLogger(__name__)
+from live.calendar import MarketCalendar
 
-_MARKET_HOURS = {
-    "us": {"open": (13, 30), "close": (20, 0)},
-    "hk": {"open": (1, 30), "close": (8, 0),
-           "lunch_start": (4, 0), "lunch_end": (5, 0)},
-}
+logger = logging.getLogger(__name__)
 
 
 class BQDataSource:
@@ -33,6 +34,9 @@ class BQDataSource:
 
     No OpenD subscription required — uses existing data pipeline.
     Requires frequent BQ loader cron during market hours.
+
+    Restartable: call run() again after market-close stop — last_ts
+    watermark is preserved across runs.
     """
 
     def __init__(
@@ -53,22 +57,32 @@ class BQDataSource:
         self.on_bar: Callable[[dict], None] | None = None
         self.stop_check = stop_check  # external stop condition
         self.failure_count: int = 0   # consecutive poll failures
+        self._calendar = MarketCalendar(market)
 
     def run(self):
-        """Blocking loop — polls BQ until market close, stop(), or stop_check."""
-        self._running = True
-        self._client = bigquery.Client(project=self.project)
+        """Blocking loop — polls BQ until market close, stop(), or stop_check.
 
-        # Seed last_ts to "now - 1 hour" to avoid loading all history
-        seed = datetime.now(timezone.utc) - timedelta(hours=1)
-        self._last_ts = seed.strftime("%Y-%m-%d %H:%M:%S")
+        Can be called multiple times for multi-day runs:
+        - First call: seeds last_ts from ~1 hour ago, creates BQ client.
+        - Subsequent calls: reuses last_ts and creates fresh BQ client.
+        """
+        self._running = True
+
+        # Create fresh BQ client (old one may have expired)
+        if self._client is None:
+            self._client = bigquery.Client(project=self.project)
+
+        # Seed last_ts on first run only; preserve across multi-day runs
+        if self._last_ts is None:
+            seed = datetime.now(timezone.utc) - timedelta(hours=1)
+            self._last_ts = seed.strftime("%Y-%m-%d %H:%M:%S")
 
         logger.info(
             "BQDataSource: polling every %ds — %d symbols, last_ts=%s",
             self.poll_interval, len(self.symbols), self._last_ts,
         )
         try:
-            while self._running and self._is_market_open():
+            while self._running and self._calendar.is_open_now():
                 if self.stop_check and self.stop_check():
                     logger.info("BQDataSource: stop_check returned True — stopping")
                     break
@@ -82,14 +96,34 @@ class BQDataSource:
         except KeyboardInterrupt:
             logger.info("BQDataSource: interrupted")
         finally:
-            self._client = None
-            logger.info("BQDataSource: stopped")
+            # Keep _client and _last_ts for potential restart
+            logger.info("BQDataSource: stopped (market closed or stop requested)")
 
     def stop(self):
         self._running = False
 
+    def reset(self):
+        """Fully reset internal state — clears last_ts and failure count."""
+        self._last_ts = None
+        self.failure_count = 0
+        self._client = None
+
     def is_connected(self) -> bool:
         return self._client is not None
+
+    @property
+    def last_ts(self) -> str | None:
+        """Last seen timestamp (for state persistence)."""
+        return self._last_ts
+
+    @last_ts.setter
+    def last_ts(self, value: str | None):
+        self._last_ts = value
+
+    @property
+    def calendar(self) -> MarketCalendar:
+        """Access the market calendar (for is_open_now, time_until_open, etc.)."""
+        return self._calendar
 
     # ── internals ──
 
@@ -101,7 +135,6 @@ class BQDataSource:
         table = "us_bars_5m" if self.market == "us" else (
             "hk_bars_5m" if self.market == "hk" else "crypto_bars_5m"
         )
-        sym_filter = ", ".join(f"'{s}'" for s in self.symbols)
 
         query = f"""
             SELECT symbol, timestamp, open, high, low, close, volume
@@ -156,21 +189,3 @@ class BQDataSource:
                     logger.exception("BQDataSource: on_bar callback failed")
 
             logger.debug("BQDataSource: bar @ %s — %d symbols", ts, len(group))
-
-    def _is_market_open(self) -> bool:
-        hours = _MARKET_HOURS.get(self.market)
-        if not hours:
-            return True
-        now = datetime.now(timezone.utc)
-        if now.weekday() >= 5:
-            return False
-        t = now.time()
-        import datetime as _dt
-        open_t = _dt.time(*hours["open"])
-        close_t = _dt.time(*hours["close"])
-        if "lunch_start" in hours:
-            ls = _dt.time(*hours["lunch_start"])
-            le = _dt.time(*hours["lunch_end"])
-            if ls <= t < le:
-                return False
-        return open_t <= t <= close_t

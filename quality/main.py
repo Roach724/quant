@@ -18,10 +18,48 @@ from google.cloud import bigquery
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-EXPECTED_DAILY_BARS = 390
+EXPECTED_DAILY_BARS = 390  # 5m: 78 bars × 5 trading days
 
 
-def check_completeness(df: pd.DataFrame, expected_bars: int = EXPECTED_DAILY_BARS) -> list[str]:
+def _expected_bars(frequency: str, lookback_days: int, market: str) -> int:
+    """Compute expected bar count based on frequency and trading days.
+
+    Uses exchange_calendars to count actual trading days in the lookback
+    window (skips weekends and holidays). Falls back to a simple estimate
+    if the library is unavailable.
+    """
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(days=lookback_days)
+
+    if frequency == "1d":
+        bars_per_day = 1
+    elif frequency == "5m":
+        bars_per_day = 78  # 6.5h market × 12 bars/h
+    else:
+        bars_per_day = 1
+
+    # Try exchange_calendars for accurate trading-day count
+    try:
+        import exchange_calendars as xcals
+        code = "XNYS" if market == "us" else ("XHKG" if market == "hk" else None)
+        if code:
+            cal = xcals.get_calendar(code)
+            import pandas as _pd
+            sessions = cal.sessions_in_range(
+                _pd.Timestamp(start).normalize(),
+                _pd.Timestamp(now).normalize(),
+            )
+            trading_days = len(sessions)
+            return trading_days * bars_per_day
+    except Exception:
+        pass
+
+    # Fallback: estimate ~5 trading days per 7 calendar days
+    trading_days = int(lookback_days * 5 / 7)
+    return max(1, trading_days) * bars_per_day
+
+
+def check_completeness(df: pd.DataFrame, expected_bars: int | None = None) -> list[str]:
     issues = []
     for symbol, group in df.groupby("symbol"):
         actual = len(group)
@@ -116,7 +154,9 @@ def main(event=None, context=None):
     all_issues = []
     all_issues.extend(check_sanity(df))
     all_issues.extend(check_freshness(df, max_age_hours))
-    all_issues.extend(check_completeness(df))
+    expected = _expected_bars(frequency, lookback_days, market)
+    logger.info("Expected bars: %d (freq=%s, %d trading days)", expected, frequency, expected // (78 if frequency == "5m" else 1))
+    all_issues.extend(check_completeness(df, expected))
 
     if all_issues:
         logger.warning("Quality issues found: %d", len(all_issues))

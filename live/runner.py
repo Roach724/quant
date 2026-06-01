@@ -2,12 +2,17 @@
 
 Orchestrates a full trading loop over either:
 - Paper mode: historical BigQuery data replayed bar-by-bar
-- Live mode: real-time WebSocket data feed (stub — NotImplementedError)
+- Live mode (single-day): real-time BQ polling for one trading day
+- Live mode (multi-day): BQ polling across multiple trading days with
+  state persistence, overnight position carry, and holiday-aware sleep.
 
 Dependencies (already built):
 - live/config.py → load_config(path)
 - live/observer.py → Observer
 - live/reporter.py → Reporter
+- live/state.py → StateManager
+- live/calendar.py → MarketCalendar
+- live/bq_datasource.py → BQDataSource
 - oms/broker/__init__.py → PaperBroker
 - oms/manager.py → OrderManager
 - oms/position.py → PositionTracker
@@ -25,6 +30,7 @@ import asyncio
 import logging
 import sys
 import threading
+import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,11 +39,13 @@ import yaml
 from google.cloud import bigquery
 
 from engine.data import DataFrameSource
-from engine.portfolio import Portfolio
+from engine.portfolio import Portfolio, Position
 from engine.strategy import StrategyContext
+from live.calendar import MarketCalendar
 from live.config import load_config
 from live.observer import Observer
 from live.reporter import Reporter
+from live.state import StateManager
 from oms.bridge import convert_signal
 from oms.manager import OrderManager
 from oms.position import PositionTracker
@@ -75,16 +83,25 @@ class LiveRunner:
 
         self._dashboard_thread = None
 
+        # Multi-day state
+        self._state_manager: StateManager | None = None
+        self._calendar: MarketCalendar | None = None
+        self._symbols: list[str] = []
+
     # ── Main entry point ──────────────────────────────────────────────
 
     def run(self):
-        """Run the trading loop (paper or live, per config)."""
-        logger.info("LiveRunner starting — mode=%s market=%s", self._mode, self._market)
+        """Run the trading loop (paper, live single-day, or live multi-day)."""
+        multi_day = self.config.get("schedule", {}).get("multi_day", False)
+        mode_label = f"{self._mode}" + (" (multi-day)" if multi_day else "")
+        logger.info("LiveRunner starting — mode=%s market=%s", mode_label, self._market)
         self._init_components()
 
         try:
             if self._mode == "paper":
                 self._run_paper_loop()
+            elif self._mode == "live" and multi_day:
+                self._run_live_multi_day_loop()
             elif self._mode == "live":
                 self._run_live_loop()
             else:
@@ -157,6 +174,32 @@ class LiveRunner:
         if dash_cfg.get("websocket", False):
             self._start_dashboard(int(dash_cfg.get("port", 8090)))
 
+        # Multi-day: init state manager + calendar
+        state_cfg = self.config.get("state", {})
+        if state_cfg.get("enabled", True):
+            state_dir = state_cfg.get("dir", "output/live/state/")
+            self._state_manager = StateManager(state_dir)
+        self._calendar = MarketCalendar(self._market)
+
+        # Resolve symbols once
+        self._resolve_symbols()
+
+    def _resolve_symbols(self):
+        """Resolve trading symbols from config or BQ."""
+        strat_cfg = self.config.get("strategy", {})
+        symbols = strat_cfg.get("symbols", [])
+        if not symbols and self._mode == "live":
+            from google.cloud import bigquery as bq
+            client = bq.Client(project="deductive-notch-495015-c2")
+            df = client.query(
+                "SELECT DISTINCT symbol FROM quant.factor_values "
+                "WHERE source_builder = 'tech' ORDER BY symbol "
+            ).result().to_dataframe()
+            symbols = df["symbol"].tolist()
+        self._symbols = symbols
+        if symbols:
+            logger.info("Resolved %d symbols", len(symbols))
+
     def _init_strategy(self):
         """Instantiate the configured strategy."""
         strat_cfg = self.config.get("strategy", {})
@@ -164,22 +207,23 @@ class LiveRunner:
 
         if strat_name == "MLPredStrategy":
             from strategies.ml_pred import MLPredStrategy
-            self.strategy = MLPredStrategy(
-                market=strat_cfg.get("market", self._market),
-                top_k=int(strat_cfg.get("top_k", 10)),
-                rebalance_every=int(strat_cfg.get("rebalance_every", 5)),
-                model_type=strat_cfg.get("model_type", "lightgbm"),
-                train_start=strat_cfg.get("train_start", "2020-01-01"),
-                train_end=strat_cfg.get("train_end", "2025-12-31"),
-            )
+            self.strategy = MLPredStrategy()
+            self.strategy.market = strat_cfg.get("market", self._market)
+            self.strategy.top_k = int(strat_cfg.get("top_k", 10))
+            self.strategy.rebalance_every = int(strat_cfg.get("rebalance_every", 5))
+            self.strategy.model_type = strat_cfg.get("model_type", "lightgbm")
+            self.strategy.train_start = strat_cfg.get("train_start", "2020-01-01")
+            self.strategy.train_end = strat_cfg.get("train_end", "2025-12-31")
+            # Model registry: load pre-trained model by name/version
+            self.strategy.model_name = strat_cfg.get("model_name", "momentum_lgbm")
+            self.strategy.model_version = strat_cfg.get("model_version", "latest")
         elif strat_name == "SimpleMomentum":
             from paper.strategies import SimpleMomentum
-            self.strategy = SimpleMomentum(
-                lookback=int(strat_cfg.get("lookback", 20)),
-                top_k=int(strat_cfg.get("top_k", 5)),
-                rebalance_every=int(strat_cfg.get("rebalance_every", 5)),
-                allocation=float(strat_cfg.get("allocation", 0.0)),
-            )
+            self.strategy = SimpleMomentum()
+            self.strategy.lookback = int(strat_cfg.get("lookback", 20))
+            self.strategy.top_k = int(strat_cfg.get("top_k", 5))
+            self.strategy.rebalance_every = int(strat_cfg.get("rebalance_every", 5))
+            self.strategy.allocation = float(strat_cfg.get("allocation", 0.0))
         else:
             raise ValueError(f"Unknown strategy name: {strat_name}")
 
@@ -544,90 +588,375 @@ class LiveRunner:
         logger.info("Loaded BQ data: %d bars × %d symbols", len(close), len(symbols))
         return {"close": close, "open": open_df, "high": high, "low": low, "volume": volume}
 
-    # ── Live trading loop (stub) ──────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════
+    # Live Trading — Single Day
+    # ══════════════════════════════════════════════════════════════════
 
     def _run_live_loop(self):
-        """Live trading via BQ polling of us_bars_5m.
+        """Live trading for a single trading day.
 
-        Polls BigQuery every 60s for new 5m bars (fed by ws_collector → GCS →
-        BQ loader). Accumulates bars in a rolling buffer, rebuilds
-        StrategyContext each bar, runs strategy.on_bar(), processes signals,
-        and submits orders through the live broker.
-
-        Termination conditions (besides market close):
-        - Max drawdown exceeded (config: risk.max_drawdown)
-        - Daily loss limit (config: risk.max_daily_loss)
-        - Max duration reached (config: schedule.max_duration_minutes)
-        - Consecutive BQ poll failures (config: risk.max_consecutive_failures)
+        Creates a fresh portfolio and runs one day of BQ polling.
+        For multi-day runs, use _run_live_multi_day_loop() instead.
         """
-        from live.bq_datasource import BQDataSource
-        import pandas as pd
-        import asyncio
-        from datetime import datetime, timezone
+        broker_cfg = self.config.get("broker", {})
+        live_cfg = broker_cfg.get("live", broker_cfg.get("paper", {}))
+        initial_capital = float(live_cfg.get("initial_capital", 100_000))
+        portfolio = Portfolio(initial_capital=initial_capital)
 
-        # Timing & risk state
-        self._live_start_time = datetime.now(timezone.utc)
-        self._live_bar_count = 0
-        self._live_bq_failures = 0
-        self._live_peak_equity = 0.0
-        self._live_daily_start_equity = 0.0
-        self._live_stop_reason: str | None = None
+        live_state = self._fresh_live_state()
+        symbols = self._symbols
 
-        # Resolve symbols
-        strat_cfg = self.config.get("strategy", {})
-        symbols = strat_cfg.get("symbols", [])
         if not symbols:
-            from google.cloud import bigquery
-            bq = bigquery.Client(project="deductive-notch-495015-c2")
-            df = bq.query(
-                "SELECT DISTINCT symbol FROM quant.factor_values "
-                "WHERE source_builder = 'tech' ORDER BY symbol "
-            ).result().to_dataframe()
-            symbols = df["symbol"].tolist()
+            logger.error("No symbols resolved — cannot run live loop")
+            return
 
-        logger.info("Live mode (BQ poll): %d symbols", len(symbols))
+        logger.info("Live mode (BQ poll): %d symbols — single day", len(symbols))
+        stop_reason = self._run_one_live_day(portfolio, live_state, symbols)
+        logger.info("Single-day live loop ended: %s", stop_reason)
 
-        # State
-        from engine.portfolio import Portfolio, Position
-        from engine.strategy import StrategyContext
-        from engine.data import DataFrameSource
-        from oms.bridge import convert_signal
+    # ══════════════════════════════════════════════════════════════════
+    # Live Trading — Multi-Day
+    # ══════════════════════════════════════════════════════════════════
 
-        portfolio = Portfolio(initial_capital=100_000)
+    def _run_live_multi_day_loop(self):
+        """Multi-day live trading with state persistence.
+
+        Outer loop:
+        1. Load or create portfolio + live_state
+        2. For each trading day:
+           a. Wait until market opens
+           b. Run one trading day (_run_one_live_day)
+           c. Save state at end of day
+           d. Check stop conditions (max_days, risk)
+        3. Generate final report
+        """
+        schedule_cfg = self.config.get("schedule", {})
+        max_trading_days = int(schedule_cfg.get("max_trading_days", 0))
+        risk_cfg = self.config.get("risk", {})
+        max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))
+
+        symbols = self._symbols
+        if not symbols:
+            logger.error("No symbols resolved — cannot run multi-day loop")
+            return
+
+        # ── 1. Load or create state ──
+        portfolio, live_state = self._load_or_create_portfolio()
+        state_mgr = self._state_manager
+
+        trading_day = live_state.get("trading_day", 0)
+        peak_equity = live_state.get("peak_equity", 0.0)
+
+        logger.info(
+            "Multi-day live loop: starting day %d, cash=%.2f, %d positions, %d symbols",
+            trading_day + 1, portfolio.cash, len(portfolio.positions), len(symbols),
+        )
+
+        # ── 2. Strategy init (once) ──
+        self._init_strategy_for_portfolio(portfolio, symbols)
+
+        # ── 3. Per-day loop ──
+        self._live_stop_reason = None
         self._live_bars: list[dict] = []
+        self._live_start_time = datetime.now(timezone.utc)
+        self._live_bar_count = live_state.get("bar_count", 0)
+        self._live_peak_equity = peak_equity
+        self._live_daily_start_equity = 0.0
 
-        # Strategy init
-        empty_df = pd.DataFrame({
-            "close": [{}], "open": [{}], "high": [{}], "low": [{}], "volume": [{}],
-        })
-        src = DataFrameSource(empty_df)
+        while True:
+            trading_day += 1
+            live_state["trading_day"] = trading_day
+
+            # Check max days
+            if max_trading_days > 0 and trading_day > max_trading_days:
+                logger.info("Reached max_trading_days=%d — stopping", max_trading_days)
+                self._live_stop_reason = "MAX_TRADING_DAYS"
+                break
+
+            # Wait for market open
+            self._wait_for_market_open(trading_day)
+
+            # Reset daily state
+            self._live_daily_start_equity = 0.0
+            self._live_bar_count = live_state.get("bar_count", self._live_bar_count)
+
+            logger.info("── Day %d starting ── cash=%.2f positions=%d",
+                        trading_day, portfolio.cash, len(portfolio.positions))
+
+            # Run one trading day
+            day_stop_reason = self._run_one_live_day(portfolio, live_state, symbols)
+            logger.info("── Day %d ended: %s ── cash=%.2f positions=%d",
+                        trading_day, day_stop_reason, portfolio.cash, len(portfolio.positions))
+
+            # Update live_state from runner state
+            live_state["bar_count"] = self._live_bar_count
+            live_state["peak_equity"] = self._live_peak_equity
+            live_state["last_bq_ts"] = getattr(self, '_bq_source', None) and self._bq_source.last_ts or live_state.get("last_bq_ts", "")
+
+            # Save end-of-day state
+            if state_mgr:
+                state_mgr.save(portfolio, self.position_tracker, live_state)
+                state_mgr.clear_checkpoint()
+
+            # Stop if risk triggered (not just market close)
+            if day_stop_reason and day_stop_reason != "market_close":
+                self._live_stop_reason = day_stop_reason
+                break
+
+            # Check cumulative drawdown
+            current_dd = (
+                (self._live_peak_equity - portfolio._mark_to_market({}))
+                / max(self._live_peak_equity, 1)
+            )
+            if current_dd >= max_drawdown:
+                self._live_stop_reason = f"MAX_DRAWDOWN ({current_dd*100:.1f}%)"
+                logger.warning("Cumulative drawdown stop: %s", self._live_stop_reason)
+                break
+
+        logger.info("Multi-day loop complete: %s", self._live_stop_reason or "normal")
+
+    def _load_or_create_portfolio(self):
+        """Load portfolio from saved state or create fresh.
+
+        Returns (portfolio, live_state_dict).
+        """
+        broker_cfg = self.config.get("broker", {})
+        live_cfg = broker_cfg.get("live", broker_cfg.get("paper", {}))
+        initial_capital = float(live_cfg.get("initial_capital", 100_000))
+
+        # Check for checkpoint first (crash recovery)
+        if self._state_manager and self._state_manager.checkpoint_exists():
+            cp = self._state_manager.load_checkpoint()
+            if cp:
+                portfolio = StateManager.restore_portfolio(
+                    cp["portfolio_data"], Portfolio, Position
+                )
+                live_state = cp["live_state"]
+                live_state["trading_day"] = cp.get("trading_day", 0)
+                logger.info("Recovered from checkpoint: day %d, cash=%.2f",
+                            live_state["trading_day"], portfolio.cash)
+                return portfolio, live_state
+
+        # Try full state
+        if self._state_manager and self._state_manager.exists():
+            state = self._state_manager.load()
+            portfolio = StateManager.restore_portfolio(
+                state["portfolio_data"], Portfolio, Position
+            )
+            live_state = state["live_state"]
+            live_state["trading_day"] = state.get("trading_day", 0)
+
+            # Restore position tracker
+            for sym, qty in state.get("tracker_data", {}).items():
+                self.position_tracker._positions[sym] = qty
+
+            logger.info("Loaded state: day %d, cash=%.2f, %d positions",
+                        live_state["trading_day"], portfolio.cash,
+                        len(portfolio.positions))
+            return portfolio, live_state
+
+        # Fresh start
+        portfolio = Portfolio(initial_capital=initial_capital)
+        live_state = self._fresh_live_state()
+        logger.info("Fresh portfolio: capital=%.0f", initial_capital)
+        return portfolio, live_state
+
+    @staticmethod
+    def _fresh_live_state() -> dict:
+        return {
+            "trading_day": 0,
+            "peak_equity": 0.0,
+            "daily_start_equity": 0.0,
+            "bar_count": 0,
+            "last_bq_ts": "",
+            "stop_reason": None,
+        }
+
+    def _init_strategy_for_portfolio(self, portfolio, symbols):
+        """Initialize strategy with a (potentially non-empty) portfolio.
+
+        Creates a DataFrameSource with proper symbol columns so that
+        ctx.universe returns actual stock symbols (needed by strategies
+        that query BQ for training data during on_init).
+        """
+        strat_cfg = self.config.get("strategy", {})
+        # DataFrameSource expects: close=DataFrame(columns=symbols, index=timestamps)
+        close = pd.DataFrame({sym: [float("nan")] for sym in symbols})
+        src = DataFrameSource(close=close)
         ctx = StrategyContext(data=src, portfolio=portfolio, config={
             "symbols": symbols, **strat_cfg,
         })
         self.strategy.on_init(ctx)
+        logger.info("Strategy on_init complete — %d symbols in universe", len(symbols))
+
+    def _wait_for_market_open(self, trading_day: int):
+        """Sleep until next market open. Logs progress every ~10 min."""
+        if not self._calendar:
+            return
+
+        if self._calendar.is_open_now():
+            logger.info("Market already open — proceeding with day %d", trading_day)
+            return
+
+        wait_sec = self._calendar.time_until_open()
+        if wait_sec <= 0:
+            return
+
+        next_open = self._calendar.next_open_datetime()
+        wait_min = wait_sec / 60
+        hours = int(wait_min // 60)
+        mins = int(wait_min % 60)
+
+        logger.info(
+            "Day %d: market closed — sleeping %dh%dm until %s UTC",
+            trading_day, hours, mins,
+            next_open.strftime("%Y-%m-%d %H:%M"),
+        )
+
+        # Sleep in 10-minute chunks with progress logging
+        remaining = wait_sec
+        chunk = 600  # 10 minutes
+        while remaining > 0:
+            sleep_dur = min(chunk, remaining)
+            _time.sleep(sleep_dur)
+            remaining -= sleep_dur
+
+            if remaining > 0:
+                # Check if still a trading day (weekends pass, holidays stay closed)
+                if self._calendar.is_open_now():
+                    logger.info("Market opened early — proceeding")
+                    break
+
+                hrs_left = int(remaining // 3600)
+                min_left = int((remaining % 3600) // 60)
+                if hrs_left > 0 or min_left % 30 == 0:
+                    logger.debug("Day %d: %dh%dm until open …", trading_day, hrs_left, min_left)
+
+        logger.info("Day %d: market open — resuming", trading_day)
+
+    # ══════════════════════════════════════════════════════════════════
+    # Live Trading — Core Daily Loop
+    # ══════════════════════════════════════════════════════════════════
+
+    def _run_one_live_day(self, portfolio, live_state, symbols):
+        """Run one trading day of BQ polling.
+
+        Parameters
+        ----------
+        portfolio : Portfolio
+            Current portfolio (may have positions from previous days).
+        live_state : dict
+            Runtime state (peak_equity, bar_count, last_bq_ts, etc.).
+        symbols : list[str]
+            Trading symbols.
+
+        Returns
+        -------
+        str
+            Stop reason: "market_close", "max_drawdown", "daily_loss",
+            "max_duration", "bq_failures", or None.
+        """
+        from live.bq_datasource import BQDataSource
+        from engine.strategy import StrategyContext
+        from engine.data import DataFrameSource
+        from oms.bridge import convert_signal
+
+        strat_cfg = self.config.get("strategy", {})
+        risk_cfg = self.config.get("risk", {})
+        schedule_cfg = self.config.get("schedule", {})
+
+        poll_interval = int(schedule_cfg.get("bar_interval", 60))
+        max_duration_min = int(schedule_cfg.get("max_duration_per_day",
+                                schedule_cfg.get("max_duration_minutes", 390)))
+        max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))
+        max_daily_loss = float(risk_cfg.get("max_daily_loss", 0.05))
+        max_bq_failures = int(risk_cfg.get("max_consecutive_failures", 10))
+        checkpoint_interval = int(self.config.get("state", {}).get("checkpoint_interval", 300))
+
+        day_stop_reason: str | None = None
+        day_start_time = datetime.now(timezone.utc)
+
+        # Create or reuse BQDataSource
+        if not hasattr(self, '_bq_source') or self._bq_source is None:
+            self._bq_source = BQDataSource(
+                symbols=symbols,
+                market=self._market,
+                poll_interval_sec=poll_interval,
+            )
+        else:
+            # Resume from previous day — restore last_ts
+            if live_state.get("last_bq_ts"):
+                self._bq_source.last_ts = live_state["last_bq_ts"]
+            self._bq_source.failure_count = 0
+
+        source = self._bq_source
+        source.stop_check = None  # will be re-set below
+
+        # Rolling bar buffer per day
+        self._live_bars: list[dict] = []
+
+        # Ensure strategy context is set up with proper symbol columns
+        close = pd.DataFrame({sym: [float("nan")] for sym in symbols})
+        src_init = DataFrameSource(close=close)
+        ctx_init = StrategyContext(data=src_init, portfolio=portfolio, config={
+            "symbols": symbols, **strat_cfg,
+        })
+        # on_init is called once before the first day; subsequent days just need ctx rebuild
 
         def _rebuild_ctx() -> StrategyContext:
-            """Rebuild StrategyContext from accumulated live bars."""
+            """Rebuild StrategyContext from accumulated live bars.
+
+            Converts the list-of-dicts format into proper wide-format
+            DataFrames where columns = symbols.
+            """
             n = len(self._live_bars)
-            df = pd.DataFrame({
-                "close": [self._live_bars[i].get("close", {}) for i in range(n)],
-                "open": [self._live_bars[i].get("open", {}) for i in range(n)],
-                "high": [self._live_bars[i].get("high", {}) for i in range(n)],
-                "low": [self._live_bars[i].get("low", {}) for i in range(n)],
-                "volume": [self._live_bars[i].get("volume", {}) for i in range(n)],
-            })
-            src2 = DataFrameSource(df)
+            # Pivot bars into wide format: {symbol: [values across bars]}
+            close_cols = {}
+            open_cols = {}
+            high_cols = {}
+            low_cols = {}
+            volume_cols = {}
+            for i in range(n):
+                bar = self._live_bars[i]
+                for sym in symbols:
+                    close_cols.setdefault(sym, []).append(
+                        bar.get("close", {}).get(sym, float("nan"))
+                    )
+                    open_cols.setdefault(sym, []).append(
+                        bar.get("open", {}).get(sym, float("nan"))
+                    )
+                    high_cols.setdefault(sym, []).append(
+                        bar.get("high", {}).get(sym, float("nan"))
+                    )
+                    low_cols.setdefault(sym, []).append(
+                        bar.get("low", {}).get(sym, float("nan"))
+                    )
+                    volume_cols.setdefault(sym, []).append(
+                        bar.get("volume", {}).get(sym, 0.0)
+                    )
+            close_df = pd.DataFrame(close_cols)
+            open_df = pd.DataFrame(open_cols)
+            high_df = pd.DataFrame(high_cols)
+            low_df = pd.DataFrame(low_cols)
+            volume_df = pd.DataFrame(volume_cols)
+            src2 = DataFrameSource(
+                close=close_df, open=open_df, high=high_df,
+                low=low_df, volume=volume_df,
+            )
             src2.timestamp = [self._live_bars[i].get("timestamp", "") for i in range(n)]
             return StrategyContext(data=src2, portfolio=portfolio, config={
                 "symbols": symbols, **strat_cfg,
             })
 
+        last_checkpoint_time = day_start_time
+
         def on_live_bar(bar_data: dict):
-            """Callback: BQDataSource feeds pre-batched bar_data (all symbols at once)."""
+            """Callback: BQDataSource feeds pre-batched bar_data."""
+            nonlocal day_stop_reason, last_checkpoint_time
             try:
                 ts = bar_data.get("timestamp", "")
 
-                # Append to rolling buffer (already batched by timestamp)
+                # Append to rolling buffer
                 self._live_bars.append(bar_data)
                 if len(self._live_bars) > 500:
                     self._live_bars = self._live_bars[-500:]
@@ -636,32 +965,28 @@ class LiveRunner:
                 portfolio.mark_and_record(ts, bar_data)
                 eq = portfolio._mark_to_market(bar_data)
 
-                # ── Drawdown tracking ──
+                # ── Drawdown tracking (cross-day) ──
                 if eq > self._live_peak_equity:
                     self._live_peak_equity = eq
+                    live_state["peak_equity"] = eq
                 current_dd = (self._live_peak_equity - eq) / max(self._live_peak_equity, 1)
 
-                # ── Daily loss tracking ──
-                ts_dt = None
-                try:
-                    from datetime import datetime as _dt
-                    ts_dt = _dt.fromisoformat(str(ts).replace("Z", "+00:00"))
-                except Exception:
-                    pass
-                if ts_dt and (self._live_daily_start_equity == 0 or ts_dt.time().hour == 0):
+                # ── Daily loss tracking (reset per day) ──
+                if self._live_daily_start_equity == 0:
                     self._live_daily_start_equity = eq
                 daily_loss = (self._live_daily_start_equity - eq) / max(self._live_daily_start_equity, 1)
 
                 # ── Risk stop checks ──
-                initial_capital = float(self.config.get("broker", {}).get("live", {}).get("initial_capital", 100_000))
                 if current_dd >= max_drawdown:
-                    self._live_stop_reason = f"MAX_DRAWDOWN ({current_dd*100:.1f}%)"
-                    logger.warning("Risk stop: %s", self._live_stop_reason)
+                    day_stop_reason = f"MAX_DRAWDOWN ({current_dd*100:.1f}%)"
+                    logger.warning("Risk stop: %s", day_stop_reason)
+                    source.stop()
                 elif daily_loss >= max_daily_loss:
-                    self._live_stop_reason = f"DAILY_LOSS ({daily_loss*100:.1f}%)"
-                    logger.warning("Risk stop: %s", self._live_stop_reason)
+                    day_stop_reason = f"DAILY_LOSS ({daily_loss*100:.1f}%)"
+                    logger.warning("Risk stop: %s", day_stop_reason)
+                    source.stop()
 
-                # Rebuild context and run strategy
+                # ── Strategy ──
                 live_ctx = _rebuild_ctx()
                 bar_idx = len(self._live_bars) - 1
                 signals = self.strategy.on_bar(live_ctx, bar_idx)
@@ -725,44 +1050,54 @@ class LiveRunner:
 
                 self.observer.record_bar(ts, eq, portfolio.cash, 0.0)
 
+                # ── Intraday checkpoint ──
+                now = datetime.now(timezone.utc)
+                if (now - last_checkpoint_time).total_seconds() >= checkpoint_interval:
+                    if self._state_manager:
+                        # snapshot live_state first
+                        live_state["bar_count"] = self._live_bar_count
+                        live_state["peak_equity"] = self._live_peak_equity
+                        live_state["last_bq_ts"] = source.last_ts or ""
+                        self._state_manager.save_checkpoint(portfolio, live_state)
+                    last_checkpoint_time = now
+
             except Exception:
                 logger.exception("Live bar callback failed")
 
-        poll_interval = self.config.get("schedule", {}).get("bar_interval", 60)
-        max_duration_min = self.config.get("schedule", {}).get("max_duration_minutes", 0)
-        risk_cfg = self.config.get("risk", {})
-        max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))
-        max_daily_loss = float(risk_cfg.get("max_daily_loss", 0.05))
-        max_bq_failures = int(risk_cfg.get("max_consecutive_failures", 10))
-
-        source = BQDataSource(
-            symbols=symbols,
-            market=self._market,
-            poll_interval_sec=poll_interval,
-        )
-
         def _should_stop() -> bool:
-            """Check all termination conditions. Returns True if should stop."""
-            # Risk stop triggered in on_live_bar
-            if self._live_stop_reason:
+            """Check all termination conditions."""
+            nonlocal day_stop_reason
+            if day_stop_reason:
                 return True
             # Duration limit
             if max_duration_min > 0:
-                elapsed = (datetime.now(timezone.utc) - self._live_start_time).total_seconds() / 60
+                elapsed = (datetime.now(timezone.utc) - day_start_time).total_seconds() / 60
                 if elapsed >= max_duration_min:
-                    self._live_stop_reason = f"MAX_DURATION ({max_duration_min}min)"
-                    logger.warning("Stop: %s", self._live_stop_reason)
+                    day_stop_reason = f"MAX_DURATION ({max_duration_min}min)"
+                    logger.warning("Stop: %s", day_stop_reason)
                     return True
             # Consecutive BQ failures
             if source.failure_count >= max_bq_failures:
-                self._live_stop_reason = f"BQ_FAILURES ({source.failure_count} consecutive)"
-                logger.error("Stop: %s", self._live_stop_reason)
+                day_stop_reason = f"BQ_FAILURES ({source.failure_count} consecutive)"
+                logger.error("Stop: %s", day_stop_reason)
                 return True
             return False
 
         source.stop_check = _should_stop
         source.on_bar = on_live_bar
-        source.run()
+
+        try:
+            source.run()
+        except Exception:
+            logger.exception("BQDataSource.run() raised")
+            day_stop_reason = day_stop_reason or "exception"
+
+        # Determine final stop reason
+        if day_stop_reason:
+            return day_stop_reason
+        if not self._calendar.is_open_now():
+            return "market_close"
+        return day_stop_reason or "stopped"
 
     # ── Shutdown ──────────────────────────────────────────────────────
 
@@ -788,7 +1123,7 @@ class LiveRunner:
         # Register in ExperimentTracker if experiment.id is configured
         try:
             from live.config import record_experiment
-            record_experiment(self.config, self.output_dir)
+            record_experiment(self.config, self._output_dir)
         except Exception:
             logger.exception("Failed to record experiment (non-fatal)")
 

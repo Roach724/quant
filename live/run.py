@@ -9,8 +9,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
+
+# Configure logging before any imports
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-5s [%(name)s] %(message)s",
+    stream=sys.stderr,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

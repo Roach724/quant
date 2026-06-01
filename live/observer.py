@@ -23,25 +23,35 @@ class Observer:
         self._last_snapshot = None
         self._bar_count = 0
 
-        # Open file handles
-        self._trades_file = open(self.output_dir / "trades.csv", "w", newline="")
-        self._trades_writer = csv.writer(self._trades_file)
-        self._trades_writer.writerow(["time", "symbol", "side", "qty", "price", "commission"])
-
-        self._signals_file = open(self.output_dir / "signals.csv", "w", newline="")
-        self._signals_writer = csv.writer(self._signals_file)
-        self._signals_writer.writerow(["time", "symbol", "side", "score", "rank"])
-
-        self._snapshots_file = open(self.output_dir / "positions_snapshot.csv", "w", newline="")
-        self._snapshots_writer = csv.writer(self._snapshots_file)
-        self._snapshots_writer.writerow(["timestamp", "symbol", "qty", "price", "cost_basis", "mkt_value", "pnl_pct"])
-
-        self._equity_file = open(self.output_dir / "equity_curve.csv", "w", newline="")
-        self._equity_writer = csv.writer(self._equity_file)
-        self._equity_writer.writerow(["timestamp", "equity", "cash", "portfolio_value", "return_pct"])
+        # Open file handles in append mode — write headers only if file is empty.
+        # This supports multi-day runs that reuse the same output directory.
+        self._trades_file, self._trades_writer = self._open_log(
+            "trades.csv", ["time", "symbol", "side", "qty", "price", "commission"]
+        )
+        self._signals_file, self._signals_writer = self._open_log(
+            "signals.csv", ["time", "symbol", "side", "score", "rank"]
+        )
+        self._snapshots_file, self._snapshots_writer = self._open_log(
+            "positions_snapshot.csv",
+            ["timestamp", "symbol", "qty", "price", "cost_basis", "mkt_value", "pnl_pct"],
+        )
+        self._equity_file, self._equity_writer = self._open_log(
+            "equity_curve.csv",
+            ["timestamp", "equity", "cash", "portfolio_value", "return_pct"],
+        )
 
         self._alert_file = open(self.output_dir / "alerts.log", "a")
         self._initial_equity = None
+
+    def _open_log(self, filename: str, headers: list[str]):
+        """Open a CSV log file in append mode, writing headers only if empty."""
+        path = self.output_dir / filename
+        is_new = not path.exists() or path.stat().st_size == 0
+        f = open(path, "a", newline="")
+        writer = csv.writer(f)
+        if is_new:
+            writer.writerow(headers)
+        return f, writer
 
     def snapshot_due(self, now: datetime) -> bool:
         """Check if enough time has passed since last snapshot."""

@@ -1,0 +1,48 @@
+# Experiment 2: SimpleMomentum — Multi-day Live Paper
+live:
+  mode: live
+  market: us
+  output_dir: output/live/
+
+broker:
+  live:
+    type: paper
+    initial_capital: 100000
+    slippage_bps: 5
+    commission_bps: 1
+    min_commission: 1.0
+
+strategy:
+  name: SimpleMomentum
+  lookback: 78
+  top_k: 5
+  rebalance_every: 13
+  allocation: 0.0
+
+schedule:
+  bar_interval: 60
+  multi_day: true
+  max_trading_days: 5
+  max_duration_per_day: 390
+
+risk:
+  max_drawdown: 0.15
+  max_daily_loss: 0.05
+  max_consecutive_failures: 10
+
+observer:
+  log_dir: output/live/
+  snapshot_interval: 60
+
+dashboard:
+  port: 8090
+  websocket: false
+
+state:
+  enabled: true
+  dir: output/live/state_momentum/
+  checkpoint_interval: 300
+
+experiment:
+  id: exp2_simple_momentum
+  name: "Exp2 — SimpleMomentum (control)"

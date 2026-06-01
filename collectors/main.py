@@ -183,7 +183,8 @@ def main():
             logger.warning("No data returned for %d symbols", len(symbols))
             return
 
-        paths = write_bars_to_gcs(df, bucket, market=adapter.market.lower(), frequency=frequency)
+        market_dir = os.environ.get("MARKET", adapter.market.lower())
+        paths = write_bars_to_gcs(df, bucket, market=market_dir, frequency=frequency)
         logger.info("Wrote %d rows to %d GCS paths", len(df), len(paths))
     except Exception:
         logger.exception("Collection failed")
