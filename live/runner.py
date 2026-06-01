@@ -115,7 +115,7 @@ class LiveRunner:
         else:
             live_cfg = broker_cfg.get("live", {})
             broker_type = live_cfg.get("type", "futu_stock")
-            self._slippage_bps = float(live_cfg.get("slippage_bps", 0))
+            self._slippage_bps = float(live_cfg.get("slippage_bps", 5))
             self._commission_bps = float(live_cfg.get("commission_bps", 1))
             self._min_commission = float(live_cfg.get("min_commission", 1.0))
             if broker_type == "futu_stock":
@@ -124,6 +124,10 @@ class LiveRunner:
                     host=live_cfg.get("host", "127.0.0.1"),
                     port=int(live_cfg.get("port", 11111)),
                 )
+            elif broker_type == "paper":
+                from oms.broker import PaperBroker
+                capital = float(live_cfg.get("initial_capital", 100_000))
+                self.broker = PaperBroker(initial_capital=capital)
             else:
                 raise ValueError(f"Unknown live broker type: {broker_type}")
             logger.info("LiveBroker initialised: %s", broker_type)

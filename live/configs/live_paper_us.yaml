@@ -1,0 +1,43 @@
+# Real-time paper trading — live BQ data + simulated execution
+live:
+  mode: live
+  market: us
+  output_dir: output/live/
+
+broker:
+  live:
+    type: paper                  # paper broker for simulation
+    initial_capital: 100000
+    slippage_bps: 5
+    commission_bps: 1
+    min_commission: 1.0
+
+strategy:
+  name: SimpleMomentum
+  top_k: 5
+  lookback: 78                   # ~1 trading day in 5m bars
+  rebalance_every: 13            # rebalance every ~1h
+  fallback_strategy: SimpleMomentum
+
+schedule:
+  bar_interval: 60               # BQ poll interval (seconds)
+
+risk:
+  max_drawdown: 0.15
+  max_daily_loss: 0.05
+  position_size_pct: 0.2
+
+observer:
+  log_dir: output/live/
+  snapshot_interval: 60
+  trade_log: true
+  equity_curve: true
+
+dashboard:
+  port: 8090
+  websocket: true
+
+experiment:
+  id: exp_live_paper_momentum
+  name: "Live Paper — SimpleMomentum 5m"
+  hypothesis: "SimpleMomentum on live 5m US bars with paper execution"
