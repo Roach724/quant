@@ -18,7 +18,7 @@ class Reporter:
     def __init__(self, output_dir: str):
         self.output_dir = Path(output_dir)
 
-    def generate(self):
+    def generate(self, stop_reason: str = ""):
         """Generate report.html with equity curve, drawdown, pie chart, summary."""
         logger.info("Generating report...")
 
@@ -94,6 +94,8 @@ class Reporter:
         max_equity = equity_df["equity"].max()
         min_equity = equity_df["equity"].min()
 
+        stop_reason_display = stop_reason or "market close"
+
         total_trades = 0
         if trades_path.exists():
             trades_df = pd.read_csv(trades_path)
@@ -119,6 +121,7 @@ th {{ background: #f5f5f5; }}
 <table>
 <tr><th>Metric</th><th>Value</th></tr>
 <tr><td>Total Return</td><td>{total_return:+.2f}%</td></tr>
+<tr><td>Stop Reason</td><td style="color:#D81159">{stop_reason_display}</td></tr>
 <tr><td>Trading Days</td><td>{n_days}</td></tr>
 <tr><td>Total Trades</td><td>{total_trades}</td></tr>
 <tr><td>Max Drawdown</td><td>{max_dd:.2f}%</td></tr>

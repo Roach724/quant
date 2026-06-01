@@ -779,7 +779,8 @@ class LiveRunner:
 
         if self.reporter:
             try:
-                self.reporter.generate()
+                reason = getattr(self, '_live_stop_reason', None) or ""
+                self.reporter.generate(stop_reason=reason)
                 logger.info("Report generated")
             except Exception:
                 logger.exception("Failed to generate report")
