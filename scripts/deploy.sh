@@ -56,7 +56,7 @@ fi
 if [ -f live/configs/exp1_ml_us.yaml ]; then
     "$VENV_PYTHON" -c "
 from live.config import load_config
-cfg = load_config('exp1_ml_us')
+cfg = load_config('live/configs/exp1_ml_us.yaml')
 print(f'Config loaded: strategy={cfg.strategy.name}')
 " || fail "Smoke test 2: config parse"
 else
