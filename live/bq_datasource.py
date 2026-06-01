@@ -154,6 +154,15 @@ class BQDataSource:
             "hk_bars_5m" if self.market == "hk" else "crypto_bars_5m"
         )
 
+        # BQ bars use exchange-prefixed symbols (US.AAPL, HK.00001),
+        # while the experiment uses unprefixed symbols (AAPL, 00001).
+        # Prefix symbols for the query, strip prefix in the callback.
+        _pre = self.market.upper() + "."
+        query_symbols = [
+            s if s.startswith(_pre) else _pre + s
+            for s in self.symbols
+        ]
+
         query = f"""
             SELECT symbol, timestamp, open, high, low, close, volume
             FROM `{self.project}.quant.{table}`
@@ -163,7 +172,7 @@ class BQDataSource:
         """
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ArrayQueryParameter("symbols", "STRING", self.symbols),
+                bigquery.ArrayQueryParameter("symbols", "STRING", query_symbols),
                 bigquery.ScalarQueryParameter("last_ts", "STRING", self._last_ts),
             ],
         )
@@ -194,6 +203,9 @@ class BQDataSource:
             }
             for _, row in group.iterrows():
                 sym = row["symbol"]
+                # Strip exchange prefix (US.AAPL → AAPL, HK.00001 → 00001)
+                if "." in sym:
+                    sym = sym.split(".", 1)[1]
                 bar_data["close"][sym] = float(row["close"])
                 bar_data["open"][sym] = float(row["open"])
                 bar_data["high"][sym] = float(row["high"])
