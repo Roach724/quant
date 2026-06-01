@@ -6,7 +6,7 @@ live:
 
 broker:
   live:
-    type: paper                  # paper broker for simulation
+    type: paper
     initial_capital: 100000
     slippage_bps: 5
     commission_bps: 1
@@ -15,23 +15,22 @@ broker:
 strategy:
   name: SimpleMomentum
   top_k: 5
-  lookback: 78                   # ~1 trading day in 5m bars
-  rebalance_every: 13            # rebalance every ~1h
+  lookback: 78
+  rebalance_every: 13
   fallback_strategy: SimpleMomentum
 
 schedule:
-  bar_interval: 60               # BQ poll interval (seconds)
+  bar_interval: 60
+  max_duration_minutes: 390       # stop after 6.5h (one full US session)
 
 risk:
-  max_drawdown: 0.15
-  max_daily_loss: 0.05
-  position_size_pct: 0.2
+  max_drawdown: 0.15              # stop if equity drops 15% from peak
+  max_daily_loss: 0.05            # stop if daily loss exceeds 5%
+  max_consecutive_failures: 10    # stop after 10 consecutive BQ poll failures
 
 observer:
   log_dir: output/live/
   snapshot_interval: 60
-  trade_log: true
-  equity_curve: true
 
 dashboard:
   port: 8090
@@ -40,4 +39,3 @@ dashboard:
 experiment:
   id: exp_live_paper_momentum
   name: "Live Paper — SimpleMomentum 5m"
-  hypothesis: "SimpleMomentum on live 5m US bars with paper execution"

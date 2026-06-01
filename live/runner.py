@@ -553,10 +553,25 @@ class LiveRunner:
         BQ loader). Accumulates bars in a rolling buffer, rebuilds
         StrategyContext each bar, runs strategy.on_bar(), processes signals,
         and submits orders through the live broker.
+
+        Termination conditions (besides market close):
+        - Max drawdown exceeded (config: risk.max_drawdown)
+        - Daily loss limit (config: risk.max_daily_loss)
+        - Max duration reached (config: schedule.max_duration_minutes)
+        - Consecutive BQ poll failures (config: risk.max_consecutive_failures)
         """
         from live.bq_datasource import BQDataSource
         import pandas as pd
         import asyncio
+        from datetime import datetime, timezone
+
+        # Timing & risk state
+        self._live_start_time = datetime.now(timezone.utc)
+        self._live_bar_count = 0
+        self._live_bq_failures = 0
+        self._live_peak_equity = 0.0
+        self._live_daily_start_equity = 0.0
+        self._live_stop_reason: str | None = None
 
         # Resolve symbols
         strat_cfg = self.config.get("strategy", {})
@@ -616,9 +631,35 @@ class LiveRunner:
                 self._live_bars.append(bar_data)
                 if len(self._live_bars) > 500:
                     self._live_bars = self._live_bars[-500:]
+                self._live_bar_count += 1
 
                 portfolio.mark_and_record(ts, bar_data)
                 eq = portfolio._mark_to_market(bar_data)
+
+                # ── Drawdown tracking ──
+                if eq > self._live_peak_equity:
+                    self._live_peak_equity = eq
+                current_dd = (self._live_peak_equity - eq) / max(self._live_peak_equity, 1)
+
+                # ── Daily loss tracking ──
+                ts_dt = None
+                try:
+                    from datetime import datetime as _dt
+                    ts_dt = _dt.fromisoformat(str(ts).replace("Z", "+00:00"))
+                except Exception:
+                    pass
+                if ts_dt and (self._live_daily_start_equity == 0 or ts_dt.time().hour == 0):
+                    self._live_daily_start_equity = eq
+                daily_loss = (self._live_daily_start_equity - eq) / max(self._live_daily_start_equity, 1)
+
+                # ── Risk stop checks ──
+                initial_capital = float(self.config.get("broker", {}).get("live", {}).get("initial_capital", 100_000))
+                if current_dd >= max_drawdown:
+                    self._live_stop_reason = f"MAX_DRAWDOWN ({current_dd*100:.1f}%)"
+                    logger.warning("Risk stop: %s", self._live_stop_reason)
+                elif daily_loss >= max_daily_loss:
+                    self._live_stop_reason = f"DAILY_LOSS ({daily_loss*100:.1f}%)"
+                    logger.warning("Risk stop: %s", self._live_stop_reason)
 
                 # Rebuild context and run strategy
                 live_ctx = _rebuild_ctx()
@@ -688,11 +729,38 @@ class LiveRunner:
                 logger.exception("Live bar callback failed")
 
         poll_interval = self.config.get("schedule", {}).get("bar_interval", 60)
+        max_duration_min = self.config.get("schedule", {}).get("max_duration_minutes", 0)
+        risk_cfg = self.config.get("risk", {})
+        max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))
+        max_daily_loss = float(risk_cfg.get("max_daily_loss", 0.05))
+        max_bq_failures = int(risk_cfg.get("max_consecutive_failures", 10))
+
         source = BQDataSource(
             symbols=symbols,
             market=self._market,
             poll_interval_sec=poll_interval,
         )
+
+        def _should_stop() -> bool:
+            """Check all termination conditions. Returns True if should stop."""
+            # Risk stop triggered in on_live_bar
+            if self._live_stop_reason:
+                return True
+            # Duration limit
+            if max_duration_min > 0:
+                elapsed = (datetime.now(timezone.utc) - self._live_start_time).total_seconds() / 60
+                if elapsed >= max_duration_min:
+                    self._live_stop_reason = f"MAX_DURATION ({max_duration_min}min)"
+                    logger.warning("Stop: %s", self._live_stop_reason)
+                    return True
+            # Consecutive BQ failures
+            if source.failure_count >= max_bq_failures:
+                self._live_stop_reason = f"BQ_FAILURES ({source.failure_count} consecutive)"
+                logger.error("Stop: %s", self._live_stop_reason)
+                return True
+            return False
+
+        source.stop_check = _should_stop
         source.on_bar = on_live_bar
         source.run()
 
@@ -723,4 +791,5 @@ class LiveRunner:
         except Exception:
             logger.exception("Failed to record experiment (non-fatal)")
 
-        logger.info("LiveRunner shutdown complete")
+        reason = getattr(self, '_live_stop_reason', None) or "normal"
+        logger.info("LiveRunner shutdown complete — reason: %s", reason)

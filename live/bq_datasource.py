@@ -41,6 +41,7 @@ class BQDataSource:
         market: str = "us",
         poll_interval_sec: int = 60,
         project: str = "deductive-notch-495015-c2",
+        stop_check: "Callable[[], bool] | None" = None,
     ):
         self.symbols = symbols
         self.market = market
@@ -50,9 +51,11 @@ class BQDataSource:
         self._last_ts: str | None = None
         self._client: bigquery.Client | None = None
         self.on_bar: Callable[[dict], None] | None = None
+        self.stop_check = stop_check  # external stop condition
+        self.failure_count: int = 0   # consecutive poll failures
 
     def run(self):
-        """Blocking loop — polls BQ until market close or stop()."""
+        """Blocking loop — polls BQ until market close, stop(), or stop_check."""
         self._running = True
         self._client = bigquery.Client(project=self.project)
 
@@ -66,10 +69,15 @@ class BQDataSource:
         )
         try:
             while self._running and self._is_market_open():
+                if self.stop_check and self.stop_check():
+                    logger.info("BQDataSource: stop_check returned True — stopping")
+                    break
                 try:
                     self._poll()
+                    self.failure_count = 0  # reset on success
                 except Exception:
-                    logger.exception("BQDataSource: poll failed")
+                    self.failure_count += 1
+                    logger.exception("BQDataSource: poll failed (#%d)", self.failure_count)
                 time.sleep(self.poll_interval)
         except KeyboardInterrupt:
             logger.info("BQDataSource: interrupted")
