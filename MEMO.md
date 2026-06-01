@@ -1,6 +1,50 @@
 # Quant 项目 — 状态备忘
 
-> 更新日期: 2026-05-31 15:00 UTC · 当前分支: `main` · VM: e2-standard-4
+> 更新日期: 2026-06-01 01:45 UTC · 当前分支: `main` · VM: e2-standard-4
+>
+> 🔥 最新: Live Loop + ML Platform 上线 — 实盘模拟 + MLflow 模型管理 + BQ 实时轮询
+
+---
+
+## 🆕 Live Loop & ML Platform (2026-05-31 ~ 06-01)
+
+### Live Loop
+| 组件 | 文件 | 状态 |
+|------|------|------|
+| LiveRunner | `live/runner.py` | ✅ 纸交/实盘/实盘模拟三模式 |
+| Observer | `live/observer.py` | ✅ 日志/持仓/成交/权益 CSV |
+| Reporter | `live/reporter.py` | ✅ HTML 报告 + matplotlib 图表 |
+| BQDataSource | `live/bq_datasource.py` | ✅ 实时轮询 us_bars_5m |
+| CLI | `live/run.py` | ✅ `--mode paper\|live --config` |
+
+**三种模式:**
+- `paper` → BQ 历史回放 + PaperBroker
+- `live` + `broker.live.type=paper` → BQ 实时轮询 + PaperBroker (实盘模拟)
+- `live` + `broker.live.type=futu_stock` → BQ 实时轮询 + FutuStockBroker (真实交易)
+
+### ML Platform
+| 组件 | 文件 | 状态 |
+|------|------|------|
+| DatasetManager | `ml/datasets.py` | ✅ BQ→GCS Parquet 版本化数据集 |
+| ModelRegistry | `ml/registry.py` | ✅ MLflow save/load/list/promote |
+| OptunaTuner | `ml/tuner.py` | ✅ 配置驱动超参搜索 |
+| MLflow UI | systemd `mlflow-ui` | ✅ localhost:5000, 自启动 |
+| ExperimentTracker | `experiment/tracker.py` | ✅ Paper/Live 双端打通 |
+
+**模型:** `momentum_lgbm` v1 (production) — 39 技术面因子, val_ic=0.0255
+**数据集:** `us_tech_v1` — 240 只 × 39 因子, train 230K / val 59K / test 58K, 标签 fwd_ret_5d (从 bars 自动衍生)
+
+### 新增 cron
+- US 5m BQ loader 盘中高频: `*/5 13-20 * * 1-5`
+- HK 5m BQ loader 盘中高频: `*/5 1-8 * * 1-5`
+
+### Bug 修复 (本 session)
+- `oms/bridge.py`: sell/close 用实际持仓量 (之前 total_equity × 1.0 / price 虚增)
+- `run_paper.py`: 买入权重归一化 + 现金约束 (防止多持仓超额)
+- `ml/datasets.py`: fwd_ret 从 bars 自动计算 + symbol 格式转换 + datetime 对齐
+- `ml/tuner.py`: NaN 预处理
+- `strategies/ml_pred.py`: 预测用模型特征列表 (修复因子名不匹配导致 0 特征)
+> 教训: 两个数据获取路径的列名不一致 (因子库 vs 实时计算), 统一以模型注册时的 features 为准
 
 ---
 
