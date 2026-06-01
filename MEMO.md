@@ -1,6 +1,6 @@
 # Quant 项目 — 状态备忘
 
-> 更新日期: 2026-06-01 12:00 UTC · 当前分支: `main` (dev) + `stable` (prod) · VM: e2-standard-4
+> 更新日期: 2026-06-01 15:12 UTC · 当前分支: `main` (dev) + `stable` (prod) · VM: e2-standard-4
 >
 > 🔥 最新: Live Loop + ML Platform 上线 — 实盘模拟 + MLflow 模型管理 + BQ 实时轮询
 
@@ -375,3 +375,40 @@ feature/* → PR → main
 | `requirements.txt` | 全量依赖 lockfile |
 | `.github/workflows/ci.yml` | PR CI: lint + typecheck + test + security |
 | `.github/workflows/deploy.yml` | CD: stable 分支 push → SSH 调用 deploy.sh |
+
+---
+
+## 十四、2026-06-01 迁移 & 排障记录
+
+### CI/CD 迁移完成
+- 双目录架构: `/opt/quant-prod` (生产, stable) + `/opt/quant-dev` (开发, main)
+- 双 venv 隔离，共享 `requirements.txt` lockfile
+- CI 回退最简模式 (collectors + quality)，等逐步扩展
+- CD 保持 `deploy.yml` 在 stable 分支 push 时触发
+- systemd ws-collector / 28 条 cron 全部迁移到 quant-prod
+
+### 数据链路排障
+
+| Bug | 文件 | 修复 |
+|-----|------|------|
+| BQ loader 并发堆积 | cron | 加 `flock -n` 防重入 |
+| 时区不匹配 (EST≠UTC) | `live/bq_datasource.py` | seed 用市场时区 `America/New_York` |
+| 符号格式不匹配 (AAPL≠US.AAPL) | `live/bq_datasource.py` | 查询加 `US.` 前缀，回调去前缀 |
+| timestamp 类型错误 (str≠datetime) | `live/bq_datasource.py` | 传 datetime 对象 |
+
+### 🔴 待排查
+- **runner `on_live_bar` 回调阻塞**: BQDataSource 独立验证能拿到 3746 行 bar 数据，但 live.run 模式下进程卡在 `ep_poll`，不产出生意数据。疑似 `observer.snapshot_due` 或 `strategy.on_bar` 在 240 symbol 场景下有性能/逻辑问题。
+- **BQ loader native 加载失败**: 当天 Parquet 报 `400 End of file`（ws_collector 正在 flush 时覆盖文件导致），需修复时序或加重试。
+
+---
+
+## 十五、Coding 八荣八耻
+
+- 以瞎猜接口为耻，以认真查询为荣。
+- 以模糊执行为耻，以寻求确认为荣。
+- 以臆想业务为耻，以人类确认为荣。
+- 以创造接口为耻，以复用现有为荣。
+- 以跳过验证为耻，以主动测试为荣。
+- 以破坏架构为耻，以遵循规范为荣。
+- 以假装理解为耻，以诚实无知为荣。
+- 以盲目修改为耻，以谨慎重构为荣。
