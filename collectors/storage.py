@@ -42,7 +42,16 @@ def write_bars_to_gcs(
     market: str = "us",
     frequency: str = "5m",
 ) -> list[str]:
-    """Write bars DataFrame to GCS, one file per symbol-date combination. Returns list of GCS paths."""
+    """Write bars DataFrame to GCS atomically.
+
+    Uses a temp-file-then-rename pattern to avoid readers (BigQuery loader)
+    seeing partially-written or corrupted Parquet files:
+        1. Upload to {symbol}.parquet.tmp
+        2. Server-side copy tmp → final path (overwrites atomically)
+        3. Delete tmp
+
+    Returns list of final GCS paths.
+    """
     from google.cloud import storage
 
     df = df.copy()
@@ -56,12 +65,25 @@ def write_bars_to_gcs(
     groups = df.groupby(["symbol", df["timestamp"].dt.date])
     for (symbol, _date), group in groups:
         ts = group["timestamp"].iloc[0]
-        path = build_gcs_path(market, "bars", frequency, symbol, ts)
-        blob = bucket.blob(path)
-        blob.upload_from_string(
-            dataframe_to_parquet_bytes(group),
+        final_path = build_gcs_path(market, "bars", frequency, symbol, ts)
+        tmp_path = final_path + ".tmp"
+
+        parquet_bytes = dataframe_to_parquet_bytes(group)
+
+        # 1. Upload to temp path
+        tmp_blob = bucket.blob(tmp_path)
+        tmp_blob.upload_from_string(
+            parquet_bytes,
             content_type="application/octet-stream",
         )
-        paths.append(f"gs://{bucket_name}/{path}")
+
+        # 2. Server-side copy to final path (atomic overwrite)
+        final_blob = bucket.blob(final_path)
+        final_blob.rewrite(tmp_blob)
+
+        # 3. Delete temp
+        tmp_blob.delete()
+
+        paths.append(f"gs://{bucket_name}/{final_path}")
 
     return paths

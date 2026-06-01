@@ -40,7 +40,7 @@ GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
 OPEND_HOST = os.environ.get("OPEND_HOST", "127.0.0.1")
 OPEND_PORT = int(os.environ.get("OPEND_PORT", "11111"))
 FLUSH_INTERVAL_SEC = int(os.environ.get("FLUSH_INTERVAL_SEC", "300"))
-BUFFER_MAX = int(os.environ.get("BUFFER_MAX", "50"))
+BUFFER_MAX: int = int(os.environ.get("BUFFER_MAX", "500"))
 HEARTBEAT_INTERVAL_SEC = int(os.environ.get("HEARTBEAT_INTERVAL_SEC", "1800"))
 
 # ── Symbol pools ──
@@ -195,8 +195,8 @@ def main():
                 desired.update(HK_SYMBOLS)
             if _us_is_open():
                 desired.update(US_SYMBOLS)
-            if _crypto_is_open():
-                desired.update(CRYPTO_SYMBOLS)
+            # CRYPTO disabled
+            # CRYPTO disabled
 
             to_sub = desired - current_subscriptions
             to_unsub = current_subscriptions - desired
@@ -231,7 +231,7 @@ def main():
                     pass
 
         # ── Flush buffer ──
-        if len(buffer) >= BUFFER_MAX or (buffer and now_ts - last_heartbeat > FLUSH_INTERVAL_SEC):
+        if buffer and now_ts - last_heartbeat > FLUSH_INTERVAL_SEC:
             _flush_buffer(buffer, handler.label)
 
         # ── Heartbeat ──
@@ -284,7 +284,7 @@ def _flush_buffer(buffer: list, label: str):
     )
     df["frequency"] = "5m"
 
-    for market in ("HK", "US", "CRYPTO"):
+    for market in ("HK", "US"):
         mkt_df = df[df["market"] == market]
         if mkt_df.empty:
             continue
