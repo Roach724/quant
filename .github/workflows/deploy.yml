@@ -1,8 +1,8 @@
-name: Deploy
+name: Deploy to Production
 
 on:
   push:
-    branches: [main]
+    branches: [stable]
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -29,7 +29,18 @@ jobs:
 
       - name: Deploy to VM
         run: |
-          gcloud compute ssh quant-vm \
-            --zone=${{ vars.GCP_REGION || 'asia-east2' }}-a \
-            --command="cd /opt/quant && git fetch origin main && git reset --hard origin/main && sudo systemctl restart ws-collector" || \
-            echo "::error::VM deploy failed — check VM connectivity and git state"
+          set -e
+          RETRIES=3
+          for i in $(seq 1 $RETRIES); do
+            echo "Deploy attempt $i/$RETRIES..."
+            if gcloud compute ssh quant-vm \
+              --zone=${{ vars.GCP_REGION || 'asia-east2' }}-a \
+              --command="cd /opt/quant-prod && bash scripts/deploy.sh" 2>&1; then
+              echo "::notice::Deploy succeeded on attempt $i"
+              exit 0
+            fi
+            echo "Attempt $i failed, waiting 30s..."
+            sleep 30
+          done
+          echo "::error::All $RETRIES deploy attempts failed"
+          exit 1
