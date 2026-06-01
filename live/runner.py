@@ -543,13 +543,14 @@ class LiveRunner:
     # ── Live trading loop (stub) ──────────────────────────────────────
 
     def _run_live_loop(self):
-        """Live trading via Futu OpenD WebSocket K_5M subscription.
+        """Live trading via BQ polling of us_bars_5m.
 
-        Accumulates bars in a rolling buffer, rebuilds StrategyContext each
-        bar, runs strategy.on_bar(), processes signals, and submits orders
-        through the live broker (FutuStockBroker).
+        Polls BigQuery every 60s for new 5m bars (fed by ws_collector → GCS →
+        BQ loader). Accumulates bars in a rolling buffer, rebuilds
+        StrategyContext each bar, runs strategy.on_bar(), processes signals,
+        and submits orders through the live broker.
         """
-        from live.datasource import LiveDataSource
+        from live.bq_datasource import BQDataSource
         import pandas as pd
         import asyncio
 
@@ -565,8 +566,7 @@ class LiveRunner:
             ).result().to_dataframe()
             symbols = df["symbol"].tolist()
 
-        futu_symbols = [s if "." in s else f"US.{s}" for s in symbols]
-        logger.info("Live mode: %d symbols", len(futu_symbols))
+        logger.info("Live mode (BQ poll): %d symbols", len(symbols))
 
         # State
         from engine.portfolio import Portfolio, Position
@@ -603,39 +603,16 @@ class LiveRunner:
                 "symbols": symbols, **strat_cfg,
             })
 
-        def on_live_bar(bar: dict):
+        def on_live_bar(bar_data: dict):
+            """Callback: BQDataSource feeds pre-batched bar_data (all symbols at once)."""
             try:
-                futu_sym = bar["symbol"]
-                bare_sym = futu_sym.replace("US.", "").replace("HK.", "")
-                ts = bar["timestamp"]
+                ts = bar_data.get("timestamp", "")
 
-                bar_entry = {
-                    "close": {bare_sym: bar["close"]},
-                    "open": {bare_sym: bar["open"]},
-                    "high": {bare_sym: bar["high"]},
-                    "low": {bare_sym: bar["low"]},
-                    "volume": {bare_sym: bar["volume"]},
-                    "timestamp": ts,
-                }
+                # Append to rolling buffer (already batched by timestamp)
+                self._live_bars.append(bar_data)
+                if len(self._live_bars) > 500:
+                    self._live_bars = self._live_bars[-500:]
 
-                # Merge into existing timestamp or append
-                merged = False
-                for i in range(len(self._live_bars) - 1, max(len(self._live_bars) - 5, -1), -1):
-                    if self._live_bars[i].get("timestamp") == ts:
-                        self._live_bars[i]["close"][bare_sym] = bar["close"]
-                        self._live_bars[i]["open"][bare_sym] = bar["open"]
-                        self._live_bars[i]["high"][bare_sym] = bar["high"]
-                        self._live_bars[i]["low"][bare_sym] = bar["low"]
-                        self._live_bars[i]["volume"][bare_sym] = bar["volume"]
-                        merged = True
-                        break
-                if not merged:
-                    self._live_bars.append(bar_entry)
-                    # Keep only last 500 bars (≈ 2 weeks of 5m data)
-                    if len(self._live_bars) > 500:
-                        self._live_bars = self._live_bars[-500:]
-
-                bar_data = bar_entry
                 portfolio.mark_and_record(ts, bar_data)
                 eq = portfolio._mark_to_market(bar_data)
 
@@ -652,7 +629,7 @@ class LiveRunner:
                                 s.weight = 1.0 / n_buy
 
                     for sig in signals:
-                        price = bar_data["close"].get(sig.symbol, bar.get("close", 100))
+                        price = bar_data["close"].get(sig.symbol, 100)
                         sd = convert_signal(sig, portfolio, price_est=price)
 
                         if sd["side"] == "buy":
@@ -706,11 +683,11 @@ class LiveRunner:
             except Exception:
                 logger.exception("Live bar callback failed")
 
-        source = LiveDataSource(
-            symbols=futu_symbols,
-            host=self.config.get("broker", {}).get("live", {}).get("host", "127.0.0.1"),
-            port=int(self.config.get("broker", {}).get("live", {}).get("port", 11111)),
+        poll_interval = self.config.get("schedule", {}).get("bar_interval", 60)
+        source = BQDataSource(
+            symbols=symbols,
             market=self._market,
+            poll_interval_sec=poll_interval,
         )
         source.on_bar = on_live_bar
         source.run()
