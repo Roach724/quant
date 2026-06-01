@@ -55,6 +55,9 @@ fi
 # Test 2: Config files are parseable (check a known-good YAML)
 if [ -f live/configs/exp1_ml_us.yaml ]; then
     PYTHONPATH=. "$VENV_PYTHON" scripts/smoke_test_config.py || fail "Smoke test 2: config parse"
+else
+    log "Smoke test 2: skipped (no config file)"
+fi
 
 log "All smoke tests passed"
 
