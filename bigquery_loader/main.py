@@ -16,7 +16,7 @@ Env vars:
 import io
 import logging
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
 from google.cloud import bigquery
 
@@ -70,7 +70,10 @@ def load_market(client, bucket, market, frequency, start_date, end_date, project
         load_day(client, bucket, market, frequency, date_str, project, dataset, table)
 
 
-def load_day(client, bucket, market, frequency, date_str, project, dataset="quant", table="us_bars"):
+def load_day(
+    client, bucket, market, frequency, date_str, project,
+    dataset="quant", table="us_bars",
+):
     """Load one day of Parquet files using single-level glob.
 
     Falls back to pandas-based loading if BigQuery rejects nanosecond timestamps.
@@ -113,7 +116,7 @@ def load_day(client, bucket, market, frequency, date_str, project, dataset="quan
 def _load_day_via_dataframe(client, uri, project, dataset, table,
                             date_str, original_error):
     """Fallback: read Parquet into pandas, cast timestamp to microseconds, load."""
-    import pandas as pd
+    import pandas as pd  # noqa: F401 — pandas used in fallback path
     import pyarrow as pa
     import pyarrow.parquet as pq
     from google.cloud import storage
@@ -210,7 +213,7 @@ def main():
     ensure_dataset(client, project)
     ensure_table(client, project, table_id=table)
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(datetime.UTC).date()
     if start_date_str:
         start = datetime.strptime(start_date_str, "%Y-%m-%d").date()
         end = min(start + timedelta(days=load_days - 1), today)
@@ -220,8 +223,11 @@ def main():
     load_market(client, bucket, market, frequency, start, end, project, table=table)
     dedup_table(client, project, table=table)
 
-    logger.info("BigQuery load complete: market=%s freq=%s table=%s %d days (%s → %s)",
-                market, frequency, table, (end - start).days + 1, start.isoformat(), end.isoformat())
+    logger.info(
+    "BigQuery load complete: market=%s freq=%s table=%s %d days (%s → %s)",
+    market, frequency, table, (end - start).days + 1,
+    start.isoformat(), end.isoformat(),
+)
 
 
 if __name__ == "__main__":

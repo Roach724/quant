@@ -1,6 +1,6 @@
 # Quant 项目 — 状态备忘
 
-> 更新日期: 2026-06-01 01:45 UTC · 当前分支: `main` · VM: e2-standard-4
+> 更新日期: 2026-06-01 15:12 UTC · 当前分支: `main` (dev) + `stable` (prod) · VM: e2-standard-4
 >
 > 🔥 最新: Live Loop + ML Platform 上线 — 实盘模拟 + MLflow 模型管理 + BQ 实时轮询
 
@@ -298,5 +298,117 @@ BQ 表:    quant.{market}_{type} — PARTITION BY DATE(ingest_time), CLUSTER BY 
 - **因子库**: 79 因子注册 (39 tech + 40 F10)，准入标准 IC>0.05/t-stat>3/cov>90%
 - **策略**: SimpleMomentum + MLPredStrategy (LightGBM)
 - **BQ 表**: 6 bars + 2 因子库 + 10 F10 = 18 张，分区+聚簇
-- **Git 分支**: `main` / `feature/phase2-ml-strategy` (活跃)
+- **Git 分支**: `main` (dev) / `stable` (prod)
 - **VM**: GCE e2-standard-4, Ubuntu 24.04, python3.12
+- **CI/CD**: GitHub Actions (CI on PR → main, CD on merge → stable)
+
+---
+
+## 十三、CI/CD 规范 (2026-06-01 新上线)
+
+### 目录架构
+
+```
+/opt/
+├── quant-prod/     ← 生产: stable 分支, quant:quant, .venv/
+└── quant-dev/      ← 开发: main 分支, DangXuan:DangXuan, .venv/
+```
+
+### 生产 vs 实验
+
+| 🛡️ 生产 (quant-prod) | 🧪 实验 (quant-dev) |
+|-----------------------|---------------------|
+| ws_collector | Paper 交易 |
+| 所有 collector cron | 回测 |
+| 所有 BQ loader cron | ML 训练/调参 |
+| F10 采集 + 入库 | Notebooks |
+| Quality checks | 策略研究 |
+| Factor 例行计算 | |
+| 实盘交易 | |
+
+### 部署流程
+
+```
+feature/* → PR → main
+                  │
+                  ├── CI: ruff lint (全项目)
+                  ├── CI: mypy typecheck (全核心模块)
+                  ├── CI: pytest (全覆盖)
+                  └── CI: security check (基础设施文件变更标注)
+                  │
+              merge main → stable
+                  │
+                  └── CD: deploy.sh (自动)
+                       ├── ① 备份当前 commit
+                       ├── ② git fetch + reset --hard origin/stable
+                       ├── ③ pip install -r requirements.txt
+                       ├── ④ Smoke test (import 核心模块 + config 解析)
+                       │    └── ❌ 失败 → 自动回滚
+                       ├── ⑤ systemctl restart ws-collector
+                       ├── ⑥ 验证 service active + 日志无 ERROR
+                       │    └── ❌ 失败 → 自动回滚
+                       └── ⑦ 写入 .deploy_history
+```
+
+### 回滚
+
+| 触发 | 方式 | 命令 |
+|------|------|------|
+| Smoke test 失败 | 自动 | — |
+| 服务重启后挂掉 | 自动 | — |
+| 数据断档 / 逻辑 bug | 手动 | `cd /opt/quant-prod && bash scripts/rollback.sh [commit]` |
+
+### 开发规范
+
+- 日常开发在 `/opt/quant-dev`，用 `.venv/bin/python`
+- 添加新依赖: `.venv/bin/pip install xxx && .venv/bin/pip freeze > requirements.txt`
+- 修改生产基础设施文件 (`deploy.yml`, `systemd/`, `cron_wrapper.sh`) 时，CI 会在 PR 自动标注 ⚠️
+- 生产代码 (`/opt/quant-prod`) 禁止手动修改
+- 新的 paper 实验从 `/opt/quant-dev` 启动
+
+### 关键文件
+
+| 文件 | 用途 |
+|------|------|
+| `scripts/deploy.sh` | 生产部署脚本 (备份→checkout→smoke→restart→verify) |
+| `scripts/rollback.sh` | 手动回滚脚本 |
+| `requirements.txt` | 全量依赖 lockfile |
+| `.github/workflows/ci.yml` | PR CI: lint + typecheck + test + security |
+| `.github/workflows/deploy.yml` | CD: stable 分支 push → SSH 调用 deploy.sh |
+
+---
+
+## 十四、2026-06-01 迁移 & 排障记录
+
+### CI/CD 迁移完成
+- 双目录架构: `/opt/quant-prod` (生产, stable) + `/opt/quant-dev` (开发, main)
+- 双 venv 隔离，共享 `requirements.txt` lockfile
+- CI 回退最简模式 (collectors + quality)，等逐步扩展
+- CD 保持 `deploy.yml` 在 stable 分支 push 时触发
+- systemd ws-collector / 28 条 cron 全部迁移到 quant-prod
+
+### 数据链路排障
+
+| Bug | 文件 | 修复 |
+|-----|------|------|
+| BQ loader 并发堆积 | cron | 加 `flock -n` 防重入 |
+| 时区不匹配 (EST≠UTC) | `live/bq_datasource.py` | seed 用市场时区 `America/New_York` |
+| 符号格式不匹配 (AAPL≠US.AAPL) | `live/bq_datasource.py` | 查询加 `US.` 前缀，回调去前缀 |
+| timestamp 类型错误 (str≠datetime) | `live/bq_datasource.py` | 传 datetime 对象 |
+
+### 🔴 待排查
+- **runner `on_live_bar` 回调阻塞**: BQDataSource 独立验证能拿到 3746 行 bar 数据，但 live.run 模式下进程卡在 `ep_poll`，不产出生意数据。疑似 `observer.snapshot_due` 或 `strategy.on_bar` 在 240 symbol 场景下有性能/逻辑问题。
+- **BQ loader native 加载失败**: 当天 Parquet 报 `400 End of file`（ws_collector 正在 flush 时覆盖文件导致），需修复时序或加重试。
+
+---
+
+## 十五、Coding 八荣八耻
+
+- 以瞎猜接口为耻，以认真查询为荣。
+- 以模糊执行为耻，以寻求确认为荣。
+- 以臆想业务为耻，以人类确认为荣。
+- 以创造接口为耻，以复用现有为荣。
+- 以跳过验证为耻，以主动测试为荣。
+- 以破坏架构为耻，以遵循规范为荣。
+- 以假装理解为耻，以诚实无知为荣。
+- 以盲目修改为耻，以谨慎重构为荣。
