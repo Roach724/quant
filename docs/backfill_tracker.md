@@ -1,7 +1,7 @@
 # 项目进度追踪
 
-> 最后更新: 2026-06-01 06:56 UTC  
-> 更新原因: us_tech v2 注册 + Exp1 重启
+> 最后更新: 2026-06-01 10:24 UTC  
+> 更新原因: May 29 数据修复 + collector bug 修复 + crypto cron 完善
 
 ---
 
@@ -9,12 +9,12 @@
 
 | 表 | 行数 | 最新时间戳 | 状态 |
 |----|------|-----------|------|
-| us_bars_1d | 372,723 | 2026-05-28 | 🟡 May 29 待 06:00 入库 |
+| us_bars_1d | 372,957 | 2026-05-29 | 🟢 已追上 |
 | us_bars_5m | 365,470 | 2026-05-29 16:00 | 🟡 待开盘 |
-| hk_bars_1d | 18,793 | 2026-05-28 | 🟢 增长中 |
-| hk_bars_5m | 19,231 | 2026-06-01 12:00 HKT | 🟢 实时 |
-| crypto_bars_1d | - | - | ⏸️ 搁置 |
-| crypto_bars_5m | - | - | ⏸️ 搁置 |
+| hk_bars_1d | 18,876 | 2026-06-01 | 🟢 已追上 |
+| hk_bars_5m | 20,129 | 2026-06-01 | 🟢 实时 |
+| crypto_bars_1d | 10 | 2026-05-26 | 🟡 积累中 |
+| crypto_bars_5m | 587 | 2026-05-31 | 🟡 积累中 |
 
 ---
 
@@ -97,3 +97,21 @@ v1 IC 虚高因为 `fwd_ret_20d` 泄漏到了特征里。v2 用 explicit 模式�
 - [ ] ml/__init__.py lazy import (避免 optuna 强制依赖)
 - [ ] BQ 表无前缀旧符号清理 (AAPL vs US.AAPL)
 - [ ] 加密币模块恢复
+
+---
+
+## 🐛 2026-06-01: Collector GCS 路径 Bug 修复
+
+**问题:** US/HK 日线采集写入 `raw/mixed/`，BQ Loader 查 `raw/us/` 或 `raw/hk/`，导致 May 29 数据未入库。
+
+**根因:** `collectors/main.py` 用 `adapter.market.lower()` (=\"mixed\") 作为 GCS 路径，未使用 `MARKET` 环境变量。
+
+**修复:**
+- `main.py` 改用 `os.environ.get("MARKET")`
+- US May 29: `raw/mixed/day=29` → `raw/us/day=29` → BQ (234行)
+- HK: 修复后重跑 collector → BQ (45行)
+- 清理 `raw/mixed/` (702 objects)
+
+**Crypto cron 完善:**
+- +5m intraday loader: `*/5 * * * *`
+- +1d collector: `15 0 * * *`
