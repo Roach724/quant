@@ -199,7 +199,7 @@ class BQDataSource:
                 "high": {},
                 "low": {},
                 "volume": {},
-                "timestamp": str(ts),
+                "timestamp": ts,  # keep as datetime for downstream consumers
             }
             for _, row in group.iterrows():
                 sym = row["symbol"]
