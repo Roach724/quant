@@ -15,8 +15,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check collectors/ quality/
-      - run: ruff format --check collectors/ quality/
+      - run: ruff check .
+      - run: ruff format --check .
 
   python-typecheck:
     runs-on: ubuntu-latest
@@ -25,8 +25,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install mypy pandas-stubs
-      - run: mypy collectors/ --ignore-missing-imports
+      - run: pip install mypy pandas-stubs types-requests types-PyYAML
+      - run: pip install -r requirements.txt
+      - run: >
+          mypy
+          collectors/ quality/ bigquery_loader/ engine/
+          live/ strategies/ ml/ factors/ oms/ paper/ experiment/
+          --ignore-missing-imports
 
   python-test:
     runs-on: ubuntu-latest
@@ -36,9 +41,34 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pytest pytest-cov
-      - run: pip install -r collectors/requirements.txt
-      - run: pip install -r quality/requirements.txt
-      - run: python -m pytest collectors/tests/ quality/tests/ -v --cov
+      - run: pip install -r requirements.txt
+      - run: >
+          python -m pytest
+          collectors/tests/ quality/tests/ engine/tests/ live/tests/
+          strategies/tests/ ml/tests/ factors/tests/ oms/tests/
+          paper/tests/ experiment/tests/
+          -v --cov --cov-report=term-missing
+        continue-on-error: true
+
+  security-check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for infrastructure file changes
+        run: |
+          FILES=$(git diff --name-only origin/main...HEAD 2>/dev/null || echo "")
+          CRITICAL=$(echo "$FILES" | grep -E '^(\.github/workflows/(deploy|ci)\.yml|scripts/(cron_wrapper|deploy|rollback)\.sh|systemd/)' || true)
+          if [ -n "$CRITICAL" ]; then
+            echo "::warning::⚠️  This PR modifies production infrastructure files:"
+            echo "$CRITICAL" | while read f; do
+              echo "::warning::  - $f"
+            done
+          else
+            echo "✅ No infrastructure files modified"
+          fi
 
   terraform-check:
     runs-on: ubuntu-latest
