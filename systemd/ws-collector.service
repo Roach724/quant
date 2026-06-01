@@ -1,0 +1,21 @@
+[Unit]
+Description=Quant WebSocket 5m K-line Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=quant
+WorkingDirectory=/opt/quant-prod/collectors
+Environment=PYTHONPATH=/opt/quant-prod/collectors
+Environment=GCS_BUCKET=deductive-notch-495015-c2-quant-data
+Environment=OPEND_HOST=127.0.0.1
+Environment=OPEND_PORT=11111
+ExecStart=/opt/quant-prod/.venv/bin/python3.12 /opt/quant-prod/collectors/ws_collector.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/quant/logs/ws_collector.log
+StandardError=append:/home/quant/logs/ws_collector.log
+
+[Install]
+WantedBy=multi-user.target
