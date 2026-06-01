@@ -16,15 +16,15 @@ log() { echo "$LOG_TAG $*"; }
 fail() { log "FAILED: $*"; exit 1; }
 
 # ── ① Backup current state ──────────────────────────────────────────
-CURRENT_COMMIT=$(cd "$PROD_ROOT" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+CURRENT_COMMIT=$(cd "$PROD_ROOT" && sudo -u quant git rev-parse HEAD 2>/dev/null || echo "unknown")
 log "Backing up current commit: $CURRENT_COMMIT"
 
 # ── ② Git fetch + checkout ──────────────────────────────────────────
 log "Fetching origin/stable..."
 cd "$PROD_ROOT"
-git fetch origin stable || fail "git fetch failed"
-git reset --hard origin/stable || fail "git reset failed"
-NEW_COMMIT=$(git rev-parse HEAD)
+sudo -u quant git fetch origin stable || fail "git fetch failed"
+sudo -u quant git reset --hard origin/stable || fail "git reset failed"
+NEW_COMMIT=$(sudo -u quant git rev-parse HEAD)
 log "Checked out: $NEW_COMMIT"
 
 # ── ③ Sync dependencies ─────────────────────────────────────────────
@@ -43,7 +43,7 @@ print('All core modules imported successfully')
     # Auto-rollback
     if [ "$CURRENT_COMMIT" != "unknown" ]; then
         log "Rolling back to $CURRENT_COMMIT..."
-        cd "$PROD_ROOT" && git checkout "$CURRENT_COMMIT"
+        cd "$PROD_ROOT" && sudo -u quant git checkout "$CURRENT_COMMIT"
         "$VENV_PIP" install -r requirements.txt --quiet
         sudo systemctl restart ws-collector
         echo "{\"time\":\"$(date -Iseconds)\",\"commit\":\"$NEW_COMMIT\",\"status\":\"failed\",\"trigger\":\"github\",\"detail\":\"smoke_import\"}" >> "$HISTORY_FILE"
@@ -79,7 +79,7 @@ if [ "$SERVICE_STATUS" != "active" ]; then
     # Auto-rollback
     if [ "$CURRENT_COMMIT" != "unknown" ]; then
         log "Rolling back to $CURRENT_COMMIT..."
-        cd "$PROD_ROOT" && git checkout "$CURRENT_COMMIT"
+        cd "$PROD_ROOT" && sudo -u quant git checkout "$CURRENT_COMMIT"
         "$VENV_PIP" install -r requirements.txt --quiet
         sudo systemctl restart ws-collector
         echo "{\"time\":\"$(date -Iseconds)\",\"commit\":\"$NEW_COMMIT\",\"status\":\"failed\",\"trigger\":\"github\",\"detail\":\"service_inactive\"}" >> "$HISTORY_FILE"
