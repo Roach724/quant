@@ -20,6 +20,7 @@ import logging
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from google.cloud import bigquery
@@ -27,6 +28,19 @@ from google.cloud import bigquery
 from live.calendar import MarketCalendar
 
 logger = logging.getLogger(__name__)
+
+# BQ bars are stored in exchange local time (OpenD returns local-time timestamps
+# and the collector writes them as-is). Use IANA timezone names for DST correctness.
+_MARKET_TZ: dict[str, ZoneInfo] = {}
+
+def _get_market_tz(market: str) -> ZoneInfo:
+    """Return market-local ZoneInfo, with lazy init to avoid importing at module level."""
+    if market not in _MARKET_TZ:
+        if market == "hk":
+            _MARKET_TZ[market] = ZoneInfo("Asia/Hong_Kong")
+        else:
+            _MARKET_TZ[market] = ZoneInfo("America/New_York")  # US (EDT/EST auto)
+    return _MARKET_TZ[market]
 
 
 class BQDataSource:
@@ -72,9 +86,13 @@ class BQDataSource:
         if self._client is None:
             self._client = bigquery.Client(project=self.project)
 
-        # Seed last_ts on first run only; preserve across multi-day runs
+        # Seed last_ts on first run only; preserve across multi-day runs.
+        # BQ bars are stored in exchange local time (not UTC), so seed
+        # with the market's timezone: America/New_York for US, Asia/Hong_Kong for HK.
         if self._last_ts is None:
-            seed = datetime.now(timezone.utc) - timedelta(hours=1)
+            tz = _get_market_tz(self.market)
+            now_market = datetime.now(tz)
+            seed = now_market - timedelta(hours=1)
             self._last_ts = seed.strftime("%Y-%m-%d %H:%M:%S")
 
         logger.info(
