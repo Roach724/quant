@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euo pipefail
+# Ensure repo is trusted regardless of SSH user
+git config --global --add safe.directory /opt/quant-prod 2>/dev/null || true
 
 # deploy.sh — Deploy stable branch to /opt/quant-prod
 # Invoked by GitHub Actions CD pipeline via gcloud compute ssh
