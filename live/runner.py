@@ -561,7 +561,7 @@ class LiveRunner:
             bq = bigquery.Client(project="deductive-notch-495015-c2")
             df = bq.query(
                 "SELECT DISTINCT symbol FROM quant.factor_values "
-                "WHERE source_builder = 'tech' ORDER BY symbol LIMIT 20"
+                "WHERE source_builder = 'tech' ORDER BY symbol "
             ).result().to_dataframe()
             symbols = df["symbol"].tolist()
 
