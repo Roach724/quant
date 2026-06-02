@@ -13,7 +13,7 @@ Supported markets:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time as _time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -85,8 +85,13 @@ class MarketCalendar:
         # Fallback: weekday check only (no holidays)
         return dt.weekday() < 5
 
-    def is_open_now(self) -> bool:
-        """Check if the market is open right now (trading day + within hours)."""
+    def is_open_now(self, preheat_minutes: int = 0) -> bool:
+        """Check if the market is open right now (trading day + within hours).
+
+        Args:
+            preheat_minutes: If > 0, return True up to this many minutes
+                before the official open time (for early subscription).
+        """
         if self.market == "crypto":
             return True
 
@@ -96,32 +101,35 @@ class MarketCalendar:
         if not self.is_trading_day(now):
             return False
 
-        # Check trading hours
+        # Check trading hours (with preheat window)
         hours = _MARKET_HOURS.get(self.market)
         if not hours:
             return True
 
         t = now.time()
-        import datetime as _dt
 
         # HK lunch break
         if "lunch_start" in hours:
-            ls = _dt.time(*hours["lunch_start"])
-            le = _dt.time(*hours["lunch_end"])
+            ls = _time(*hours["lunch_start"])
+            le = _time(*hours["lunch_end"])
             if ls <= t < le:
                 return False
 
+        # Calculate preheat-open: official open minus preheat minutes
+        preheat_dt = datetime.now(timezone.utc) + timedelta(minutes=preheat_minutes)
+        preheat_t = preheat_dt.time()
+
         # Check if within main session (either DST or standard)
-        open_t = _dt.time(*hours["open"])
-        close_t = _dt.time(*hours["close"])
-        if open_t <= t <= close_t:
+        open_t = _time(*hours["open"])
+        close_t = _time(*hours["close"])
+        if preheat_t >= open_t and t <= close_t:
             return True
 
         # Alternative hours (US standard time: 14:30-21:00)
         if "open_alt" in hours:
-            alt_open = _dt.time(*hours["open_alt"])
-            alt_close = _dt.time(*hours["close_alt"])
-            if alt_open <= t <= alt_close:
+            alt_open = _time(*hours["open_alt"])
+            alt_close = _time(*hours["close_alt"])
+            if preheat_t >= alt_open and t <= alt_close:
                 return True
 
         return False
