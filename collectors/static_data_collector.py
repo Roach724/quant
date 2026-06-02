@@ -30,7 +30,7 @@ class RehabCollector(FutuCollector):
         return sorted(r.symbol for r in rows)
 
     def collect_one(self, symbol: str) -> pd.DataFrame | None:
-        data = self.call_api("get_rehab", symbol)
+        data = self.call_api("get_rehab", f"{self.market.upper()}.{symbol}")
         if data is None:
             return None
         if hasattr(data, "empty") and data.empty:
