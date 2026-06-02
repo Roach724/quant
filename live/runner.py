@@ -324,7 +324,10 @@ class LiveRunner:
 
         # 6. Strategy on_init
         logger.info("Calling strategy.on_init() …")
-        self.strategy.on_init(ctx, symbols=self._symbols)
+        try:
+            self.strategy.on_init(ctx, symbols=self._symbols)
+        except TypeError:
+            self.strategy.on_init(ctx)
         logger.info("Strategy initialised, entering bar loop (%d bars)", len(src))
 
         # 7. Bar loop
@@ -800,7 +803,10 @@ class LiveRunner:
         ctx = StrategyContext(data=src, portfolio=portfolio, config={
             "symbols": symbols, **strat_cfg,
         })
-        self.strategy.on_init(ctx, symbols=symbols)
+        try:
+            self.strategy.on_init(ctx, symbols=symbols)
+        except TypeError:
+            self.strategy.on_init(ctx)
         logger.info("Strategy on_init complete — %d symbols in universe", len(symbols))
 
     def _wait_for_market_open(self, trading_day: int):
