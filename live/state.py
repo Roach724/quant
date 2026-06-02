@@ -116,6 +116,7 @@ class StateManager:
                 "bar_count": live_state.get("bar_count", 0),
                 "last_bq_ts": live_state.get("last_bq_ts", ""),
             },
+            "last_prices": getattr(portfolio, '_last_prices', {}),
         }
         try:
             self.checkpoint_path.write_text(
@@ -145,6 +146,7 @@ class StateManager:
             "portfolio_data": cp_data["portfolio"],
             "live_state": cp_data["live_state"],
             "trading_day": cp_data.get("trading_day", 0),
+            "last_prices": cp_data.get("last_prices", {}),
         }
 
     def clear_checkpoint(self):
@@ -174,6 +176,7 @@ class StateManager:
             "cash": portfolio.cash,
             "initial_capital": portfolio.initial_capital,
             "positions": positions,
+            "last_prices": getattr(portfolio, '_last_prices', {}),
         }
 
     @staticmethod
@@ -203,4 +206,6 @@ class StateManager:
             pos.realized_pnl = pos_data.get("realized_pnl", 0.0)
             portfolio.positions[sym] = pos
 
+        if "last_prices" in portfolio_data:
+            portfolio._last_prices = portfolio_data["last_prices"]
         return portfolio

@@ -39,6 +39,7 @@ class Portfolio:
         self.initial_capital = initial_capital
         self.cash = initial_capital
         self.positions: dict[str, Position] = {}
+        self._last_prices: dict[str, float] = {}
         self._equity: list[float] = []
         self._timestamps: list[datetime] = []
 
@@ -48,9 +49,14 @@ class Portfolio:
 
     def _mark_to_market(self, bar_data):
         total = self.cash
+        close_data = bar_data.get("close", {})
         for sym, pos in self.positions.items():
-            if pos.size != 0 and sym in bar_data.get("close", {}):
-                total += pos.size * bar_data["close"][sym]
+            if pos.size == 0:
+                continue
+            if sym in close_data:
+                total += pos.size * close_data[sym]
+            else:
+                total += pos.size * self._last_prices.get(sym, 0.0)
         return total
 
     def update(self, fills, bar_data):
@@ -72,6 +78,9 @@ class Portfolio:
         self._equity.append(self._mark_to_market({}))
 
     def mark_and_record(self, ts, bar_data):
+        close_data = bar_data.get("close", {})
+        for sym, price in close_data.items():
+            self._last_prices[sym] = float(price)
         self._timestamps.append(ts)
         self._equity.append(self._mark_to_market(bar_data))
 

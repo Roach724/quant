@@ -61,16 +61,16 @@ class MLPredStrategy(Strategy):
         self._last_rebalance = -self.rebalance_every
         self._all_scores_history: dict = {}
 
-    def on_init(self, ctx):
+    def on_init(self, ctx, symbols=None):
         self._last_rebalance = -self.rebalance_every
         self._model_trainer = None
         self._model = None          # trained model object (lgb.Booster or sklearn)
         self._trained = False
         self._all_scores_history: dict[int, dict[str, float]] = {}
 
-        symbols = list(ctx.universe)
-        self._symbols = symbols
-        if not symbols:
+        # Use caller-supplied symbols if provided, else fall back to ctx.universe
+        self._symbols = list(symbols) if symbols else list(ctx.universe)
+        if not self._symbols:
             logger.warning("MLPredStrategy: no symbols in universe")
             return
 
@@ -155,7 +155,8 @@ class MLPredStrategy(Strategy):
             return []
 
         self._last_rebalance = bar
-        symbols = list(ctx.universe)
+        # Use runner-supplied symbols (from on_init), fall back to ctx.universe
+        symbols = self._symbols if hasattr(self, '_symbols') and self._symbols else list(ctx.universe)
         if not symbols:
             return []
 

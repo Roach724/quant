@@ -59,7 +59,7 @@ def record_experiment(config: dict, output_dir: str):
 
     try:
         from experiment.tracker import ExperimentTracker
-        tracker = ExperimentTracker()
+        tracker = ExperimentTracker(base_dir=str(Path(output_dir).parent / "experiments"))
 
         exp_name = exp_cfg.get("name", exp_id)
         exp_hypothesis = exp_cfg.get("hypothesis", "")
@@ -74,7 +74,6 @@ def record_experiment(config: dict, output_dir: str):
         )
 
         # Record this session
-        from pathlib import Path
         session_id = Path(output_dir).name
         mode = config.get("live", {}).get("mode", "paper")
         session_type = f"{mode}_trading"

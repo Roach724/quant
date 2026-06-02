@@ -51,7 +51,6 @@ class Observer:
         writer = csv.writer(f)
         if is_new:
             writer.writerow(headers)
-        f.flush()
         return f, writer
 
     def snapshot_due(self, now: datetime) -> bool:
@@ -63,7 +62,8 @@ class Observer:
     def record_signal(self, timestamp, symbol: str, side: str, score: float = 0.0, rank: int = 0):
         """Record a strategy signal."""
         try:
-            XFLUSH_signal_X([timestamp, symbol, side, score, rank])
+            self._signals_writer.writerow([timestamp, symbol, side, score, rank])
+            self._signals_file.flush()
         except Exception:
             logger.exception("Observer: failed to record signal")
 
