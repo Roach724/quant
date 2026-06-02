@@ -51,6 +51,7 @@ class Observer:
         writer = csv.writer(f)
         if is_new:
             writer.writerow(headers)
+        f.flush()
         return f, writer
 
     def snapshot_due(self, now: datetime) -> bool:
@@ -62,7 +63,7 @@ class Observer:
     def record_signal(self, timestamp, symbol: str, side: str, score: float = 0.0, rank: int = 0):
         """Record a strategy signal."""
         try:
-            self._signals_writer.writerow([timestamp, symbol, side, score, rank])
+            XFLUSH_signal_X([timestamp, symbol, side, score, rank])
         except Exception:
             logger.exception("Observer: failed to record signal")
 
@@ -70,6 +71,7 @@ class Observer:
         """Record a filled trade."""
         try:
             self._trades_writer.writerow([timestamp, symbol, side, qty, price, commission])
+            self._trades_file.flush()
         except Exception:
             logger.exception("Observer: failed to record trade")
 
@@ -80,6 +82,7 @@ class Observer:
             if self._initial_equity is None:
                 self._initial_equity = equity
             self._equity_writer.writerow([timestamp, equity, cash, portfolio_value, return_pct])
+            self._equity_file.flush()
             self._bar_count += 1
         except Exception:
             logger.exception("Observer: failed to record bar")

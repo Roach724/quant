@@ -657,7 +657,7 @@ class LiveRunner:
 
         # ── 3. Per-day loop ──
         self._live_stop_reason = None
-        self._live_bars: list[dict] = []
+        self._live_bars: list[dict] = getattr(self, "_live_bars", [])
         self._live_start_time = datetime.now(timezone.utc)
         self._live_bar_count = live_state.get("bar_count", 0)
         self._live_peak_equity = peak_equity
@@ -893,7 +893,7 @@ class LiveRunner:
         source.stop_check = None  # will be re-set below
 
         # Rolling bar buffer per day
-        self._live_bars: list[dict] = []
+        self._live_bars: list[dict] = getattr(self, "_live_bars", [])
 
         # Ensure strategy context is set up with proper symbol columns
         close = pd.DataFrame({sym: [float("nan")] for sym in symbols})

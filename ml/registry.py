@@ -52,7 +52,7 @@ class ModelRegistry:
     """
 
     _initialized: ClassVar[bool] = False
-    _ARTIFACT_ROOT: ClassVar[str] = "/opt/quant/models_artifacts"
+    _ARTIFACT_ROOT: ClassVar[str] = "/opt/quant-prod/models_artifacts"
 
     @classmethod
     def _tracking_uri(cls) -> str:

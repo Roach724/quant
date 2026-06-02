@@ -92,7 +92,8 @@ class BQDataSource:
         if self._last_ts is None:
             tz = _get_market_tz(self.market)
             now_market = datetime.now(tz)
-            seed = now_market - timedelta(hours=1)
+            # Seed to market open (09:30) on first run to catch all bars since open
+            seed = now_market.replace(hour=9, minute=30, second=0, microsecond=0)
             self._last_ts = seed.strftime("%Y-%m-%d %H:%M:%S")
 
         logger.info(
