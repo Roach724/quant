@@ -36,6 +36,12 @@ COLLECTOR_MAP = {
     "us_rehab": ("static_data_collector", "RehabCollector", "us"),
     "hk_rehab": ("static_data_collector", "RehabCollector", "hk"),
     "hk_top_ten_brokers": ("static_data_collector", "TopTenBrokersCollector", "hk"),
+    # Phase 2
+    "us_morningstar": ("morningstar_collector", "MorningstarCollector", "us"),
+    "hk_morningstar": ("morningstar_collector", "MorningstarCollector", "hk"),
+    "us_rating_summary": ("rating_summary_collector", "RatingSummaryCollector", "us"),
+    "us_stock_screen": ("stock_screen_collector", "StockScreenCollector", "us"),
+    "hk_stock_screen": ("stock_screen_collector", "StockScreenCollector", "hk"),
 }
 
 
