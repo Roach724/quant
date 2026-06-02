@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""WebSocket 5m K-line collector — systemd daemon.
+"""WebSocket 5m K-line + Orderbook collector — systemd daemon.
 
-Subscribes to OpenD SubType.K_5M for HK/US/Crypto across market hours,
-buffers completed bars, and flushes to GCS via existing storage.py.
+Subscribes to OpenD SubType.K_5M + SubType.ORDER_BOOK for HK/US across
+market hours, buffers completed bars + orderbook snapshots, and flushes
+to GCS via existing storage.py.
+
+Orderbook is polled every 60s during US market hours. Factors computed:
+spread, depth_imbalance, weighted_bid/ask. Stored to us/orderbook/.
 
 Env vars:
     GCS_BUCKET: GCS bucket name (required)
@@ -18,10 +22,13 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from futu import (
-    CurKlineHandlerBase, OpenQuoteContext, RET_OK, SubType,
+    RET_OK,
+    CurKlineHandlerBase,
+    OpenQuoteContext,
+    SubType,
 )
 
 # Add parent to path so we can import storage
@@ -42,6 +49,7 @@ OPEND_PORT = int(os.environ.get("OPEND_PORT", "11111"))
 FLUSH_INTERVAL_SEC = int(os.environ.get("FLUSH_INTERVAL_SEC", "300"))
 BUFFER_MAX: int = int(os.environ.get("BUFFER_MAX", "500"))
 HEARTBEAT_INTERVAL_SEC = int(os.environ.get("HEARTBEAT_INTERVAL_SEC", "1800"))
+OB_POLL_INTERVAL_SEC = int(os.environ.get("OB_POLL_INTERVAL_SEC", "60"))
 
 # ── Symbol pools ──
 # Dynamically fetched from Futu API at startup (HK + US).
@@ -73,10 +81,10 @@ def _load_futu_symbols():
     except Exception as e:
         logger.error("Failed to load Futu symbols: %s — using empty lists", e)
 
-# ── Market hour helpers (simplified, UTC-based) ──# ── Market hour helpers (simplified, UTC-based) ──
+# ── Market hour helpers (simplified, UTC-based) ──# ── Market hour helpers (simplified, UTC-based) ──  # noqa: E501
 
 def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _hk_is_open() -> bool:
@@ -100,6 +108,120 @@ def _us_is_open() -> bool:
 def _crypto_is_open() -> bool:
     """Crypto: always open."""
     return True
+
+
+# ── Orderbook polling ──
+
+_ob_buffer: list[dict] = []
+_last_ob_flush = 0.0
+_last_ob_poll = 0.0
+
+
+def _poll_orderbook(ctx: "OpenQuoteContext") -> None:
+    """Poll orderbook snapshots for all currently-subscribed US symbols."""
+    global _last_ob_poll, _ob_buffer, _last_ob_flush
+
+    if not _us_is_open():
+        return
+
+    now_ts = time.time()
+    if now_ts - _last_ob_poll < OB_POLL_INTERVAL_SEC:
+        return
+    _last_ob_poll = now_ts
+
+    us_syms = [s for s in US_SYMBOLS if s.startswith("US.")]
+    now = datetime.now(UTC)
+    snapshot_count = 0
+
+    for sym in us_syms:
+        ret, data = ctx.get_order_book(sym, num=10)
+        if ret != RET_OK:
+            continue
+        bid_list = []
+        ask_list = []
+        if isinstance(data, dict):
+            bid_list = data.get("Bid", [])
+            ask_list = data.get("Ask", [])
+        if not bid_list or not ask_list:
+            continue
+
+        best_bid = bid_list[0][0]
+        best_ask = ask_list[0][0]
+        spread = best_ask - best_bid
+        midpoint = (best_bid + best_ask) / 2
+        spread_pct = (spread / midpoint * 100) if midpoint > 0 else 0
+
+        total_bv = sum(b[1] for b in bid_list)
+        total_av = sum(a[1] for a in ask_list)
+        total_vol = total_bv + total_av
+        depth_imbalance = (
+            ((total_bv - total_av) / total_vol) if total_vol > 0 else 0
+        )
+        w_bid = (
+            sum(b[0] * b[1] for b in bid_list) / total_bv
+            if total_bv > 0 else 0
+        )
+        w_ask = (
+            sum(a[0] * a[1] for a in ask_list) / total_av
+            if total_av > 0 else 0
+        )
+
+        row = {
+            "symbol": sym,
+            "snapshot_time": now,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "spread": spread,
+            "spread_pct": spread_pct,
+            "total_bid_volume": total_bv,
+            "total_ask_volume": total_av,
+            "depth_imbalance": depth_imbalance,
+            "weighted_bid": w_bid,
+            "weighted_ask": w_ask,
+            "bid_ask_volume_ratio": total_bv / total_av if total_av > 0 else 0,
+        }
+        for i in range(min(3, len(bid_list))):
+            row[f"bid_price_{i + 1}"] = bid_list[i][0]
+            row[f"bid_volume_{i + 1}"] = bid_list[i][1]
+        for i in range(min(3, len(ask_list))):
+            row[f"ask_price_{i + 1}"] = ask_list[i][0]
+            row[f"ask_volume_{i + 1}"] = ask_list[i][1]
+        _ob_buffer.append(row)
+        snapshot_count += 1
+
+    logger.info(
+        "[OB] Polled %d orderbooks, buffer=%d",
+        snapshot_count, len(_ob_buffer),
+    )
+
+    # Flush orderbook buffer independently (every FLUSH_INTERVAL_SEC)
+    if _ob_buffer and now_ts - _last_ob_flush > FLUSH_INTERVAL_SEC:
+        _flush_orderbook()
+        _last_ob_flush = now_ts
+
+
+def _flush_orderbook():
+    """Write buffered orderbook snapshots to GCS."""
+    global _ob_buffer
+    if not _ob_buffer:
+        return
+
+    import pandas as pd
+    snapshot = list(_ob_buffer)
+    _ob_buffer.clear()
+    df = pd.DataFrame(snapshot)
+
+    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+    gcs_path = (
+        f"gs://{GCS_BUCKET}/us/orderbook/{date_str}/data.parquet"
+    )
+    try:
+        df.to_parquet(gcs_path, index=False)
+        logger.info(
+            "[OB] Flushed %d rows -> %s", len(df), gcs_path,
+        )
+    except Exception as e:
+        logger.error("[OB] GCS write failed: %s", e)
 
 
 # ── K-line handler ──
@@ -204,7 +326,7 @@ def main():
             if to_sub:
                 try:
                     ret, msg = ctx.subscribe(
-                        list(to_sub), [SubType.K_5M],
+                        list(to_sub), [SubType.K_5M, SubType.ORDER_BOOK],
                         subscribe_push=True,
                     )
                     if ret == RET_OK:
@@ -230,6 +352,13 @@ def main():
                 except Exception:
                     pass
 
+        # ── Orderbook poll (no extra subscription cost) ──
+        if ctx is not None:
+            try:
+                _poll_orderbook(ctx)
+            except Exception as e:
+                logger.warning("Orderbook poll error: %s", e)
+
         # ── Flush buffer ──
         if buffer and now_ts - last_heartbeat > FLUSH_INTERVAL_SEC:
             _flush_buffer(buffer, handler.label)
@@ -247,6 +376,7 @@ def main():
     # ── Shutdown ──
     logger.info("Shutting down — final flush...")
     _flush_buffer(buffer, handler.label)
+    _flush_orderbook()
     if ctx is not None:
         try:
             ctx.close()
