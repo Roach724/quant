@@ -185,17 +185,28 @@ class LiveRunner:
         self._resolve_symbols()
 
     def _resolve_symbols(self):
-        """Resolve trading symbols from config or BQ."""
+        """Resolve trading symbols from the 5m bars table (not factor_values).
+
+        Factor_values includes stocks with only daily data — unusable for
+        intraday trading.  The 5m bars table is the ground truth for which
+        symbols have live intraday data.
+        """
         strat_cfg = self.config.get("strategy", {})
         symbols = strat_cfg.get("symbols", [])
         if not symbols and self._mode == "live":
+            market = self.config.get("live", {}).get("market", "us")
+            table = {"us": "us_bars_5m", "hk": "hk_bars_5m", "crypto": "crypto_bars_5m"}[market]
             from google.cloud import bigquery as bq
             client = bq.Client(project="deductive-notch-495015-c2")
             df = client.query(
-                "SELECT DISTINCT symbol FROM quant.factor_values "
-                "WHERE source_builder = 'tech' ORDER BY symbol "
+                f"SELECT DISTINCT symbol FROM quant.{table} ORDER BY symbol"
             ).result().to_dataframe()
             symbols = df["symbol"].tolist()
+            # Normalize: strip market prefix + leading zeros; harmless for US (AAPL → AAPL)
+            _pre = market.upper() + "."
+            symbols = [s.replace(_pre, "").lstrip("0") for s in symbols]
+            # Dedup after normalization (HK 0005 + HK.00005 → both become "5")
+            symbols = list(dict.fromkeys(symbols))
         self._symbols = symbols
         if symbols:
             logger.info("Resolved %d symbols", len(symbols))
@@ -313,7 +324,7 @@ class LiveRunner:
 
         # 6. Strategy on_init
         logger.info("Calling strategy.on_init() …")
-        self.strategy.on_init(ctx)
+        self.strategy.on_init(ctx, symbols=self._symbols)
         logger.info("Strategy initialised, entering bar loop (%d bars)", len(src))
 
         # 7. Bar loop
@@ -409,7 +420,10 @@ class LiveRunner:
             Allocation weight for buy signals (used when qty is None).
         """
         symbol = sig.symbol
-        price = bar_data["close"].get(symbol, 100.0)
+        if symbol not in bar_data.get("close", {}):
+            logger.warning("Order skipped: %s not in bar_data — no price available", symbol)
+            return
+        price = bar_data["close"][symbol]
 
         # Convert signal
         converted = convert_signal(sig, portfolio, price_est=price)
@@ -786,7 +800,7 @@ class LiveRunner:
         ctx = StrategyContext(data=src, portfolio=portfolio, config={
             "symbols": symbols, **strat_cfg,
         })
-        self.strategy.on_init(ctx)
+        self.strategy.on_init(ctx, symbols=symbols)
         logger.info("Strategy on_init complete — %d symbols in universe", len(symbols))
 
     def _wait_for_market_open(self, trading_day: int):
@@ -911,29 +925,25 @@ class LiveRunner:
             """
             n = len(self._live_bars)
             # Pivot bars into wide format: {symbol: [values across bars]}
-            close_cols = {}
-            open_cols = {}
-            high_cols = {}
-            low_cols = {}
-            volume_cols = {}
+            # Ensure all arrays have length n (pad missing with NaN)
+            close_cols: dict = {sym: [float("nan")] * n for sym in symbols}
+            open_cols: dict = {sym: [float("nan")] * n for sym in symbols}
+            high_cols: dict = {sym: [float("nan")] * n for sym in symbols}
+            low_cols: dict = {sym: [float("nan")] * n for sym in symbols}
+            volume_cols: dict = {sym: [0.0] * n for sym in symbols}
             for i in range(n):
                 bar = self._live_bars[i]
+                bar_close = bar.get("close", {})
+                bar_open = bar.get("open", {})
+                bar_high = bar.get("high", {})
+                bar_low = bar.get("low", {})
+                bar_vol = bar.get("volume", {})
                 for sym in symbols:
-                    close_cols.setdefault(sym, []).append(
-                        bar.get("close", {}).get(sym, float("nan"))
-                    )
-                    open_cols.setdefault(sym, []).append(
-                        bar.get("open", {}).get(sym, float("nan"))
-                    )
-                    high_cols.setdefault(sym, []).append(
-                        bar.get("high", {}).get(sym, float("nan"))
-                    )
-                    low_cols.setdefault(sym, []).append(
-                        bar.get("low", {}).get(sym, float("nan"))
-                    )
-                    volume_cols.setdefault(sym, []).append(
-                        bar.get("volume", {}).get(sym, 0.0)
-                    )
+                    close_cols[sym][i] = bar_close.get(sym, float("nan"))
+                    open_cols[sym][i] = bar_open.get(sym, float("nan"))
+                    high_cols[sym][i] = bar_high.get(sym, float("nan"))
+                    low_cols[sym][i] = bar_low.get(sym, float("nan"))
+                    volume_cols[sym][i] = bar_vol.get(sym, 0.0)
             close_df = pd.DataFrame(close_cols)
             open_df = pd.DataFrame(open_cols)
             high_df = pd.DataFrame(high_cols)
@@ -955,6 +965,9 @@ class LiveRunner:
             nonlocal day_stop_reason, last_checkpoint_time
             try:
                 ts = bar_data.get("timestamp", "")
+                n_syms = len(bar_data.get("close", {}))
+                if self._live_bar_count < 3:
+                    logger.info("on_live_bar: bar #%d ts=%s syms=%d", self._live_bar_count + 1, ts, n_syms)
 
                 # Append to rolling buffer
                 self._live_bars.append(bar_data)
@@ -999,7 +1012,10 @@ class LiveRunner:
                                 s.weight = 1.0 / n_buy
 
                     for sig in signals:
-                        price = bar_data["close"].get(sig.symbol, 100)
+                        if sig.symbol not in bar_data.get("close", {}):
+                            logger.warning("Signal skipped: %s not in bar_data — no price available", sig.symbol)
+                            continue
+                        price = bar_data["close"][sig.symbol]
                         sd = convert_signal(sig, portfolio, price_est=price)
 
                         if sd["side"] == "buy":
