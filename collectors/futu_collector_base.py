@@ -66,7 +66,7 @@ class FutuCollector:
         table = f"quant.{self.market}_bars_5m"
         rows = client.query(
             f"SELECT DISTINCT symbol FROM `deductive-notch-495015-c2.{table}` "
-            f"WHERE close_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 5 DAY)"
+            f"WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 5 DAY)"
         ).result()
         return sorted(r.symbol for r in rows)
 
