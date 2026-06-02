@@ -33,6 +33,7 @@ TABLE_CONFIG = {
     "us_rehab": {"market": "us", "source": "rehab"},
     "hk_rehab": {"market": "hk", "source": "rehab"},
     "hk_top_ten_brokers": {"market": "hk", "source": "top_ten_brokers"},
+    "us_orderbook": {"market": "us", "source": "orderbook"},
     # Phase 2
     "us_morningstar": {"market": "us", "source": "morningstar"},
     "hk_morningstar": {"market": "hk", "source": "morningstar"},
