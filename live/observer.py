@@ -63,6 +63,7 @@ class Observer:
         """Record a strategy signal."""
         try:
             self._signals_writer.writerow([timestamp, symbol, side, score, rank])
+            self._signals_file.flush()
         except Exception:
             logger.exception("Observer: failed to record signal")
 
@@ -70,6 +71,7 @@ class Observer:
         """Record a filled trade."""
         try:
             self._trades_writer.writerow([timestamp, symbol, side, qty, price, commission])
+            self._trades_file.flush()
         except Exception:
             logger.exception("Observer: failed to record trade")
 
@@ -80,6 +82,7 @@ class Observer:
             if self._initial_equity is None:
                 self._initial_equity = equity
             self._equity_writer.writerow([timestamp, equity, cash, portfolio_value, return_pct])
+            self._equity_file.flush()
             self._bar_count += 1
         except Exception:
             logger.exception("Observer: failed to record bar")

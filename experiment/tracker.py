@@ -81,7 +81,7 @@ def _get_git_info() -> tuple[str, str]:
 class ExperimentTracker:
     """实验追踪器"""
 
-    def __init__(self, base_dir: str = "/opt/quant/data/experiments"):
+    def __init__(self, base_dir: str = "/opt/quant-dev/data/experiments"):
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_index()
