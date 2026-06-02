@@ -61,8 +61,17 @@ def ensure_table(client, project, dataset_id="quant", table_id="us_bars"):
         logger.warning("Table ensure: %s", e)
 
 
-def load_market(client, bucket, market, frequency, start_date, end_date, project,
-                dataset="quant", table="us_bars"):
+def load_market(
+    client,
+    bucket,
+    market,
+    frequency,
+    start_date,
+    end_date,
+    project,
+    dataset="quant",
+    table="us_bars",
+):
     """Load a market's Parquet data over a date range."""
     for i in range((end_date - start_date).days + 1):
         d = end_date - timedelta(days=i)
@@ -71,8 +80,14 @@ def load_market(client, bucket, market, frequency, start_date, end_date, project
 
 
 def load_day(
-    client, bucket, market, frequency, date_str, project,
-    dataset="quant", table="us_bars",
+    client,
+    bucket,
+    market,
+    frequency,
+    date_str,
+    project,
+    dataset="quant",
+    table="us_bars",
 ):
     """Load one day of Parquet files using single-level glob.
 
@@ -99,29 +114,24 @@ def load_day(
     logger.info("Loading %s -> %s", uri, table_ref)
 
     try:
-        load_job = client.load_table_from_uri(
-            uri, table_ref, job_config=job_config
-        )
+        load_job = client.load_table_from_uri(uri, table_ref, job_config=job_config)
         load_job.result()
         logger.info("Loaded %s: %d rows", date_str, load_job.output_rows)
     except Exception as e:
         err_msg = str(e)
-        if "nanoseconds" in err_msg or "NANOS" in err_msg:
-            _load_day_via_dataframe(client, uri, project, dataset, table,
-                                    date_str, err_msg)
-        else:
-            logger.warning("Load failed for %s: %s", date_str, e)
+        logger.warning("Native load failed: %s — retrying with pandas", err_msg[:120])
+        _load_day_via_dataframe(client, uri, project, dataset, table, date_str, err_msg)
+        return
 
 
-def _load_day_via_dataframe(client, uri, project, dataset, table,
-                            date_str, original_error):
+def _load_day_via_dataframe(client, uri, project, dataset, table, date_str, original_error):
     """Fallback: read Parquet into pandas, cast timestamp to microseconds, load."""
     import pandas as pd  # noqa: F401 — pandas used in fallback path
     import pyarrow as pa
     import pyarrow.parquet as pq
     from google.cloud import storage
 
-    logger.info("Falling back to pandas load for %s (ns timestamp)", date_str)
+    logger.info("Falling back to pandas load for %s (error: %s)", date_str, original_error[:80])
 
     # List blobs matching the glob
     bucket_name = uri.split("/")[2]
@@ -142,16 +152,32 @@ def _load_day_via_dataframe(client, uri, project, dataset, table,
             # Cast timestamp columns to microseconds
             for i, field in enumerate(table_arrow.schema):
                 if pa.types.is_timestamp(field.type):
-                    col = table_arrow.column(i).cast(
-                        pa.timestamp("us", tz=field.type.tz)
-                    )
+                    col = table_arrow.column(i).cast(pa.timestamp("us", tz=field.type.tz))
                     table_arrow = table_arrow.set_column(
                         i, field.with_type(pa.timestamp("us", tz=field.type.tz)), col
                     )
             df = table_arrow.to_pandas()
         except Exception as read_err:
-            logger.warning("Failed to read %s: %s", blob.name, read_err)
-            continue
+            logger.warning("Failed to read %s: %s — retrying after 2s", blob.name, read_err)
+            import time
+
+            time.sleep(2)
+            try:
+                buf = blob.download_as_bytes()
+                table_arrow = pq.read_table(io.BytesIO(buf))
+                for i, field in enumerate(table_arrow.schema):
+                    if pa.types.is_timestamp(field.type):
+                        col = table_arrow.column(i).cast(pa.timestamp("us", tz=field.type.tz))
+                        table_arrow = table_arrow.set_column(
+                            i,
+                            field.with_type(pa.timestamp("us", tz=field.type.tz)),
+                            col,
+                        )
+                df = table_arrow.to_pandas()
+                logger.info("Retry succeeded for %s", blob.name)
+            except Exception as retry_err:
+                logger.warning("Retry also failed for %s: %s", blob.name, retry_err)
+                continue
 
         if df.empty:
             continue
@@ -166,9 +192,7 @@ def _load_day_via_dataframe(client, uri, project, dataset, table,
             clustering_fields=["symbol"],
         )
         try:
-            load_job = client.load_table_from_dataframe(
-                df, table_ref, job_config=job_config
-            )
+            load_job = client.load_table_from_dataframe(df, table_ref, job_config=job_config)
             load_job.result()
             rows_loaded += len(df)
         except Exception as df_err:
@@ -224,10 +248,14 @@ def main():
     dedup_table(client, project, table=table)
 
     logger.info(
-    "BigQuery load complete: market=%s freq=%s table=%s %d days (%s → %s)",
-    market, frequency, table, (end - start).days + 1,
-    start.isoformat(), end.isoformat(),
-)
+        "BigQuery load complete: market=%s freq=%s table=%s %d days (%s → %s)",
+        market,
+        frequency,
+        table,
+        (end - start).days + 1,
+        start.isoformat(),
+        end.isoformat(),
+    )
 
 
 if __name__ == "__main__":
