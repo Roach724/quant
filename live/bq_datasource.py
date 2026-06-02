@@ -14,24 +14,25 @@ Usage:
     # Next day:
     source.run()  # resumes — remembers last_ts from previous day
 """
+
 from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone, timedelta
-from typing import Callable
+from collections.abc import Callable
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 from google.cloud import bigquery
 
-from live.calendar import MarketCalendar, _MARKET_HOURS
+from live.calendar import MarketCalendar
 
 logger = logging.getLogger(__name__)
 
 # BQ bars are stored in exchange local time (OpenD returns local-time timestamps
 # and the collector writes them as-is). Use IANA timezone names for DST correctness.
 _MARKET_TZ: dict[str, ZoneInfo] = {}
+
 
 def _get_market_tz(market: str) -> ZoneInfo:
     """Return market-local ZoneInfo, with lazy init to avoid importing at module level."""
@@ -59,7 +60,7 @@ class BQDataSource:
         market: str = "us",
         poll_interval_sec: int = 60,
         project: str = "deductive-notch-495015-c2",
-        stop_check: "Callable[[], bool] | None" = None,
+        stop_check: Callable[[], bool] | None = None,
     ):
         self.symbols = symbols
         self.market = market
@@ -70,30 +71,37 @@ class BQDataSource:
         self._client: bigquery.Client | None = None
         self.on_bar: Callable[[dict], None] | None = None
         self.stop_check = stop_check  # external stop condition
-        self.failure_count: int = 0   # consecutive poll failures
+        self.failure_count: int = 0  # consecutive poll failures
         self._calendar = MarketCalendar(market)
 
     @staticmethod
     def _compute_seed(market: str) -> str:
-        """Return seed timestamp = today's market open in UTC string.
-        
-        If current time is before market open today, use yesterday's open.
+        """Return seed timestamp = today's market open in market-local time string.
+
+        BQ bars are stored with market-local timestamps (ET for US, HKT for HK)
+        labeled as UTC TIMESTAMP. The seed must use the same convention so
+        string comparisons work correctly in BigQuery.
         """
-        from datetime import datetime as dt, timezone, timedelta as td
-        hours = _MARKET_HOURS.get(market)
-        if not hours:
-            seed = dt.now(timezone.utc) - td(hours=1)
-            return seed.strftime("%Y-%m-%d %H:%M:%S")
-        
-        open_h, open_m = hours["open"]
-        now = dt.now(timezone.utc)
-        today_open = now.replace(hour=open_h, minute=open_m, second=0, microsecond=0)
-        
-        if now >= today_open:
+        from datetime import datetime as dt
+        from datetime import timedelta as td
+
+        tz = _get_market_tz(market)
+        now_local = dt.now(tz)
+
+        # Market open hours in LOCAL market time
+        _local_open: dict[str, tuple[int, int]] = {
+            "us": (9, 30),
+            "hk": (9, 30),
+        }
+        open_h, open_m = _local_open.get(market, (now_local.hour, 0))
+        today_open = now_local.replace(hour=open_h, minute=open_m, second=0, microsecond=0)
+
+        if now_local >= today_open:
             seed = today_open
         else:
             seed = today_open - td(days=1)
-        
+
+        # Return as plain string (no tz suffix) — BQ treats as UTC
         return seed.strftime("%Y-%m-%d %H:%M:%S")
 
     def run(self):
@@ -116,7 +124,9 @@ class BQDataSource:
 
         logger.info(
             "BQDataSource: polling every %ds — %d symbols, last_ts=%s",
-            self.poll_interval, len(self.symbols), self._last_ts,
+            self.poll_interval,
+            len(self.symbols),
+            self._last_ts,
         )
         try:
             while self._running and self._calendar.is_open_now():
@@ -169,8 +179,10 @@ class BQDataSource:
         if self._client is None:
             return
 
-        table = "us_bars_5m" if self.market == "us" else (
-            "hk_bars_5m" if self.market == "hk" else "crypto_bars_5m"
+        table = (
+            "us_bars_5m"
+            if self.market == "us"
+            else ("hk_bars_5m" if self.market == "hk" else "crypto_bars_5m")
         )
 
         # BQ bars use exchange-prefixed symbols (US.AAPL, HK.00001),
@@ -180,7 +192,11 @@ class BQDataSource:
         _pre = self.market.upper() + "."
         query_symbols = []
         for s in self.symbols:
-            bare = s.replace(_pre, "").lstrip("0").zfill(5) if self.market == "hk" else s.replace(_pre, "")
+            bare = (
+                s.replace(_pre, "").lstrip("0").zfill(5)
+                if self.market == "hk"
+                else s.replace(_pre, "")
+            )  # noqa: E501
             query_symbols.append(_pre + bare)
 
         query = f"""
