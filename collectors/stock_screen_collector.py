@@ -1,4 +1,5 @@
 """Collect stock screening data (multi-factor) via Futu StockScreen V2 API (ProtoID 3252).
+# ruff: noqa: E501
 
 Uses the StockScreenRequest high-level builder to query the API in pages,
 extracting a configurable set of factors as a flat DataFrame.
@@ -15,10 +16,10 @@ Factor categories supported:
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from typing import Any
 
 import pandas as pd
-from futu import OpenQuoteContext, RET_OK, StockScreenRequest
+from futu import RET_OK, StockScreenRequest
 from futu.quote.stock_screen_const import (
     BasicProperty,
     CashFlowPeriod,
@@ -51,14 +52,30 @@ _RETRIEVE_DEFS: list[tuple[str, dict[str, Any], str]] = [
     ("simple", {"name": int(SimpleProperty.PB)}, "PB"),
     ("simple", {"name": int(SimpleProperty.VOLUME_RATIO)}, "VOLUME_RATIO"),
     # Cumulative properties (price changes over periods)
-    ("cumulative", {"name": int(CumulativeProperty.PRICE_CHANGE_PCT), "days": 7}, "PRICE_CHANGE_1W"),
-    ("cumulative", {"name": int(CumulativeProperty.PRICE_CHANGE_PCT), "days": 30}, "PRICE_CHANGE_1M"),
-    ("cumulative", {"name": int(CumulativeProperty.PRICE_CHANGE_PCT), "days": 90}, "PRICE_CHANGE_3M"),
+    (
+        "cumulative",
+        {"name": int(CumulativeProperty.PRICE_CHANGE_PCT), "days": 7},
+        "PRICE_CHANGE_1W",
+    ),
+    (
+        "cumulative",
+        {"name": int(CumulativeProperty.PRICE_CHANGE_PCT), "days": 30},
+        "PRICE_CHANGE_1M",
+    ),
+    (
+        "cumulative",
+        {"name": int(CumulativeProperty.PRICE_CHANGE_PCT), "days": 90},
+        "PRICE_CHANGE_3M",
+    ),
     ("cumulative", {"name": int(CumulativeProperty.TURNOVER_RATIO), "days": 1}, "TURNOVER_RATE"),
     # Financial properties
     ("financial", {"name": int(FinancialProperty.ROE), "term": int(Term.LATEST)}, "ROE"),
     ("financial", {"name": int(FinancialProperty.ROA_TTM), "term": int(Term.LATEST)}, "ROA"),
-    ("financial", {"name": int(FinancialProperty.GROSS_PROFIT_RATIO), "term": int(Term.LATEST)}, "GROSS_PROFIT_RATIO"),
+    (
+        "financial",
+        {"name": int(FinancialProperty.GROSS_PROFIT_RATIO), "term": int(Term.LATEST)},
+        "GROSS_PROFIT_RATIO",
+    ),
     ("financial", {"name": int(FinancialProperty.PS_TTM), "term": int(Term.LATEST)}, "PS_TTM"),
     # Technical indicators (daily)
     ("indicator", {"name": int(Indicator.MA5), "period": int(Period.DAY)}, "MA_5"),
@@ -72,11 +89,27 @@ _RETRIEVE_DEFS: list[tuple[str, dict[str, Any], str]] = [
     ("indicator", {"name": int(Indicator.BOLL_MIDDLE), "period": int(Period.DAY)}, "BOLL_MID"),
     ("indicator", {"name": int(Indicator.BOLL_LOWER), "period": int(Period.DAY)}, "BOLL_LOWER"),
     # Capital flow (featured) – 1-day
-    ("featured", {"name": int(FeaturedProperty.CASH_FLOW_TOTAL_NET_IN), "period": int(CashFlowPeriod.DAY)}, "CAPITAL_FLOW_1D"),
-    ("featured", {"name": int(FeaturedProperty.CASH_FLOW_MAIN_NET_IN), "period": int(CashFlowPeriod.DAY)}, "CAPITAL_FLOW_MAIN_1D"),
+    (
+        "featured",
+        {"name": int(FeaturedProperty.CASH_FLOW_TOTAL_NET_IN), "period": int(CashFlowPeriod.DAY)},
+        "CAPITAL_FLOW_1D",
+    ),
+    (
+        "featured",
+        {"name": int(FeaturedProperty.CASH_FLOW_MAIN_NET_IN), "period": int(CashFlowPeriod.DAY)},
+        "CAPITAL_FLOW_MAIN_1D",
+    ),
     # Capital flow (featured) – 5-day (weekly)
-    ("featured", {"name": int(FeaturedProperty.CASH_FLOW_TOTAL_NET_IN), "period": int(CashFlowPeriod.WEEK)}, "CAPITAL_FLOW_5D"),
-    ("featured", {"name": int(FeaturedProperty.CASH_FLOW_MAIN_NET_IN), "period": int(CashFlowPeriod.WEEK)}, "CAPITAL_FLOW_MAIN_5D"),
+    (
+        "featured",
+        {"name": int(FeaturedProperty.CASH_FLOW_TOTAL_NET_IN), "period": int(CashFlowPeriod.WEEK)},
+        "CAPITAL_FLOW_5D",
+    ),
+    (
+        "featured",
+        {"name": int(FeaturedProperty.CASH_FLOW_MAIN_NET_IN), "period": int(CashFlowPeriod.WEEK)},
+        "CAPITAL_FLOW_MAIN_5D",
+    ),
 ]
 
 # Map builder method to the corresponding add_retrieve_* callable
@@ -183,5 +216,10 @@ class StockScreenCollector(FutuCollector):
             logger.warning("No data returned for market=%s", self.market)
             return pd.DataFrame()
         result = pd.DataFrame(all_data)
-        logger.info("StockScreen[%s]: %d stocks, %d columns", self.market.upper(), len(result), len(result.columns))
+        logger.info(
+            "StockScreen[%s]: %d stocks, %d columns",
+            self.market.upper(),
+            len(result),
+            len(result.columns),
+        )
         return result

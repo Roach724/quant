@@ -3,8 +3,9 @@
 import logging
 
 import pandas as pd
-from collectors.futu_collector_base import FutuCollector
 from futu import RET_OK
+
+from collectors.futu_collector_base import FutuCollector
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +28,7 @@ class RatingSummaryCollector(FutuCollector):
 
     @staticmethod
     def _list_key(dimension: int) -> str:
-        return (
-            "inst_rating_summary_list"
-            if dimension == 1
-            else "analyst_rating_summary_list"
-        )
+        return "inst_rating_summary_list" if dimension == 1 else "analyst_rating_summary_list"
 
     @staticmethod
     def _info_key(dimension: int) -> str:

@@ -1,5 +1,7 @@
 """Collect Morningstar research reports from Futu API."""
+
 import pandas as pd
+
 from collectors.futu_collector_base import FutuCollector
 
 
