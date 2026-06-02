@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from google.cloud import bigquery
 
-from live.calendar import MarketCalendar
+from live.calendar import MarketCalendar, _MARKET_HOURS
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,29 @@ class BQDataSource:
         self.failure_count: int = 0   # consecutive poll failures
         self._calendar = MarketCalendar(market)
 
+    @staticmethod
+    def _compute_seed(market: str) -> str:
+        """Return seed timestamp = today's market open in UTC string.
+        
+        If current time is before market open today, use yesterday's open.
+        """
+        from datetime import datetime as dt, timezone, timedelta as td
+        hours = _MARKET_HOURS.get(market)
+        if not hours:
+            seed = dt.now(timezone.utc) - td(hours=1)
+            return seed.strftime("%Y-%m-%d %H:%M:%S")
+        
+        open_h, open_m = hours["open"]
+        now = dt.now(timezone.utc)
+        today_open = now.replace(hour=open_h, minute=open_m, second=0, microsecond=0)
+        
+        if now >= today_open:
+            seed = today_open
+        else:
+            seed = today_open - td(days=1)
+        
+        return seed.strftime("%Y-%m-%d %H:%M:%S")
+
     def run(self):
         """Blocking loop — polls BQ until market close, stop(), or stop_check.
 
@@ -87,13 +110,9 @@ class BQDataSource:
             self._client = bigquery.Client(project=self.project)
 
         # Seed last_ts on first run only; preserve across multi-day runs.
-        # BQ bars are stored in exchange local time (not UTC), so seed
-        # with the market's timezone: America/New_York for US, Asia/Hong_Kong for HK.
+        # BQ bars are stored as UTC TIMESTAMP — seed in UTC, not market tz.
         if self._last_ts is None:
-            tz = _get_market_tz(self.market)
-            now_market = datetime.now(tz)
-            seed = now_market - timedelta(hours=1)
-            self._last_ts = seed.strftime("%Y-%m-%d %H:%M:%S")
+            self._last_ts = self._compute_seed(self.market)
 
         logger.info(
             "BQDataSource: polling every %ds — %d symbols, last_ts=%s",
@@ -157,11 +176,12 @@ class BQDataSource:
         # BQ bars use exchange-prefixed symbols (US.AAPL, HK.00001),
         # while the experiment uses unprefixed symbols (AAPL, 00001).
         # Prefix symbols for the query, strip prefix in the callback.
+        # HK symbols must be zero-padded to 5 digits (e.g., 0005 → HK.00005).
         _pre = self.market.upper() + "."
-        query_symbols = [
-            s if s.startswith(_pre) else _pre + s
-            for s in self.symbols
-        ]
+        query_symbols = []
+        for s in self.symbols:
+            bare = s.replace(_pre, "").lstrip("0").zfill(5) if self.market == "hk" else s.replace(_pre, "")
+            query_symbols.append(_pre + bare)
 
         query = f"""
             SELECT symbol, timestamp, open, high, low, close, volume
@@ -182,6 +202,7 @@ class BQDataSource:
             logger.exception("BQDataSource: query failed")
             return
 
+        logger.info("BQDataSource: _poll returned %d rows", len(df))
         if df.empty:
             return
 
@@ -203,9 +224,11 @@ class BQDataSource:
             }
             for _, row in group.iterrows():
                 sym = row["symbol"]
-                # Strip exchange prefix (US.AAPL → AAPL, HK.00001 → 00001)
+                # Strip exchange prefix (US.AAPL → AAPL, HK.00005 → 00005)
                 if "." in sym:
                     sym = sym.split(".", 1)[1]
+                # Normalize: strip leading zeros (HK 00005 → 5)
+                sym = sym.lstrip("0")
                 bar_data["close"][sym] = float(row["close"])
                 bar_data["open"][sym] = float(row["open"])
                 bar_data["high"][sym] = float(row["high"])
