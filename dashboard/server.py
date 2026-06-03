@@ -393,13 +393,24 @@ async def experiment_positions(exp_id: str):
         avg_cost = total_cost / total_qty
         
         us_prefix = sym.startswith('US.')
-        market = 'us' if us_prefix else 'hk'
-        bare = sym[3:] if us_prefix else sym
+        # Detect market from experiment_id if symbol is bare
+        if us_prefix:
+            market = 'us'
+            bare = sym[3:]
+        elif sym.startswith('HK.'):
+            market = 'hk'
+            bare = sym[3:]
+        else:
+            # Bare symbol — infer from experiment
+            market = 'hk' if 'hk' in exp_id else 'us'
+            bare = sym
+        prefix = 'US.' if market == 'us' else 'HK.'
+        bq_sym = f"{prefix}{bare}"
         table = _table(f"{market}_bars_5m")
         try:
             price_q = f"""
                 SELECT close FROM `{table}`
-                WHERE symbol = '{sym}'
+                WHERE symbol = '{bq_sym}'
                 ORDER BY timestamp DESC LIMIT 1
             """
             price_rows = list(client.query(price_q).result())

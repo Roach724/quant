@@ -553,7 +553,7 @@ body {
                 <td>#{{ t.bar }}</td>
                 <td style="font-weight:600">{{ t.symbol }}</td>
                 <td :class="t.side === 'BUY' ? 'side-buy' : 'side-sell'">{{ t.side }}</td>
-                <td>{{ t.qty }}</td>
+                <td>{{ Math.round(t.qty*100)/100 }}</td>
                 <td>{{ fmtUSD(t.price, 2) }}</td>
                 <td style="color:var(--text-muted)">{{ fmtUSD(t.commission, 4) }}</td>
               </tr>
