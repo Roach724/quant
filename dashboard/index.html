@@ -916,7 +916,7 @@ const app = createApp({
       const sym = market === 'us' ? usChartSymbol.value : hkChartSymbol.value;
       if (!sym) return;
       try {
-        const data = await fetchJSON(\`/api/market/\${market}/\${sym}\`);
+        const data = await fetchJSON(`/api/market/${market}/${sym}`);
         if (!data || !data.length) return;
         const layout = { ...chartTheme, title: sym };
         const trace = {
@@ -926,7 +926,7 @@ const app = createApp({
           increasing: {line:{color:'#34d399'}}, decreasing: {line:{color:'#f87171'}},
           name: sym,
         };
-        Plotly.react(\`chart-\${market}\`, [trace], layout, {responsive:true});
+        Plotly.react(`chart-${market}`, [trace], layout, {responsive:true});
       } catch(e) { if (!silent) console.error('Chart load error:', e); }
     }
 
