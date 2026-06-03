@@ -95,3 +95,43 @@ def get_logger(
     handler.addFilter(_ContextFilter(env, module))
 
     return logger
+
+
+def setup_root_json(module: str, env: str = "prod", log_dir: str | None = None) -> None:
+    """Add a JSON FileHandler to the root logger (one-liner for cron scripts).
+
+    Keeps existing handlers intact. After calling this, ALL loggers that
+    propagate to root will also write JSON to the file.
+
+    Args:
+        module: Category (loader/cron/factor/quality).
+        env: "prod" or "dev".
+        log_dir: Override log directory (default: /var/log/quant/{env}/{module}/).
+    """
+    import inspect
+
+    if log_dir is None:
+        log_dir = f"/var/log/quant/{env}/{module}"
+
+    # Derive log file name from the calling script
+    caller = inspect.stack()[1]
+    script_name = os.path.splitext(os.path.basename(caller.filename))[0]
+    # Sanitize: replace angle brackets and other problematic chars
+    script_name = script_name.replace("<", "").replace(">", "").replace(" ", "_")
+    if not script_name or script_name == "string":
+        script_name = "unknown"
+    log_file = os.path.join(log_dir, f"{script_name}.log")
+
+    root = logging.getLogger()
+
+    # Avoid duplicates
+    target = os.path.abspath(log_file)
+    for h in root.handlers:
+        if isinstance(h, logging.FileHandler) and os.path.abspath(h.baseFilename) == target:
+            return  # already configured
+
+    os.makedirs(log_dir, exist_ok=True)
+    handler = logging.FileHandler(log_file)
+    handler.setFormatter(QuantJsonFormatter())
+    handler.addFilter(_ContextFilter(env=env, module=module))
+    root.addHandler(handler)

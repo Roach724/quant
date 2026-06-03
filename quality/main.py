@@ -18,6 +18,12 @@ from google.cloud import bigquery
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+try:
+    from common.logging_util import setup_root_json
+    setup_root_json(module="quality")
+except Exception:
+    pass
+
 EXPECTED_DAILY_BARS = 390  # 5m: 78 bars × 5 trading days
 
 

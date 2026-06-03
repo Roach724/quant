@@ -66,6 +66,11 @@ def main():
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    try:
+        from common.logging_util import setup_root_json
+        setup_root_json(module="cron")
+    except Exception:
+        pass
 
     if not args.gcs_bucket:
         log.error("GCS_BUCKET env var or --gcs-bucket required")

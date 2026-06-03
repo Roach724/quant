@@ -81,6 +81,11 @@ def load_table(table_name: str, date_str: str = None, mode: str = "append"):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    try:
+        from common.logging_util import setup_root_json
+        setup_root_json(module="factor")
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(description="Load Futu factor data from GCS to BigQuery")
     parser.add_argument(
         "--table",

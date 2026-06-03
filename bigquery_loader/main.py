@@ -23,6 +23,12 @@ from google.cloud import bigquery
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+try:
+    from common.logging_util import setup_root_json
+    setup_root_json(module="loader")
+except Exception:
+    pass
+
 SCHEMA = [
     bigquery.SchemaField("symbol", "STRING"),
     bigquery.SchemaField("timestamp", "TIMESTAMP"),

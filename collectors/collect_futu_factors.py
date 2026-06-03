@@ -76,6 +76,11 @@ def collect_table(table_name: str):  # type: ignore[no-untyped-def]
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        from common.logging_util import setup_root_json
+        setup_root_json(module="factor")
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(description="Collect Futu factor data")
     parser.add_argument(
         "--table", choices=list(COLLECTOR_MAP.keys()), help="Single table to collect"
