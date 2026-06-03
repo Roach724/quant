@@ -417,14 +417,14 @@ body {
         <div class="pipeline-strip" v-if="pipeline">
           <div class="pipeline-item">
             <span class="pipeline-label">US 5m</span>
-            <span :class="['pipeline-value', pipeline.us ? 'online' : 'offline']">
-              {{ pipeline.us ? '● LIVE' : '○ OFFLINE' }}
+            <span :class="['pipeline-value', pipeline.us_open ? 'online' : 'offline']">
+              {{ pipeline.us_open ? "● LIVE" : "○ CLOSED" }}
             </span>
           </div>
           <div class="pipeline-item">
             <span class="pipeline-label">HK 5m</span>
-            <span :class="['pipeline-value', pipeline.hk ? 'online' : 'offline']">
-              {{ pipeline.hk ? '● LIVE' : '○ OFFLINE' }}
+            <span :class="['pipeline-value', pipeline.hk_open ? 'online' : 'offline']">
+              {{ pipeline.hk_open ? "● LIVE" : "○ CLOSED" }}
             </span>
           </div>
           <span class="pipeline-ts" v-if="pipeline.ts">

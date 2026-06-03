@@ -180,12 +180,31 @@ async def trades(exp_id: str, limit: int = 200):
 async def pipeline():
     """Return the most-recent timestamp per market from the bars tables."""
     client = _get_bq()
-    result: dict[str, Any] = {"us": None, "hk": None, "ts": datetime.now(timezone.utc).isoformat()}
+    result: dict[str, Any] = {
+        "us": None, "hk": None,
+        "us_open": False, "hk_open": False,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Market hours check (UTC)
+    now = datetime.now(timezone.utc)
+    # US: 13:30-20:00 UTC Mon-Fri
+    result["us_open"] = (
+        now.weekday() < 5 and
+        datetime(now.year, now.month, now.day, 13, 30, tzinfo=timezone.utc) <= now <=
+        datetime(now.year, now.month, now.day, 20, 0, tzinfo=timezone.utc)
+    )
+    # HK: 01:30-08:00 UTC Mon-Fri
+    result["hk_open"] = (
+        now.weekday() < 5 and
+        datetime(now.year, now.month, now.day, 1, 30, tzinfo=timezone.utc) <= now <=
+        datetime(now.year, now.month, now.day, 8, 0, tzinfo=timezone.utc)
+    )
 
     try:
         q = f"""
             SELECT MAX(timestamp) AS latest FROM {_table("us_bars_5m")}
-            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
         """
         rows = list(client.query(q).result())
         if rows and rows[0].latest:
@@ -196,7 +215,7 @@ async def pipeline():
     try:
         q = f"""
             SELECT MAX(timestamp) AS latest FROM {_table("hk_bars_5m")}
-            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
         """
         rows = list(client.query(q).result())
         if rows and rows[0].latest:
