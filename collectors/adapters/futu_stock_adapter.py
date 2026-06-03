@@ -116,11 +116,11 @@ class FutuStockAdapter:
         return pd.DataFrame(records)
 
     _DEFAULT_SYMBOLS = [
-        # HK — 15 stocks
+        # HK — 15 stocks (fallback only, SSOT is config/symbols.yaml)
         "HK.00700", "HK.09988", "HK.00941", "HK.00005", "HK.00388",
         "HK.01299", "HK.02318", "HK.01810", "HK.00883", "HK.02382",
         "HK.01093", "HK.03968", "HK.02269", "HK.03690", "HK.09633",
-        # US — Nasdaq 100 + S&P 500 top 150 (deduplicated, ~239)
+        # US — Nasdaq 100 + S&P 500 top 150 (deduplicated, ~239, fallback only)
         "US.AAPL","US.MSFT","US.NVDA","US.AMZN","US.META","US.GOOGL","US.AVGO","US.TSLA","US.COST","US.NFLX",
         "US.ADBE","US.AMD","US.PEP","US.CSCO","US.LIN","US.INTU","US.QCOM","US.TXN","US.AMGN","US.ISRG",
         "US.AMAT","US.CMCSA","US.HON","US.BKNG","US.GILD","US.MU","US.LRCX","US.ADI","US.VRTX","US.SBUX",
@@ -147,8 +147,45 @@ class FutuStockAdapter:
         "US.GRMN","US.PPG","US.LYB","US.DD","US.DOW","US.HAL","US.NEM","US.DVN",
     ]
 
+    @staticmethod
+    def _load_symbols_from_yaml() -> list[str]:
+        """Load symbols from config/symbols.yaml (SSOT).
+
+        Falls back to _DEFAULT_SYMBOLS if the config file is unavailable.
+        """
+        from pathlib import Path
+        import yaml
+
+        config_paths = [
+            Path(__file__).resolve().parent.parent.parent / "config" / "symbols.yaml",
+            Path("/opt/quant-prod/config/symbols.yaml"),
+            Path("/opt/quant-dev/config/symbols.yaml"),
+        ]
+        for p in config_paths:
+            if p.exists():
+                try:
+                    cfg = yaml.safe_load(p.read_text())
+                    symbols = []
+                    for market_cfg in cfg.get("markets", {}).values():
+                        for sym in market_cfg.get("symbols", []):
+                            prefix = f"{sym[:2].upper()}." if len(sym) > 2 else "HK."
+                            # ws_collector format: "HK.00700", adapter format: "HK.00700"
+                            symbols.append(sym)
+                    if symbols:
+                        import logging
+                        logging.getLogger(__name__).info(
+                            "Loaded %d symbols from %s", len(symbols), p
+                        )
+                        return symbols
+                except Exception:
+                    pass
+        return []
+
     def fetch_supported_symbols(self) -> list[str]:
-        """Return default watchlist of HK + US stocks."""
+        """Return symbol list from SSOT (config/symbols.yaml), falling back to hardcoded list."""
+        from_yaml = self._load_symbols_from_yaml()
+        if from_yaml:
+            return from_yaml
         return list(self._DEFAULT_SYMBOLS)
 
     def market_hours(self, d: date) -> tuple[time, time]:
