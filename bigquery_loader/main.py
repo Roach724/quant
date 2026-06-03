@@ -16,7 +16,7 @@ Env vars:
 import io
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from google.cloud import bigquery
 
@@ -237,7 +237,7 @@ def main():
     ensure_dataset(client, project)
     ensure_table(client, project, table_id=table)
 
-    today = datetime.now(datetime.UTC).date()
+    today = datetime.now(timezone.utc).date()
     if start_date_str:
         start = datetime.strptime(start_date_str, "%Y-%m-%d").date()
         end = min(start + timedelta(days=load_days - 1), today)

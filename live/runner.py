@@ -62,9 +62,9 @@ class LiveRunner:
         Path to YAML config file (see live/config.py for schema).
     """
 
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, config: dict | None = None):
         self.config_path = config_path
-        self.config = load_config(config_path)
+        self.config = config if config is not None else load_config(config_path)
 
         self.broker = None
         self.strategy = None
@@ -674,7 +674,7 @@ class LiveRunner:
 
         # ── 3. Per-day loop ──
         self._live_stop_reason = None
-        self._live_bars: list[dict] = []
+        self._live_bars: list[dict] = getattr(self, "_live_bars", [])
         self._live_start_time = datetime.now(timezone.utc)
         self._live_bar_count = live_state.get("bar_count", 0)
         self._live_peak_equity = peak_equity
@@ -913,7 +913,7 @@ class LiveRunner:
         source.stop_check = None  # will be re-set below
 
         # Rolling bar buffer per day
-        self._live_bars: list[dict] = []
+        self._live_bars: list[dict] = getattr(self, "_live_bars", [])
 
         # Ensure strategy context is set up with proper symbol columns
         close = pd.DataFrame({sym: [float("nan")] for sym in symbols})
@@ -1018,10 +1018,16 @@ class LiveRunner:
                                 s.weight = 1.0 / n_buy
 
                     for sig in signals:
+                        last_prices = getattr(portfolio, '_last_prices', {})
                         if sig.symbol not in bar_data.get("close", {}):
-                            logger.warning("Signal skipped: %s not in bar_data — no price available", sig.symbol)
-                            continue
-                        price = bar_data["close"][sig.symbol]
+                            fallback = last_prices.get(sig.symbol)
+                            if not fallback or fallback <= 0:
+                                logger.warning("Signal skipped: %s not in bar_data — no price available", sig.symbol)
+                                continue
+                            price = fallback
+                            logger.info("Signal: %s using last_price=%.2f (not in bar_data)", sig.symbol, price)
+                        else:
+                            price = bar_data["close"][sig.symbol]
                         sd = convert_signal(sig, portfolio, price_est=price)
 
                         if sd["side"] == "buy":

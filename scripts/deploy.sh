@@ -1,5 +1,7 @@
 #!/bin/bash
 set -euo pipefail
+# Ensure repo is trusted regardless of SSH user
+git config --global --add safe.directory /opt/quant-prod 2>/dev/null || true
 
 # deploy.sh — Deploy stable branch to /opt/quant-prod
 # Invoked by GitHub Actions CD pipeline via gcloud compute ssh
@@ -14,15 +16,15 @@ log() { echo "$LOG_TAG $*"; }
 fail() { log "FAILED: $*"; exit 1; }
 
 # ── ① Backup current state ──────────────────────────────────────────
-CURRENT_COMMIT=$(cd "$PROD_ROOT" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+CURRENT_COMMIT=$(cd "$PROD_ROOT" && sudo -u quant git rev-parse HEAD 2>/dev/null || echo "unknown")
 log "Backing up current commit: $CURRENT_COMMIT"
 
 # ── ② Git fetch + checkout ──────────────────────────────────────────
 log "Fetching origin/stable..."
 cd "$PROD_ROOT"
-git fetch origin stable || fail "git fetch failed"
-git reset --hard origin/stable || fail "git reset failed"
-NEW_COMMIT=$(git rev-parse HEAD)
+sudo -u quant git fetch origin stable || fail "git fetch failed"
+sudo -u quant git reset --hard origin/stable || fail "git reset failed"
+NEW_COMMIT=$(sudo -u quant git rev-parse HEAD)
 log "Checked out: $NEW_COMMIT"
 
 # ── ③ Sync dependencies ─────────────────────────────────────────────
@@ -41,7 +43,7 @@ print('All core modules imported successfully')
     # Auto-rollback
     if [ "$CURRENT_COMMIT" != "unknown" ]; then
         log "Rolling back to $CURRENT_COMMIT..."
-        cd "$PROD_ROOT" && git checkout "$CURRENT_COMMIT"
+        cd "$PROD_ROOT" && sudo -u quant git checkout "$CURRENT_COMMIT"
         "$VENV_PIP" install -r requirements.txt --quiet
         sudo systemctl restart ws-collector
         echo "{\"time\":\"$(date -Iseconds)\",\"commit\":\"$NEW_COMMIT\",\"status\":\"failed\",\"trigger\":\"github\",\"detail\":\"smoke_import\"}" >> "$HISTORY_FILE"
@@ -52,11 +54,7 @@ fi
 
 # Test 2: Config files are parseable (check a known-good YAML)
 if [ -f live/configs/exp1_ml_us.yaml ]; then
-    "$VENV_PYTHON" -c "
-from live.config import load_config
-cfg = load_config('exp1_ml_us')
-print(f'Config loaded: strategy={cfg.strategy.name}')
-" || fail "Smoke test 2: config parse"
+    PYTHONPATH=. "$VENV_PYTHON" scripts/smoke_test_config.py || fail "Smoke test 2: config parse"
 else
     log "Smoke test 2: skipped (no config file)"
 fi
@@ -77,7 +75,7 @@ if [ "$SERVICE_STATUS" != "active" ]; then
     # Auto-rollback
     if [ "$CURRENT_COMMIT" != "unknown" ]; then
         log "Rolling back to $CURRENT_COMMIT..."
-        cd "$PROD_ROOT" && git checkout "$CURRENT_COMMIT"
+        cd "$PROD_ROOT" && sudo -u quant git checkout "$CURRENT_COMMIT"
         "$VENV_PIP" install -r requirements.txt --quiet
         sudo systemctl restart ws-collector
         echo "{\"time\":\"$(date -Iseconds)\",\"commit\":\"$NEW_COMMIT\",\"status\":\"failed\",\"trigger\":\"github\",\"detail\":\"service_inactive\"}" >> "$HISTORY_FILE"

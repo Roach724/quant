@@ -66,23 +66,15 @@ def write_bars_to_gcs(
     for (symbol, _date), group in groups:
         ts = group["timestamp"].iloc[0]
         final_path = build_gcs_path(market, "bars", frequency, symbol, ts)
-        tmp_path = final_path + ".tmp"
 
         parquet_bytes = dataframe_to_parquet_bytes(group)
 
-        # 1. Upload to temp path
-        tmp_blob = bucket.blob(tmp_path)
-        tmp_blob.upload_from_string(
+        # Upload directly to final path — GCS single-object uploads are atomic
+        final_blob = bucket.blob(final_path)
+        final_blob.upload_from_string(
             parquet_bytes,
             content_type="application/octet-stream",
         )
-
-        # 2. Server-side copy to final path (atomic overwrite)
-        final_blob = bucket.blob(final_path)
-        final_blob.rewrite(tmp_blob)
-
-        # 3. Delete temp
-        tmp_blob.delete()
 
         paths.append(f"gs://{bucket_name}/{final_path}")
 
