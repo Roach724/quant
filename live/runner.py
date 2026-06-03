@@ -1018,10 +1018,16 @@ class LiveRunner:
                                 s.weight = 1.0 / n_buy
 
                     for sig in signals:
+                        last_prices = getattr(portfolio, '_last_prices', {})
                         if sig.symbol not in bar_data.get("close", {}):
-                            logger.warning("Signal skipped: %s not in bar_data — no price available", sig.symbol)
-                            continue
-                        price = bar_data["close"][sig.symbol]
+                            fallback = last_prices.get(sig.symbol)
+                            if not fallback or fallback <= 0:
+                                logger.warning("Signal skipped: %s not in bar_data — no price available", sig.symbol)
+                                continue
+                            price = fallback
+                            logger.info("Signal: %s using last_price=%.2f (not in bar_data)", sig.symbol, price)
+                        else:
+                            price = bar_data["close"][sig.symbol]
                         sd = convert_signal(sig, portfolio, price_est=price)
 
                         if sd["side"] == "buy":
