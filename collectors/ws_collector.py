@@ -19,6 +19,8 @@ import signal
 import sys
 import time
 from datetime import UTC, datetime
+import yaml
+from pathlib import Path
 
 from futu import (
     RET_OK,
@@ -29,6 +31,13 @@ from futu import (
 
 # Add parent to path so we can import storage
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Add project root to Python path for live.calendar import
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+from live.calendar import MarketCalendar
+
 from storage import write_bars_to_gcs
 
 logging.basicConfig(
@@ -46,63 +55,42 @@ FLUSH_INTERVAL_SEC = int(os.environ.get("FLUSH_INTERVAL_SEC", "300"))
 BUFFER_MAX: int = int(os.environ.get("BUFFER_MAX", "500"))
 HEARTBEAT_INTERVAL_SEC = int(os.environ.get("HEARTBEAT_INTERVAL_SEC", "1800"))
 
-# ── Symbol pools ──
-# Dynamically fetched from Futu API at startup (HK + US).
-# Crypto symbols are hardcoded (CCXT-based, not Futu).
+# ── Symbol config (SSOT) ──
 
-CRYPTO_SYMBOLS = [
-    "CC.BTC", "CC.ETH", "CC.SOL", "CC.LTC",
-    "CC.XRP", "CC.DOT", "CC.ADA", "CC.AVAX", "CC.LINK", "CC.UNI",
-]
-
-HK_SYMBOLS = []   # populated by _load_futu_symbols()
-US_SYMBOLS = []   # populated by _load_futu_symbols()
+_SYMBOL_CONFIG: dict[str, list[str]] = {}
+_CALENDARS: dict[str, MarketCalendar] = {}
+PREHEAT_MINUTES = 5
 
 
-def _load_futu_symbols():
-    """Fetch supported HK/US symbols from Futu OpenD and populate lists."""
-    global HK_SYMBOLS, US_SYMBOLS
-    try:
-        from adapters.futu_stock_adapter import FutuStockAdapter
-        futu = FutuStockAdapter()
-        try:
-            all_syms = futu.fetch_supported_symbols()
-            HK_SYMBOLS = sorted(s for s in all_syms if s.startswith("HK."))
-            US_SYMBOLS = sorted(s for s in all_syms if s.startswith("US."))
-            logger.info("Symbol pools loaded: US=%d HK=%d (total=%d)",
-                        len(US_SYMBOLS), len(HK_SYMBOLS), len(all_syms))
-        finally:
-            futu.close()
-    except Exception as e:
-        logger.error("Failed to load Futu symbols: %s — using empty lists", e)
+def _load_symbols_config():
+    """Load symbol lists from config/symbols.yaml (SSOT)."""
+    global _SYMBOL_CONFIG, _CALENDARS
 
-# ── Market hour helpers (simplified, UTC-based) ──# ── Market hour helpers (simplified, UTC-based) ──  # noqa: E501
+    config_path = _PROJECT_ROOT / "config" / "symbols.yaml"
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
 
-def _now_utc() -> datetime:
-    return datetime.now(UTC)
+    for market in ("us", "hk"):
+        _SYMBOL_CONFIG[market] = cfg["markets"][market]["symbols"]
+        _CALENDARS[market] = MarketCalendar(market)
+
+    logger.info(
+        "Symbol config loaded: US=%d HK=%d (preheat=%dmin)",
+        len(_SYMBOL_CONFIG.get("us", [])),
+        len(_SYMBOL_CONFIG.get("hk", [])),
+        PREHEAT_MINUTES,
+    )
 
 
-def _hk_is_open() -> bool:
-    """HK market: Mon-Fri, UTC 01:30-04:00 and 05:00-08:00 (lunch break 04:00-05:00)."""
-    dt = _now_utc()
-    if dt.weekday() >= 5:
-        return False
-    t = dt.hour * 60 + dt.minute
-    return (90 <= t < 240) or (300 <= t < 480)
-
-
-def _us_is_open() -> bool:
-    """US market: Mon-Fri, UTC 13:30-20:00 (ET 09:30-16:00)."""
-    dt = _now_utc()
-    if dt.weekday() >= 5:
-        return False
-    t = dt.hour * 60 + dt.minute
-    return 810 <= t <= 1200
-
-
-def _crypto_is_open() -> bool:
-    """Crypto: always open."""
-    return True
+def _desired_symbols() -> set[str]:
+    """Return symbols for currently-open markets using calendar + preheat."""
+    desired: set[str] = set()
+    for market in ("hk", "us"):
+        cal = _CALENDARS.get(market)
+        syms = _SYMBOL_CONFIG.get(market, [])
+        if cal is not None and cal.is_open_now(preheat_minutes=PREHEAT_MINUTES):
+            desired.update(syms)
+    return desired
 
 
 # ── K-line handler ──
@@ -157,8 +145,8 @@ def main():
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT, _on_signal)
 
-    # Populate symbol pools from Futu API
-    _load_futu_symbols()
+    # Load symbol config from SSOT yaml
+    _load_symbols_config()
     buffer: list[dict] = []
     handler = BarHandler(buffer, label="5m")
 
@@ -192,14 +180,7 @@ def main():
         # ── Market-hour subscription management (every 60s) ──
         if now_ts - last_market_check > 60:
             last_market_check = now_ts
-            desired: set[str] = set()
-
-            if _hk_is_open():
-                desired.update(HK_SYMBOLS)
-            if _us_is_open():
-                desired.update(US_SYMBOLS)
-            # CRYPTO disabled
-            # CRYPTO disabled
+            desired = _desired_symbols()
 
             to_sub = desired - current_subscriptions
             to_unsub = current_subscriptions - desired
