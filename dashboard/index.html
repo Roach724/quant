@@ -969,7 +969,16 @@ const app = createApp({
     }
 
     // ── Lifecycle ──
-    onMounted(() => {
+    onMounted(async () => {
+      try {
+        var us = await fetchJSON('/api/market/symbols/us');
+        var hk = await fetchJSON('/api/market/symbols/hk');
+        if (us && us.length) { usSymbols.value = us; usChartSymbol.value = 'AAPL'; }
+        if (hk && hk.length) { hkSymbols.value = hk; hkChartSymbol.value = '00700'; }
+        await nextTick();
+        loadMarketChart('us');
+        loadMarketChart('hk');
+      } catch(e) { console.error('Init error:', e); }
       connectWS();
       startTimers();
     });
