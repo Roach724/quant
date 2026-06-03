@@ -100,6 +100,7 @@ async def experiments():
             SELECT *,
                    ROW_NUMBER() OVER (PARTITION BY exp_id ORDER BY ts DESC) AS rn
             FROM {_table("experiment_equity")}
+            WHERE NOT STARTS_WITH(exp_id, "test_")
         )
         WHERE rn = 1
         ORDER BY ts DESC
@@ -293,3 +294,39 @@ def start():
 if __name__ == "__main__":
     start()
 
+
+
+@app.get("/api/experiments/meta")
+async def experiments_meta():
+    """Return experiment metadata from tracker files (includes sleeping)."""
+    import json as _json
+    from pathlib import Path
+
+    exp_dir = Path("output/live/experiments")
+    if not exp_dir.exists():
+        return []
+
+    result = []
+    for exp_path in sorted(exp_dir.iterdir()):
+        if not exp_path.is_dir():
+            continue
+        exp_file = exp_path / "experiment.json"
+        if not exp_file.exists():
+            continue
+        try:
+            meta = _json.loads(exp_file.read_text())
+            sessions_file = exp_path / "investment_sessions.json"
+            sessions = []
+            if sessions_file.exists():
+                sessions = _json.loads(sessions_file.read_text())
+            result.append({
+                "exp_id": meta.get("experiment_id", exp_path.name),
+                "name": meta.get("name", ""),
+                "status": meta.get("status", "unknown"),
+                "created_at": meta.get("created_at", ""),
+                "sessions": len(sessions),
+            })
+        except Exception:
+            pass
+
+    return result

@@ -393,8 +393,11 @@ body {
           <span style="color:var(--text-muted);font-size:12px;">{{ filteredExperiments.length }}/{{ experiments.length }}</span>
         </div>
         <div class="exp-grid">
-          <div class="exp-card" v-for="exp in filteredExperiments" :key="exp.exp_id">
-            <div class="exp-id">{{ exp.exp_id }}</div>
+          <div class="exp-card" v-for="exp in filteredExperiments" :key="exp.exp_id" :class="{sleeping: exp.sleeping}">
+            <div class="exp-id">
+              {{ exp.exp_id }}
+              <span v-if="exp.sleeping" style="font-size:11px;color:var(--yellow);margin-left:6px;">💤</span>
+            </div>
             <div class="exp-metrics">
               <div>
                 <div class="exp-metric-label">Daily PnL</div>
@@ -581,8 +584,9 @@ const app = createApp({
       if (!showActiveOnly.value) return experiments.value;
       const now = Date.now();
       return experiments.value.filter(e => {
+        if (e.sleeping) return false; // sleeping experiments hidden when Active only
         const t = new Date(e.ts).getTime();
-        return (now - t) < 10 * 60 * 1000; // active in last 10 min
+        return (now - t) < 10 * 60 * 1000;
       });
     });
     const pipeline = ref(null);
@@ -760,13 +764,24 @@ const app = createApp({
 
     async function loadExperiments() {
       loading.experiments = true;
-      const data = await fetchJSON('/api/experiments');
-      if (data) {
-        experiments.value = data;
-        connected.value = true;
-      } else {
-        connected.value = false;
+      const [bqData, meta] = await Promise.all([
+        fetchJSON('/api/experiments'),
+        fetchJSON('/api/experiments/meta'),
+      ]);
+      // Merge: BQ data provides live metrics, meta provides experiment list
+      const bqMap = {};
+      if (bqData) bqData.forEach(e => { bqMap[e.exp_id] = e; });
+      if (meta) {
+        experiments.value = meta.map(m => ({
+          exp_id: m.exp_id,
+          name: m.name,
+          status: m.status,
+          ...(bqMap[m.exp_id] || { bar: 0, equity: 0, cash: 0, daily_pnl: 0, drawdown: 0, ts: m.created_at, sleeping: true }),
+        }));
+      } else if (bqData) {
+        experiments.value = bqData;
       }
+      connected.value = !!(bqData || meta);
       loading.experiments = false;
     }
 
