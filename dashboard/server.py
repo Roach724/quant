@@ -174,6 +174,107 @@ async def trades(exp_id: str, limit: int = 200):
         return []
 
 
+# ── Paper Run APIs ──
+
+@app.get("/api/paper-runs")
+async def paper_runs(limit: int = 50, status: str | None = None):
+    """List paper runs, most recent first. Optional status filter."""
+    client = _get_bq()
+    try:
+        where = ""
+        if status:
+            where = f"WHERE status = '{status}'"
+        query = f"""
+            SELECT run_id, name, strategy, market, status, n_periods,
+                   created_at, error_msg
+            FROM {_table("paper_runs")}
+            {where}
+            ORDER BY created_at DESC
+            LIMIT {min(limit, 200)}
+        """
+        rows = client.query(query).result()
+        names = ["run_id", "name", "strategy", "market", "status",
+                 "n_periods", "created_at", "error_msg"]
+        return [_row_to_dict(r, names) for r in rows]
+    except Exception as e:
+        logger.error("paper_runs query failed: %s", e)
+        return []
+
+
+@app.get("/api/paper-runs/{run_id}")
+async def paper_run_detail(run_id: str):
+    """Detail for a single paper run: metadata + equity curve + trades.
+    
+    Returns: { run: {...}, metrics: {...}, equity: [...], trades: [...] }
+    """
+    client = _get_bq()
+    try:
+        # Run metadata
+        run_query = f"""
+            SELECT run_id, name, strategy, market, status, n_periods,
+                   config_json, created_at, error_msg
+            FROM {_table("paper_runs")}
+            WHERE run_id = '{run_id}'
+        """
+        run_rows = list(client.query(run_query).result())
+        if not run_rows:
+            return {"error": "not found", "run_id": run_id}
+        run_names = ["run_id", "name", "strategy", "market", "status",
+                     "n_periods", "config_json", "created_at", "error_msg"]
+        run = _row_to_dict(run_rows[0], run_names)
+
+        # Metrics
+        metrics = {}
+        try:
+            m_query = f"""
+                SELECT *
+                FROM {_table("paper_metrics")}
+                WHERE run_id = '{run_id}'
+            """
+            m_rows = list(client.query(m_query).result())
+            if m_rows:
+                m_names = [f.name for f in m_rows[0].fields]
+                metrics = _row_to_dict(m_rows[0], m_names)
+        except Exception:
+            pass
+
+        # Equity curve (from experiment_equity)
+        equity = []
+        try:
+            e_query = f"""
+                SELECT ts, bar, equity, cash, portfolio_value, daily_pnl, drawdown
+                FROM {_table("experiment_equity")}
+                WHERE exp_id = '{run_id}'
+                ORDER BY bar
+            """
+            e_rows = client.query(e_query).result()
+            e_names = ["ts", "bar", "equity", "cash", "portfolio_value", "daily_pnl", "drawdown"]
+            equity = [_row_to_dict(r, e_names) for r in e_rows]
+        except Exception:
+            pass
+
+        # Trades
+        trades = []
+        try:
+            t_query = f"""
+                SELECT ts, bar, symbol, side, qty, price, commission
+                FROM {_table("experiment_trades")}
+                WHERE exp_id = '{run_id}'
+                ORDER BY bar
+                LIMIT 500
+            """
+            t_rows = client.query(t_query).result()
+            t_names = ["ts", "bar", "symbol", "side", "qty", "price", "commission"]
+            trades = [_row_to_dict(r, t_names) for r in t_rows]
+        except Exception:
+            pass
+
+        return {"run": run, "metrics": metrics, "equity": equity, "trades": trades}
+    except Exception as e:
+        logger.error("paper_run_detail failed: %s", e)
+        return {"error": str(e), "run_id": run_id}
+
+
 # ---------------------------------------------------------------------------
 # GET /api/pipeline — data-freshness check
 # ---------------------------------------------------------------------------

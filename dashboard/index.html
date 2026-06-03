@@ -321,6 +321,46 @@ body {
 .alerts-placeholder .icon { font-size: 40px; margin-bottom: 12px; }
 .alerts-placeholder .msg { font-size: 14px; }
 
+/* ── Paper Run Tab ── */
+.paper-run-layout { display: flex; gap: 20px; }
+.paper-sidebar { width: 280px; flex-shrink: 0; }
+.paper-main { flex: 1; min-width: 0; }
+.paper-sidebar h3 { font-size: 15px; margin-bottom: 12px; }
+.run-select {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.run-meta { font-size: 12px; color: var(--text-secondary); line-height: 1.8; }
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.metric-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  text-align: center;
+}
+.metric-label { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+.metric-value { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.metric-value.red { color: var(--red); }
+.metric-value.green { color: var(--green); }
+.metric-value.neutral { color: var(--text-primary); }
+
+.chart-section { margin-bottom: 20px; }
+.chart-section h4 { margin-bottom: 8px; }
+.trades-section h4 { margin-bottom: 8px; }
+
 /* ── Loading / Empty ── */
 .empty-state {
   text-align: center;
@@ -617,6 +657,103 @@ body {
         <div class="msg">No alerts. Monitoring active.</div>
       </div>
     </div>
+
+    <!-- ═══════ PAPER RUN TAB ═══════ -->
+    <div v-if="activeTab === 'paper'">
+      <div class="paper-run-layout">
+        <!-- Left: Run Selector -->
+        <div class="paper-sidebar">
+          <h3>📋 Paper Runs</h3>
+          <select v-model="selectedPaperRun" @change="loadPaperRun" class="run-select">
+            <option value="">— Select a run —</option>
+            <option v-for="r in paperRuns" :key="r.run_id" :value="r.run_id">
+              {{ r.name || r.run_id }} ({{ r.status }})
+            </option>
+          </select>
+          <div class="run-meta" v-if="paperRun.run">
+            <div><strong>Strategy:</strong> {{ paperRun.run.strategy }}</div>
+            <div><strong>Market:</strong> {{ paperRun.run.market }}</div>
+            <div><strong>Periods:</strong> {{ paperRun.run.n_periods }}</div>
+            <div><strong>Created:</strong> {{ fmtTs(paperRun.run.created_at) }}</div>
+          </div>
+        </div>
+
+        <!-- Right: Results -->
+        <div class="paper-main" v-if="paperRun.run">
+          <!-- Metrics Cards -->
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <div class="metric-label">Sharpe</div>
+              <div class="metric-value" :class="metricColor(paperRun.metrics.sharpe, 0, 1, 2)">{{ fmtNum(paperRun.metrics.sharpe) }}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Max Drawdown</div>
+              <div class="metric-value red">{{ fmtPct(paperRun.metrics.max_drawdown) }}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Annual Return</div>
+              <div class="metric-value" :class="metricColor(paperRun.metrics.annual_return, 0, 0.1, 0.3)">{{ fmtPct(paperRun.metrics.annual_return) }}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Annual Vol</div>
+              <div class="metric-value">{{ fmtPct(paperRun.metrics.annual_vol) }}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Sortino</div>
+              <div class="metric-value">{{ fmtNum(paperRun.metrics.sortino) }}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Calmar</div>
+              <div class="metric-value">{{ fmtNum(paperRun.metrics.calmar) }}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Win Rate</div>
+              <div class="metric-value">{{ fmtPct(paperRun.metrics.win_rate) }}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Profit Factor</div>
+              <div class="metric-value">{{ fmtNum(paperRun.metrics.profit_factor) }}</div>
+            </div>
+          </div>
+
+          <!-- Equity + Drawdown Chart -->
+          <div class="chart-section">
+            <h4>📈 Equity Curve</h4>
+            <div id="paperEquityChart" style="width:100%;height:300px"></div>
+          </div>
+
+          <!-- Trade List -->
+          <div class="trades-section" v-if="paperRun.trades.length">
+            <h4>📊 Trades ({{ paperRun.trades.length }})</h4>
+            <div class="trades-table-wrap">
+              <table class="trades-table">
+                <thead>
+                  <tr><th>Bar</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Commission</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="t in paperRun.trades.slice(-50)" :key="t.bar + t.symbol">
+                    <td>{{ t.bar }}</td>
+                    <td>{{ t.symbol }}</td>
+                    <td><span :class="'side-' + (t.side || '').toLowerCase()">{{ t.side }}</span></td>
+                    <td>{{ t.qty }}</td>
+                    <td>{{ fmtNum(t.price) }}</td>
+                    <td>{{ fmtNum(t.commission) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="empty-state" v-else-if="paperRun.equity.length">
+            <p>No trades recorded.</p>
+          </div>
+        </div>
+
+        <div class="empty-state" v-else>
+          <p>Select a paper run to view results.</p>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -659,6 +796,10 @@ const app = createApp({
     const positions = ref([]);
     const posPage = ref(1);
     const pageSize = 10;
+    // ── Paper Run state ──
+    const paperRuns = ref([]);
+    const selectedPaperRun = ref('');
+    const paperRun = ref({ run: null, metrics: {}, equity: [], trades: [] });
     const totalPages = computed(() => Math.ceil((positions.value?.length || 0) / pageSize));
     const paginatedPositions = computed(() => {
       const start = (posPage.value - 1) * pageSize;
@@ -673,6 +814,7 @@ const app = createApp({
     const tabs = [
       { id: 'overview', label: 'Overview' },
       { id: 'detail', label: 'Live Experiment' },
+      { id: 'paper', label: 'Paper Run' },
       { id: 'pipeline', label: 'Pipeline' },
       { id: 'alerts', label: 'Alerts' },
     ];
@@ -977,6 +1119,68 @@ const app = createApp({
 
     // ── Lifecycle ──
 
+    // ── Paper Run Methods ──
+    async function loadPaperRuns() {
+      try { paperRuns.value = await fetchJSON('/api/paper-runs') || []; }
+      catch (e) { console.error('Paper runs load failed', e); }
+    }
+
+    async function loadPaperRun() {
+      if (!selectedPaperRun.value) { paperRun.value = { run: null, metrics: {}, equity: [], trades: [] }; return; }
+      try {
+        const r = await fetchJSON('/api/paper-runs/' + selectedPaperRun.value);
+        if (r) paperRun.value = r;
+        await nextTick();
+        renderPaperEquityChart();
+      } catch (e) { console.error('Paper run detail failed', e); }
+    }
+
+    function renderPaperEquityChart() {
+      const el = document.getElementById('paperEquityChart');
+      if (!el || !paperRun.value.equity || !paperRun.value.equity.length) return;
+      const bars = paperRun.value.equity.map(e => e.bar);
+      const equity = paperRun.value.equity.map(e => e.portfolio_value);
+      const dd = paperRun.value.equity.map(e => (e.drawdown || 0) * 100);
+      const traceEquity = {
+        x: bars, y: equity, type: 'scatter', mode: 'lines',
+        name: 'Equity', line: { color: '#4ade80', width: 2 },
+        fill: 'tozeroy', fillcolor: 'rgba(74,222,128,0.05)',
+      };
+      const traceDD = {
+        x: bars, y: dd, type: 'scatter', mode: 'lines',
+        name: 'Drawdown %', line: { color: '#f87171', width: 1 },
+        fill: 'tozeroy', fillcolor: 'rgba(248,113,113,0.15)',
+        yaxis: 'y2',
+      };
+      const layout = {
+        paper_bgcolor: '#1e293b', plot_bgcolor: '#1e293b',
+        height: 300, margin: { l: 60, r: 60, t: 20, b: 40 },
+        font: { color: '#94a3b8', size: 11 },
+        xaxis: { gridcolor: '#334155', zerolinecolor: '#334155' },
+        yaxis: { gridcolor: '#334155', zerolinecolor: '#334155', title: 'Equity' },
+        yaxis2: { overlaying: 'y', side: 'right', title: 'Drawdown %', gridcolor: 'transparent' },
+        legend: { x: 0, y: 1.1, orientation: 'h' },
+      };
+      Plotly.newPlot(el, [traceEquity, traceDD], layout, { responsive: true, displayModeBar: false });
+    }
+
+    function fmtNum(v) {
+      if (v == null) return '—';
+      return Number(v).toFixed(2);
+    }
+
+    function fmtTs(iso) {
+      if (!iso) return '—';
+      return new Date(iso).toLocaleString('en-US', { hour12: false });
+    }
+
+    function metricColor(val, low, mid, high) {
+      if (val == null) return 'neutral';
+      if (val >= high) return 'green';
+      if (val >= mid) return 'neutral';
+      return 'red';
+    }
+
     function refreshAll() {
       loadExperiments();
       loadPipeline();
@@ -1004,6 +1208,7 @@ const app = createApp({
     // ── Watch activeTab to load pipeline when switching ──
     watch(activeTab, (tab) => {
       if (tab === 'pipeline') loadPipeline();
+      if (tab === 'paper') { loadPaperRuns(); }
     });
 
     return {
@@ -1031,6 +1236,10 @@ const app = createApp({
       timeAgo,
       onSelectExperiment,
       refreshAll,
+      // ── Paper Run ──
+      paperRuns, selectedPaperRun, paperRun,
+      loadPaperRuns, loadPaperRun, renderPaperEquityChart,
+      metricColor, fmtNum, fmtTs,
     };
   },
 });
