@@ -453,7 +453,7 @@ body {
                 <option v-for="s in usSymbols" :value="s">{{ s }}</option>
               </select>
             </div>
-            <div id="chart-us" style="height:350px;"></div>
+            <div id="chart-us" style="height:350px;width:100%;"></div>
           </div>
           <div class="card" style="margin-top:24px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
@@ -462,7 +462,7 @@ body {
                 <option v-for="s in hkSymbols" :value="s">{{ s }}</option>
               </select>
             </div>
-            <div id="chart-hk" style="height:350px;"></div>
+            <div id="chart-hk" style="height:350px;width:100%;"></div>
           </div>
         </div>
       </div>
@@ -508,6 +508,7 @@ body {
         </div>
 
         <!-- Current Positions -->
+        <h3 style="text-align:left;margin:20px 0 12px;">📋 Current Positions</h3>
         <div class="trades-table-wrap">
           <table class="trades-table">
             <thead>
@@ -535,6 +536,7 @@ body {
           </div>
         </div>
 
+        <h3 style="text-align:left;margin:20px 0 12px;">📜 Recent Trades</h3>
         <!-- Recent Trades -->
         <div class="trades-table-wrap">
           <table class="trades-table">
@@ -940,8 +942,8 @@ const app = createApp({
     function startTimers() {
       loadExperiments();
       loadPipeline();
-      expInterval = setInterval(loadExperiments, 30000);
-      pipelineInterval = setInterval(loadPipeline, 60000);
+      /* auto-refresh disabled */
+      /* auto-refresh disabled */
     }
     function stopTimers() {
       clearInterval(expInterval);
@@ -963,12 +965,21 @@ const app = createApp({
           close: data.map(d => d.c), type: 'candlestick',
           increasing: {line:{color:'#34d399'}}, decreasing: {line:{color:'#f87171'}},
           name: sym,
+          line: {color: '#60a5fa'},
         };
         Plotly.react(`chart-${market}`, [trace], layout, {responsive:true});
       } catch(e) { if (!silent) console.error('Chart load error:', e); }
     }
 
     // ── Lifecycle ──
+
+    function refreshAll() {
+      loadExperiments();
+      loadPipeline();
+      loadMarketChart('us');
+      loadMarketChart('hk');
+    }
+
     onMounted(async () => {
       try {
         var us = await fetchJSON('/api/market/symbols/us');
@@ -1015,6 +1026,7 @@ const app = createApp({
       fmtTime,
       timeAgo,
       onSelectExperiment,
+      refreshAll,
     };
   },
 });
