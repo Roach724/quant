@@ -517,27 +517,27 @@ body {
         <div class="pipeline-card">
           <h3>🇺🇸 US Market — 5-Minute Bars</h3>
           <div class="pipeline-bar">
-            <span class="label">Last bar timestamp</span>
-            <span>{{ pipeline?.us ? fmtTime(pipeline.us) : '—' }}</span>
+            <span class="label">Status</span>
+            <span :class="['count', pipeline.us_open ? 'online' : 'offline']">
+              {{ pipeline.us_open ? '● OPEN' : '○ CLOSED' }}
+            </span>
           </div>
           <div class="pipeline-bar">
-            <span class="label">Bar count (last 10 min)</span>
-            <span :class="['count', pipelineBarCnt.us > 0 ? 'online' : 'offline']">
-              {{ pipelineBarCnt.us > 0 ? pipelineBarCnt.us : 'STALLED' }}
-            </span>
+            <span class="label">Last bar</span>
+            <span>{{ pipeline?.us ? fmtTime(pipeline.us) : '—' }}</span>
           </div>
         </div>
         <div class="pipeline-card">
           <h3>🇭🇰 HK Market — 5-Minute Bars</h3>
           <div class="pipeline-bar">
-            <span class="label">Last bar timestamp</span>
-            <span>{{ pipeline?.hk ? fmtTime(pipeline.hk) : '—' }}</span>
+            <span class="label">Status</span>
+            <span :class="['count', pipeline.hk_open ? 'online' : 'offline']">
+              {{ pipeline.hk_open ? '● OPEN' : '○ CLOSED' }}
+            </span>
           </div>
           <div class="pipeline-bar">
-            <span class="label">Bar count (last 10 min)</span>
-            <span :class="['count', pipelineBarCnt.hk > 0 ? 'online' : 'offline']">
-              {{ pipelineBarCnt.hk > 0 ? pipelineBarCnt.hk : 'STALLED' }}
-            </span>
+            <span class="label">Last bar</span>
+            <span>{{ pipeline?.hk ? fmtTime(pipeline.hk) : '—' }}</span>
           </div>
         </div>
         <div class="pipeline-card" v-if="pipeline?.ts">
