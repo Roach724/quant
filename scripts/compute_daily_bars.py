@@ -85,7 +85,7 @@ def compute_1d(market: str, date_str: str) -> int:
 
 def main():
     parser = argparse.ArgumentParser(description="Compute daily bars from 5m")
-    parser.add_argument("--market", required=True, choices=["hk"])
+    parser.add_argument("--market", required=True, choices=["hk", "us"])
     parser.add_argument(
         "--date",
         help="Target date (default: today UTC)",
