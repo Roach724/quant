@@ -10,6 +10,13 @@ Env vars:
 
 import logging
 import os
+import sys
+from pathlib import Path
+
+# Add project root for common.logging_util import
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 from datetime import datetime, timezone, timedelta
 
 import pandas as pd

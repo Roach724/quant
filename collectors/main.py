@@ -17,6 +17,12 @@ import signal
 import sys
 import threading
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
+
+# Add project root for common.logging_util import
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from adapters.alpaca_adapter import AlpacaUSAdapter
 from adapters.yfinance_adapter import YFinanceUSAdapter
