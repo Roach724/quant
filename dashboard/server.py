@@ -266,3 +266,11 @@ async def ws_live(websocket: WebSocket):
         await manager.disconnect(websocket)
     except Exception:
         await manager.disconnect(websocket)
+
+def start():
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8090, log_level="info")
+
+if __name__ == "__main__":
+    start()
+
