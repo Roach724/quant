@@ -103,6 +103,7 @@ class BarHandler(CurKlineHandlerBase):
         self.buffer = buffer
         self.label = label
         self.bar_count = 0
+        self._seen: set[tuple[str, str]] = set()  # (symbol, timestamp) dedup
 
     def on_recv_rsp(self, rsp_pb):
         ret_code, data = super().on_recv_rsp(rsp_pb)
@@ -110,7 +111,12 @@ class BarHandler(CurKlineHandlerBase):
             logger.warning("[%s] Handler error: %s", self.label, data)
             return ret_code, data
 
+        new_bars = 0
         for _, row in data.iterrows():
+            key = (row.get("code", ""), str(row["time_key"]))
+            if key in self._seen:
+                continue
+            self._seen.add(key)
             self.buffer.append({
                 "symbol": row.get("code", ""),
                 "timestamp": row["time_key"],
@@ -120,7 +126,10 @@ class BarHandler(CurKlineHandlerBase):
                 "close": float(row["close"]),
                 "volume": int(float(row["volume"])),
             })
-        self.bar_count += len(data)
+            new_bars += 1
+        if new_bars < len(data):
+            logger.debug("[%s] Dedup: %d/%d bars skipped", self.label, len(data) - new_bars, len(data))
+        self.bar_count += new_bars
         return ret_code, data
 
 
