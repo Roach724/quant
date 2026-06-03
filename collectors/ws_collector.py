@@ -152,6 +152,7 @@ def main():
 
     current_subscriptions: set[str] = set()
     last_heartbeat = 0.0
+    last_flush = 0.0
     last_market_check = 0.0
     reconnect_backoff = 1
 
@@ -215,8 +216,9 @@ def main():
                     pass
 
         # ── Flush buffer ──
-        if buffer and now_ts - last_heartbeat > FLUSH_INTERVAL_SEC:
+        if buffer and (now_ts - last_flush > FLUSH_INTERVAL_SEC or len(buffer) >= BUFFER_MAX):
             _flush_buffer(buffer, handler.label)
+            last_flush = now_ts
 
         # ── Heartbeat ──
         if now_ts - last_heartbeat > HEARTBEAT_INTERVAL_SEC:
