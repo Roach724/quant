@@ -99,6 +99,13 @@ def _backfill_us(
     total_rows = 0
     failed_symbols = []
 
+    def _prefix_symbols(df):
+        if market == "us" and frequency == "5m":
+            df = df.copy()
+            mask = ~df["symbol"].astype(str).str.startswith("US.")
+            df.loc[mask, "symbol"] = "US." + df.loc[mask, "symbol"].astype(str)
+        return df
+
     for idx, sym in enumerate(symbols):
         sym_rows = 0
 
@@ -110,10 +117,9 @@ def _backfill_us(
                     df = adapter.fetch_bars([sym], chunk_start, chunk_end, frequency=frequency)
                     if df is not None and not df.empty:
                         sym_rows += len(df)
-                        if True:  # always write to BQ
-                            table = f"{market}_bars_{frequency}"; write_bars_to_bq(df, table_id=table)
-                        elif local_dir:
+                        if local_dir:
                             _write_local(df, local_dir, market, frequency)
+                        write_bars_to_bq(_prefix_symbols(df), table_id=f"{market}_bars_{frequency}")
                     chunk_start = chunk_end
                     if chunk_start < end_dt:
                         time.sleep(0.1)  # small pause between chunks for same symbol
@@ -164,6 +170,13 @@ def _backfill_hk(
     total_rows = 0
     failed_symbols = []
 
+    def _prefix_symbols(df):
+        if market == "us" and frequency == "5m":
+            df = df.copy()
+            mask = ~df["symbol"].astype(str).str.startswith("US.")
+            df.loc[mask, "symbol"] = "US." + df.loc[mask, "symbol"].astype(str)
+        return df
+
     for idx, sym in enumerate(symbols):
         yf_sym = f"{sym}.HK"
         sym_rows = 0
@@ -176,10 +189,9 @@ def _backfill_hk(
                     df = adapter.fetch_bars([yf_sym], chunk_start, chunk_end, frequency=frequency)
                     if df is not None and not df.empty:
                         sym_rows += len(df)
-                        if True:  # always write to BQ
-                            table = f"{market}_bars_{frequency}"; write_bars_to_bq(df, table_id=table)
-                        elif local_dir:
+                        if local_dir:
                             _write_local(df, local_dir, market, frequency)
+                        write_bars_to_bq(_prefix_symbols(df), table_id=f"{market}_bars_{frequency}")
                     chunk_start = chunk_end
                     if chunk_start < end_dt:
                         time.sleep(0.1)  # small pause between chunks for same symbol
@@ -239,13 +251,7 @@ def backfill(
     logger.info("Backfill: %s → %s (%d days, %d symbols, freq=%s, source=%s)",
                 start, end, total_days, len(symbols), frequency, source)
     logger.info("Symbols: %s", symbols[:20] if len(symbols) > 20 else symbols)
-    if True:  # always write to BQ
-        logger.info("Writing to GCS bucket: %s", gcs_bucket)
-    elif local_dir:
-        logger.info("Writing to local dir: %s", local_dir)
-    else:
-        logger.error("Either --gcs-bucket or --local-dir is required")
-        sys.exit(1)
+    logger.info("Writing directly to BigQuery")
 
     # --- HK: per-symbol serial processing with fallback ---
     if source == "yfinancehk":
@@ -327,11 +333,8 @@ def backfill(
             logger.warning("No data returned for %s → %s", chunk_start, chunk_end)
         else:
             total_rows += len(df)
-            if True:  # always write to BQ
-                table = f"{storage_market}_bars_{frequency}"; write_bars_to_bq(df, table_id=table)
-                logger.info("  Wrote %d rows → BQ table %s", len(df), table)
-            elif local_dir:
-                _write_local(df, local_dir, storage_market, frequency)
+            write_bars_to_bq(df, table_id=f"{storage_market}_bars_{frequency}")
+            logger.info("  Wrote %d rows -> BQ table %s", len(df), f"{storage_market}_bars_{frequency}")
 
         chunk_start = chunk_end
         if i < chunks - 1:
