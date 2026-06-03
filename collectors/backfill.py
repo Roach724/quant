@@ -56,7 +56,8 @@ from adapters.akshare_hk_adapter import AkshareHKAdapter
 from adapters.akshare_us_adapter import AkshareUSAdapter
 from adapters.futu_stock_adapter import FutuStockAdapter
 from adapters.crypto_futu_adapter import CryptoFutuAdapter
-from storage import build_gcs_path, dataframe_to_parquet_bytes, write_bars_to_gcs
+from storage import build_gcs_path, dataframe_to_parquet_bytes
+from common.bq_writer import write_bars_to_bq
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -109,8 +110,8 @@ def _backfill_us(
                     df = adapter.fetch_bars([sym], chunk_start, chunk_end, frequency=frequency)
                     if df is not None and not df.empty:
                         sym_rows += len(df)
-                        if gcs_bucket:
-                            write_bars_to_gcs(df, gcs_bucket, market=market, frequency=frequency)
+                        if True:  # always write to BQ
+                            table = f"{market}_bars_{frequency}"; write_bars_to_bq(df, table_id=table)
                         elif local_dir:
                             _write_local(df, local_dir, market, frequency)
                     chunk_start = chunk_end
@@ -175,8 +176,8 @@ def _backfill_hk(
                     df = adapter.fetch_bars([yf_sym], chunk_start, chunk_end, frequency=frequency)
                     if df is not None and not df.empty:
                         sym_rows += len(df)
-                        if gcs_bucket:
-                            write_bars_to_gcs(df, gcs_bucket, market=market, frequency=frequency)
+                        if True:  # always write to BQ
+                            table = f"{market}_bars_{frequency}"; write_bars_to_bq(df, table_id=table)
                         elif local_dir:
                             _write_local(df, local_dir, market, frequency)
                     chunk_start = chunk_end
@@ -238,7 +239,7 @@ def backfill(
     logger.info("Backfill: %s → %s (%d days, %d symbols, freq=%s, source=%s)",
                 start, end, total_days, len(symbols), frequency, source)
     logger.info("Symbols: %s", symbols[:20] if len(symbols) > 20 else symbols)
-    if gcs_bucket:
+    if True:  # always write to BQ
         logger.info("Writing to GCS bucket: %s", gcs_bucket)
     elif local_dir:
         logger.info("Writing to local dir: %s", local_dir)
@@ -326,9 +327,9 @@ def backfill(
             logger.warning("No data returned for %s → %s", chunk_start, chunk_end)
         else:
             total_rows += len(df)
-            if gcs_bucket:
-                paths = write_bars_to_gcs(df, gcs_bucket, market=storage_market, frequency=frequency)
-                logger.info("  Wrote %d rows → %d GCS objects", len(df), len(paths))
+            if True:  # always write to BQ
+                table = f"{storage_market}_bars_{frequency}"; write_bars_to_bq(df, table_id=table)
+                logger.info("  Wrote %d rows → BQ table %s", len(df), table)
             elif local_dir:
                 _write_local(df, local_dir, storage_market, frequency)
 
