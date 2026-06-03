@@ -1,136 +1,874 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Quant Trading Dashboard</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quant Dashboard</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
-.header{background:#1e293b;padding:16px 24px;border-bottom:1px solid #334155;display:flex;justify-content:space-between;align-items:center}
-.header h1{font-size:18px;color:#f1f5f9}.header .status{font-size:12px;padding:4px 10px;border-radius:12px}
-.status.live{background:#065f46;color:#6ee7b7}.status.off{background:#7f1d1d;color:#fca5a5}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px;max-width:1400px;margin:0 auto}
-.card{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:16px}
-.card h2{font-size:14px;color:#94a3b8;margin-bottom:12px;text-transform:uppercase;letter-spacing:1px}
-.card.full{grid-column:1/-1}
-.metrics{display:flex;gap:24px;flex-wrap:wrap}
-.metric{text-align:center;min-width:100px}
-.metric .val{font-size:24px;font-weight:700;color:#f1f5f9}
-.metric .lbl{font-size:11px;color:#64748b;margin-top:2px}
-.metric .up{color:#34d399}.metric .down{color:#f87171}
-table{width:100%;border-collapse:collapse;font-size:13px}
-td,th{padding:8px 10px;text-align:right;border-bottom:1px solid #1e293b}
-th{color:#64748b;font-weight:500;text-transform:uppercase;font-size:11px}
-tr:hover{background:#1e293b}
-.alert-item{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #1e293b;font-size:12px}
-.alert-badge{padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;min-width:60px;text-align:center}
-.alert-badge.critical{background:#7f1d1d;color:#fca5a5}
-.alert-badge.warning{background:#713f12;color:#fde047}
-.alert-badge.info{background:#1e3a5f;color:#93c5fd}
-.risk-bar{height:8px;border-radius:4px;margin:8px 0;background:#334155;overflow:hidden}
-.risk-bar .fill{height:100%;border-radius:4px;transition:width .3s}
-.fill.green{background:#34d399}.fill.yellow{background:#fbbf24}.fill.red{background:#f87171}
+:root {
+  --bg-primary: #0f172a;
+  --bg-card: #1e293b;
+  --bg-hover: #273549;
+  --border: #334155;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --green: #34d399;
+  --green-dk: #065f46;
+  --green-text: #6ee7b7;
+  --red: #f87171;
+  --red-dk: #7f1d1d;
+  --red-text: #fca5a5;
+  --yellow: #fbbf24;
+  --yellow-dk: #713f12;
+  --blue: #60a5fa;
+  --blue-dk: #1e3a5f;
+  --radius: 8px;
+  --radius-sm: 4px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  line-height: 1.5;
+}
+
+/* ── Header ── */
+.header {
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.header h1 { font-size: 17px; font-weight: 700; letter-spacing: 0.3px; }
+.header-right { display: flex; align-items: center; gap: 12px; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+.status-text { font-size: 12px; font-weight: 600; }
+.live .status-dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.live .status-text { color: var(--green-text); }
+.off .status-dot { background: var(--red); }
+.off .status-text { color: var(--red-text); }
+
+/* ── Tabs ── */
+.tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--border);
+  background: var(--bg-primary);
+  position: sticky;
+  top: 52px;
+  z-index: 99;
+  padding: 0 24px;
+}
+.tab-btn {
+  padding: 12px 22px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.3px;
+  position: relative;
+  transition: color 0.15s;
+  text-transform: uppercase;
+}
+.tab-btn:hover { color: var(--text-secondary); }
+.tab-btn.active {
+  color: var(--blue);
+}
+.tab-btn.active::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--blue);
+}
+
+/* ── Content Area ── */
+.content {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px 24px;
+}
+
+/* ── Cards ── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.card-header h3 {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+}
+
+/* ── Experiment Cards Grid ── */
+.exp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+.exp-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  transition: border-color 0.15s;
+}
+.exp-card:hover { border-color: var(--blue); }
+
+.exp-card .exp-id {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--blue);
+  margin-bottom: 10px;
+  letter-spacing: 0.3px;
+}
+.exp-card .exp-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+}
+.exp-card .exp-metric-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.exp-card .exp-metric-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.exp-card .exp-pnl.pos { color: var(--green); }
+.exp-card .exp-pnl.neg { color: var(--red); }
+.exp-card .exp-bar {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+  grid-column: 2;
+}
+
+/* ── Pipeline Strip ── */
+.pipeline-strip {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.pipeline-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.pipeline-label { color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.pipeline-value {
+  font-weight: 700;
+  font-size: 14px;
+}
+.pipeline-value.online { color: var(--green); }
+.pipeline-value.offline { color: var(--red); }
+.pipeline-ts {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+/* ── Detail Tab ── */
+.detail-controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.detail-controls select {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 8px 12px;
+  min-width: 280px;
+  cursor: pointer;
+}
+.detail-controls select:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+.detail-metrics {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.detail-metric { text-align: center; }
+.detail-metric .val { font-size: 22px; font-weight: 700; }
+.detail-metric .lbl { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+
+.chart-container {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin-bottom: 16px;
+}
+.chart-container .plotly { border-radius: var(--radius); }
+
+/* ── Trades Table ── */
+.trades-table-wrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.trades-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.trades-table th,
+.trades-table td {
+  padding: 8px 12px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+.trades-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: var(--bg-hover);
+}
+.trades-table td:first-child,
+.trades-table th:first-child { text-align: left; }
+.trades-table tr:hover { background: var(--bg-hover); }
+.trades-table .side-buy { color: var(--green); font-weight: 700; }
+.trades-table .side-sell { color: var(--red); font-weight: 700; }
+
+/* ── Pipeline Tab ── */
+.pipeline-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 16px;
+}
+.pipeline-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+.pipeline-card h3 {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  color: var(--text-primary);
+}
+.pipeline-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.pipeline-bar:last-child { border-bottom: none; }
+.pipeline-bar .label { color: var(--text-muted); }
+.pipeline-bar .count {
+  font-size: 20px;
+  font-weight: 700;
+}
+.pipeline-bar .count.online { color: var(--green); }
+.pipeline-bar .count.offline { color: var(--red); }
+
+/* ── Alerts Tab ── */
+.alerts-placeholder {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-muted);
+}
+.alerts-placeholder .icon { font-size: 40px; margin-bottom: 12px; }
+.alerts-placeholder .msg { font-size: 14px; }
+
+/* ── Loading / Empty ── */
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── Transitions ── */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.15s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 </style>
 </head>
 <body>
-<div class="header">
-  <h1>Trading Dashboard</h1>
-  <div id="status" class="status off">● OFFLINE</div>
+
+<div id="app">
+  <!-- Header -->
+  <div class="header">
+    <h1>📊 Quant Trading Dashboard</h1>
+    <div class="header-right">
+      <span :class="['status-dot', connected ? 'live' : 'off']"></span>
+      <span :class="['status-text', connected ? 'live' : 'off']">
+        {{ connected ? 'LIVE' : 'OFFLINE' }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button
+      v-for="tab in tabs"
+      :key="tab.id"
+      :class="['tab-btn', { active: activeTab === tab.id }]"
+      @click="activeTab = tab.id"
+    >{{ tab.label }}</button>
+  </div>
+
+  <!-- Content -->
+  <div class="content">
+    <!-- ═══════ OVERVIEW TAB ═══════ -->
+    <div v-if="activeTab === 'overview'">
+      <div v-if="loading.experiments" class="empty-state">
+        <span class="spinner"></span> Loading experiments...
+      </div>
+      <div v-else-if="!experiments.length" class="empty-state">
+        No experiment data. Run a backtest with DashboardObserver to populate.
+      </div>
+      <div v-else>
+        <div class="exp-grid">
+          <div class="exp-card" v-for="exp in experiments" :key="exp.exp_id">
+            <div class="exp-id">{{ exp.exp_id }}</div>
+            <div class="exp-metrics">
+              <div>
+                <div class="exp-metric-label">Daily PnL</div>
+                <div :class="['exp-metric-value', 'exp-pnl', exp.daily_pnl >= 0 ? 'pos' : 'neg']">
+                  {{ fmtUSD(exp.daily_pnl) }}
+                </div>
+              </div>
+              <div>
+                <div class="exp-metric-label">Bar</div>
+                <div class="exp-bar">#{{ exp.bar }}</div>
+              </div>
+              <div>
+                <div class="exp-metric-label">Equity</div>
+                <div class="exp-metric-value">{{ fmtUSD(exp.equity, 0) }}</div>
+              </div>
+              <div>
+                <div class="exp-metric-label">Drawdown</div>
+                <div :class="['exp-metric-value', 'exp-pnl', 'neg']">
+                  {{ fmtPct(exp.drawdown) }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pipeline Health Strip -->
+        <div class="pipeline-strip" v-if="pipeline">
+          <div class="pipeline-item">
+            <span class="pipeline-label">US 5m</span>
+            <span :class="['pipeline-value', pipeline.us ? 'online' : 'offline']">
+              {{ pipeline.us ? '● LIVE' : '○ OFFLINE' }}
+            </span>
+          </div>
+          <div class="pipeline-item">
+            <span class="pipeline-label">HK 5m</span>
+            <span :class="['pipeline-value', pipeline.hk ? 'online' : 'offline']">
+              {{ pipeline.hk ? '● LIVE' : '○ OFFLINE' }}
+            </span>
+          </div>
+          <span class="pipeline-ts" v-if="pipeline.ts">
+            Updated {{ timeAgo(pipeline.ts) }}
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ DETAIL TAB ═══════ -->
+    <div v-if="activeTab === 'detail'">
+      <div class="detail-controls">
+        <select v-model="selectedExp" @change="onSelectExperiment">
+          <option value="">— Select experiment —</option>
+          <option v-for="exp in experiments" :key="exp.exp_id" :value="exp.exp_id">
+            {{ exp.exp_id }}
+          </option>
+        </select>
+        <div class="detail-metrics" v-if="latestPoint">
+          <div class="detail-metric">
+            <div class="val" style="color:var(--text-primary)">{{ fmtUSD(latestPoint.equity, 0) }}</div>
+            <div class="lbl">Equity</div>
+          </div>
+          <div class="detail-metric">
+            <div :class="['val', latestPoint.daily_pnl >= 0 ? 'exp-pnl pos' : 'exp-pnl neg']">
+              {{ fmtUSD(latestPoint.daily_pnl) }}
+            </div>
+            <div class="lbl">Daily PnL</div>
+          </div>
+          <div class="detail-metric">
+            <div class="val exp-pnl neg">{{ fmtPct(latestPoint.drawdown) }}</div>
+            <div class="lbl">Drawdown</div>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="!selectedExp" class="empty-state">Select an experiment to view details.</div>
+      <div v-else-if="loading.equity" class="empty-state"><span class="spinner"></span> Loading...</div>
+      <template v-else>
+        <!-- Equity Curve Chart -->
+        <div class="chart-container">
+          <div ref="equityChartRef" class="plotly" style="width:100%;height:380px"></div>
+        </div>
+        <!-- Drawdown Chart -->
+        <div class="chart-container">
+          <div ref="drawdownChartRef" class="plotly" style="width:100%;height:200px"></div>
+        </div>
+
+        <!-- Recent Trades -->
+        <div class="trades-table-wrap">
+          <table class="trades-table">
+            <thead>
+              <tr>
+                <th>Time</th><th>Bar</th><th>Symbol</th><th>Side</th>
+                <th>Qty</th><th>Price</th><th>Commission</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!trades.length">
+                <td colspan="7" class="empty-state">No trades recorded.</td>
+              </tr>
+              <tr v-for="t in trades" :key="t.ts + t.bar + t.symbol">
+                <td>{{ fmtTime(t.ts) }}</td>
+                <td>#{{ t.bar }}</td>
+                <td style="font-weight:600">{{ t.symbol }}</td>
+                <td :class="t.side === 'BUY' ? 'side-buy' : 'side-sell'">{{ t.side }}</td>
+                <td>{{ t.qty }}</td>
+                <td>{{ fmtUSD(t.price, 2) }}</td>
+                <td style="color:var(--text-muted)">{{ fmtUSD(t.commission, 4) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
+
+    <!-- ═══════ PIPELINE TAB ═══════ -->
+    <div v-if="activeTab === 'pipeline'">
+      <div v-if="loading.pipeline" class="empty-state">
+        <span class="spinner"></span> Loading pipeline status...
+      </div>
+      <div v-else class="pipeline-grid">
+        <div class="pipeline-card">
+          <h3>🇺🇸 US Market — 5-Minute Bars</h3>
+          <div class="pipeline-bar">
+            <span class="label">Last bar timestamp</span>
+            <span>{{ pipeline?.us ? fmtTime(pipeline.us) : '—' }}</span>
+          </div>
+          <div class="pipeline-bar">
+            <span class="label">Bar count (last 10 min)</span>
+            <span :class="['count', pipelineBarCnt.us > 0 ? 'online' : 'offline']">
+              {{ pipelineBarCnt.us > 0 ? pipelineBarCnt.us : 'STALLED' }}
+            </span>
+          </div>
+        </div>
+        <div class="pipeline-card">
+          <h3>🇭🇰 HK Market — 5-Minute Bars</h3>
+          <div class="pipeline-bar">
+            <span class="label">Last bar timestamp</span>
+            <span>{{ pipeline?.hk ? fmtTime(pipeline.hk) : '—' }}</span>
+          </div>
+          <div class="pipeline-bar">
+            <span class="label">Bar count (last 10 min)</span>
+            <span :class="['count', pipelineBarCnt.hk > 0 ? 'online' : 'offline']">
+              {{ pipelineBarCnt.hk > 0 ? pipelineBarCnt.hk : 'STALLED' }}
+            </span>
+          </div>
+        </div>
+        <div class="pipeline-card" v-if="pipeline?.ts">
+          <h3>🕐 Pipeline Check</h3>
+          <div class="pipeline-bar">
+            <span class="label">Last checked</span>
+            <span>{{ fmtTime(pipeline.ts) }}</span>
+          </div>
+          <div class="pipeline-bar">
+            <span class="label">Ago</span>
+            <span>{{ timeAgo(pipeline.ts) }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════ ALERTS TAB ═══════ -->
+    <div v-if="activeTab === 'alerts'">
+      <div class="alerts-placeholder">
+        <div class="icon">🔔</div>
+        <div class="msg">No alerts. Monitoring active.</div>
+      </div>
+    </div>
+  </div>
 </div>
-<div class="grid" id="app">
-  <div class="card"><h2>Portfolio</h2>
-    <div class="metrics" id="portfolio"></div>
-  </div>
-  <div class="card"><h2>Risk</h2>
-    <div id="risk"></div>
-  </div>
-  <div class="card full"><h2>Positions</h2>
-    <table id="positions"><thead><tr><th>Symbol</th><th>Qty</th><th>Avg Entry</th><th>Market Value</th><th>Unrealized PnL</th></tr></thead><tbody></tbody></table>
-  </div>
-  <div class="card"><h2>Open Orders</h2>
-    <table id="orders"><thead><tr><th>ID</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Filled</th><th>State</th></tr></thead><tbody></tbody></table>
-  </div>
-  <div class="card"><h2>Alerts</h2>
-    <div id="alerts"></div>
-  </div>
-</div>
+
 <script>
-const API = 'http://localhost:8090';
-async function fetchJSON(path) {
-  try { const r = await fetch(API+path); return r.ok ? await r.json() : null; }
-  catch(e) { return null; }
-}
-function fmt(n, d=0) { return n != null ? Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}) : '-'; }
-function fmtPct(n) { return n != null ? (n*100).toFixed(1)+'%' : '-'; }
-function bar(val, max, colors=['#34d399','#fbbf24','#f87171']) {
-  const pct = Math.min(Math.abs(val)/max*100, 100);
-  const c = pct < 50 ? colors[0] : pct < 80 ? colors[1] : colors[2];
-  return `<div class="risk-bar"><div class="fill ${c==colors[0]?'green':c==colors[1]?'yellow':'red'}" style="width:${pct}%"></div></div>`;
-}
+const { createApp, ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } = Vue;
 
-async function refresh() {
-  const [pf, pos, orders, alerts, risk] = await Promise.all([
-    fetchJSON('/api/portfolio'), fetchJSON('/api/positions'),
-    fetchJSON('/api/orders'), fetchJSON('/api/alerts'), fetchJSON('/api/risk')
-  ]);
+const API = '';  // same origin — served by FastAPI
 
-  // Status
-  const st = document.getElementById('status');
-  st.className = pf ? 'status live' : 'status off';
-  st.innerHTML = pf ? '● LIVE' : '● OFFLINE';
+const app = createApp({
+  setup() {
+    // ── State ──
+    const connected = ref(false);
+    const activeTab = ref('overview');
+    const selectedExp = ref('');
+    const experiments = ref([]);
+    const pipeline = ref(null);
+    const equityData = ref([]);
+    const trades = ref([]);
+    const loading = reactive({
+      experiments: false,
+      equity: false,
+      pipeline: false,
+    });
 
-  // Portfolio
-  if (pf) {
-    document.getElementById('portfolio').innerHTML = `
-      <div class="metric"><div class="val">$${fmt(pf.equity,0)}</div><div class="lbl">Equity</div></div>
-      <div class="metric"><div class="val">$${fmt(pf.cash,0)}</div><div class="lbl">Cash</div></div>
-      <div class="metric"><div class="val">$${fmt(pf.buying_power,0)}</div><div class="lbl">Buying Power</div></div>`;
-  }
+    const tabs = [
+      { id: 'overview', label: 'Overview' },
+      { id: 'detail', label: 'Detail' },
+      { id: 'pipeline', label: 'Pipeline' },
+      { id: 'alerts', label: 'Alerts' },
+    ];
 
-  // Risk
-  if (risk) {
-    document.getElementById('risk').innerHTML = `
-      <div style="font-size:12px;color:#94a3b8">Drawdown ${bar(risk.drawdown_pct||0,0.2)}</div>
-      <div style="font-size:12px;color:#94a3b8">Leverage ${bar(risk.leverage||0,2)}</div>
-      <div style="display:flex;gap:16px;margin-top:8px;font-size:11px">
-        <span style="color:#93c5fd">● ${risk.alerts_info||0} info</span>
-        <span style="color:#fde047">● ${risk.alerts_warning||0} warning</span>
-        <span style="color:#fca5a5">● ${risk.alerts_critical||0} critical</span>
-      </div>`;
-  }
+    // ── Refs for Plotly ──
+    const equityChartRef = ref(null);
+    const drawdownChartRef = ref(null);
 
-  // Positions
-  if (pos && pos.length) {
-    document.querySelector('#positions tbody').innerHTML = pos.map(p => `
-      <tr><td style="font-weight:600">${p.symbol}</td><td>${p.qty}</td><td>$${fmt(p.avg_entry,2)}</td>
-      <td>$${fmt(p.market_value,0)}</td>
-      <td class="${p.unrealized_pnl>=0?'up':'down'}">$${fmt(Math.abs(p.unrealized_pnl),0)}</td></tr>`).join('');
-  }
+    // ── Computed ──
+    const latestPoint = computed(() => {
+      if (!equityData.value.length) return null;
+      const last = equityData.value[equityData.value.length - 1];
+      return last;
+    });
 
-  // Orders
-  if (orders && orders.open.length) {
-    document.querySelector('#orders tbody').innerHTML = orders.open.map(o => `
-      <tr><td>${o.id}</td><td>${o.symbol}</td><td class="${o.side==='buy'?'up':'down'}">${o.side}</td>
-      <td>${o.qty}</td><td>${o.filled_qty}</td><td>${o.state}</td></tr>`).join('');
-  } else {
-    document.querySelector('#orders tbody').innerHTML = '<tr><td colspan="6" style="color:#64748b">No open orders</td></tr>';
-  }
+    const pipelineBarCnt = computed(() => {
+      const now = Date.now();
+      const tenMin = 10 * 60 * 1000;
+      // Estimate bar count: if last timestamp is within 10 min, assume active (~2 bars per 5m = 2)
+      // Simple heuristic: last_ts within 10 min → 1+, else 0
+      const result = { us: 0, hk: 0 };
+      if (pipeline.value?.us) {
+        const t = new Date(pipeline.value.us).getTime();
+        result.us = (now - t) < tenMin ? 2 : 0;
+      }
+      if (pipeline.value?.hk) {
+        const t = new Date(pipeline.value.hk).getTime();
+        result.hk = (now - t) < tenMin ? 2 : 0;
+      }
+      return result;
+    });
 
-  // Alerts
-  if (alerts && alerts.length) {
-    document.getElementById('alerts').innerHTML = alerts.map(a => `
-      <div class="alert-item">
-        <span class="alert-badge ${a.level}">${a.level}</span>
-        <span>${a.message}</span>
-        <span style="color:#64748b;font-size:10px;margin-left:auto">${new Date(a.timestamp).toLocaleTimeString()}</span>
-      </div>`).join('');
-  } else {
-    document.getElementById('alerts').innerHTML = '<div style="color:#64748b;font-size:13px">No alerts</div>';
-  }
-}
+    // ── Formatters ──
+    function fmtUSD(n, d) {
+      d = d === undefined ? 2 : d;
+      if (n == null) return '—';
+      const sign = n < 0 ? '-' : '';
+      return sign + '$' + Math.abs(n).toLocaleString('en-US', {
+        minimumFractionDigits: d, maximumFractionDigits: d,
+      });
+    }
+    function fmtPct(n) {
+      if (n == null) return '—';
+      return (n * 100).toFixed(2) + '%';
+    }
+    function fmtTime(iso) {
+      if (!iso) return '—';
+      return new Date(iso).toLocaleTimeString('en-US', { hour12: false });
+    }
+    function timeAgo(iso) {
+      if (!iso) return '—';
+      const diff = Date.now() - new Date(iso).getTime();
+      const sec = Math.floor(diff / 1000);
+      if (sec < 60) return sec + 's ago';
+      const min = Math.floor(sec / 60);
+      if (min < 60) return min + 'm ago';
+      const hr = Math.floor(min / 60);
+      return hr + 'h ago';
+    }
 
-refresh();
-setInterval(refresh, 3000);
+    // ── Plotly dark layout ──
+    function plotlyLayout(title, height) {
+      return {
+        title: { text: title, font: { size: 13, color: '#f1f5f9' } },
+        paper_bgcolor: '#1e293b',
+        plot_bgcolor: '#1e293b',
+        height: height,
+        margin: { l: 60, r: 30, t: 40, b: 40 },
+        font: { color: '#94a3b8', size: 11 },
+        xaxis: {
+          gridcolor: '#334155',
+          zerolinecolor: '#334155',
+          color: '#94a3b8',
+        },
+        yaxis: {
+          gridcolor: '#334155',
+          zerolinecolor: '#334155',
+          color: '#94a3b8',
+          tickformat: '$,.0f',
+        },
+        showlegend: false,
+        dragmode: false,
+      };
+    }
+
+    function drawdownLayout(title, height) {
+      return {
+        title: { text: title, font: { size: 13, color: '#f1f5f9' } },
+        paper_bgcolor: '#1e293b',
+        plot_bgcolor: '#1e293b',
+        height: height,
+        margin: { l: 60, r: 30, t: 40, b: 40 },
+        font: { color: '#94a3b8', size: 11 },
+        xaxis: {
+          gridcolor: '#334155',
+          zerolinecolor: '#334155',
+          color: '#94a3b8',
+        },
+        yaxis: {
+          gridcolor: '#334155',
+          zerolinecolor: '#334155',
+          color: '#94a3b8',
+          tickformat: '.1%',
+        },
+        showlegend: false,
+        dragmode: false,
+      };
+    }
+
+    function renderEquityChart() {
+      const el = equityChartRef.value;
+      if (!el || !equityData.value.length) return;
+      const bars = equityData.value.map(d => d.bar);
+      const equity = equityData.value.map(d => d.equity);
+      const trace = {
+        x: bars,
+        y: equity,
+        type: 'scatter',
+        mode: 'lines',
+        line: { color: '#60a5fa', width: 2 },
+        fill: 'tozeroy',
+        fillcolor: 'rgba(96, 165, 250, 0.08)',
+      };
+      Plotly.newPlot(el, [trace], plotlyLayout('Equity Curve', 380), {
+        responsive: true,
+        displayModeBar: false,
+      });
+    }
+
+    function renderDrawdownChart() {
+      const el = drawdownChartRef.value;
+      if (!el || !equityData.value.length) return;
+      const bars = equityData.value.map(d => d.bar);
+      const dd = equityData.value.map(d => (d.drawdown || 0) * 100); // pct
+      const trace = {
+        x: bars,
+        y: dd,
+        type: 'scatter',
+        mode: 'lines',
+        line: { color: '#f87171', width: 1 },
+        fill: 'tozeroy',
+        fillcolor: 'rgba(248, 113, 113, 0.15)',
+      };
+      Plotly.newPlot(el, [trace], drawdownLayout('Drawdown %', 200), {
+        responsive: true,
+        displayModeBar: false,
+      });
+    }
+
+    // ── API calls ──
+    async function fetchJSON(path) {
+      try {
+        const r = await fetch(API + path);
+        if (!r.ok) throw new Error(r.status);
+        return await r.json();
+      } catch (e) {
+        console.warn('fetch error', path, e);
+        return null;
+      }
+    }
+
+    async function loadExperiments() {
+      loading.experiments = true;
+      const data = await fetchJSON('/api/experiments');
+      if (data) {
+        experiments.value = data;
+        connected.value = true;
+      } else {
+        connected.value = false;
+      }
+      loading.experiments = false;
+    }
+
+    async function loadPipeline() {
+      loading.pipeline = true;
+      const data = await fetchJSON('/api/pipeline');
+      if (data) pipeline.value = data;
+      loading.pipeline = false;
+    }
+
+    async function loadEquity(expId) {
+      if (!expId) return;
+      loading.equity = true;
+      equityData.value = [];
+      trades.value = [];
+      const data = await fetchJSON('/api/equity/' + expId);
+      if (data) equityData.value = data;
+      loading.equity = false;
+      await nextTick();
+      renderEquityChart();
+      renderDrawdownChart();
+    }
+
+    async function loadTrades(expId) {
+      if (!expId) return;
+      const data = await fetchJSON('/api/trades/' + expId + '?limit=50');
+      if (data) trades.value = data;
+    }
+
+    function onSelectExperiment() {
+      const expId = selectedExp.value;
+      loadEquity(expId);
+      loadTrades(expId);
+    }
+
+    // ── WebSocket ──
+    let ws = null;
+    function connectWS() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = protocol + '//' + location.host + '/ws/live';
+      ws = new WebSocket(url);
+      ws.onopen = () => {
+        connected.value = true;
+        console.log('WS connected');
+      };
+      ws.onclose = () => {
+        connected.value = false;
+        // Reconnect after 5s
+        setTimeout(connectWS, 5000);
+      };
+      ws.onerror = () => {
+        connected.value = false;
+      };
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          console.log('WS message:', msg.type, msg);
+          // If we get an update broadcast, refresh relevant data
+          if (msg.type === 'equity_update') loadExperiments();
+          if (msg.type === 'pipeline_update') loadPipeline();
+        } catch (e) {
+          /* ignore */
+        }
+      };
+    }
+
+    // ── Intervals ──
+    let expInterval, pipelineInterval;
+    function startTimers() {
+      loadExperiments();
+      loadPipeline();
+      expInterval = setInterval(loadExperiments, 30000);
+      pipelineInterval = setInterval(loadPipeline, 60000);
+    }
+    function stopTimers() {
+      clearInterval(expInterval);
+      clearInterval(pipelineInterval);
+      if (ws) { ws.close(); ws = null; }
+    }
+
+    // ── Lifecycle ──
+    onMounted(() => {
+      connectWS();
+      startTimers();
+    });
+    onUnmounted(() => {
+      stopTimers();
+    });
+
+    // ── Watch activeTab to load pipeline when switching ──
+    watch(activeTab, (tab) => {
+      if (tab === 'pipeline') loadPipeline();
+    });
+
+    return {
+      connected,
+      activeTab,
+      selectedExp,
+      experiments,
+      pipeline,
+      equityData,
+      trades,
+      loading,
+      tabs,
+      equityChartRef,
+      drawdownChartRef,
+      latestPoint,
+      pipelineBarCnt,
+      fmtUSD,
+      fmtPct,
+      fmtTime,
+      timeAgo,
+      onSelectExperiment,
+    };
+  },
+});
+
+app.mount('#app');
 </script>
 </body>
 </html>
