@@ -62,9 +62,9 @@ class LiveRunner:
         Path to YAML config file (see live/config.py for schema).
     """
 
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, config: dict | None = None):
         self.config_path = config_path
-        self.config = load_config(config_path)
+        self.config = config if config is not None else load_config(config_path)
 
         self.broker = None
         self.strategy = None
