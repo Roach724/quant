@@ -392,6 +392,7 @@ body {
           </label>
           <span style="color:var(--text-muted);font-size:12px;">{{ filteredExperiments.length }}/{{ experiments.length }}</span>
         </div>
+        <h3 style="text-align:left;margin-bottom:12px;">🧪 Experiments</h3>
         <div class="exp-grid">
           <div class="exp-card" v-for="exp in filteredExperiments" :key="exp.exp_id" :class="{sleeping: exp.sleeping}">
             <div class="exp-id">
@@ -445,18 +446,18 @@ body {
 
         <!-- Market Charts -->
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
-          <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-              <h3>🇺🇸 US Market</h3>
+          <div class="card" style="margin-top:24px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+              <h3 style="text-align:left;">📈 US 5m Candlestick</h3>
               <select v-model="usChartSymbol" @change="loadMarketChart('us')" style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;">
                 <option v-for="s in usSymbols" :value="s">{{ s }}</option>
               </select>
             </div>
             <div id="chart-us" style="height:350px;"></div>
           </div>
-          <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-              <h3>🇭🇰 HK Market</h3>
+          <div class="card" style="margin-top:24px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+              <h3 style="text-align:left;">📈 HK 5m Candlestick</h3>
               <select v-model="hkChartSymbol" @change="loadMarketChart('hk')" style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;">
                 <option v-for="s in hkSymbols" :value="s">{{ s }}</option>
               </select>
