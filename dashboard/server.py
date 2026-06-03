@@ -330,3 +330,95 @@ async def experiments_meta():
             pass
 
     return result
+
+
+@app.get("/api/market/{market}/{symbol}")
+async def market_bars(market: str, symbol: str, limit: int = 78):
+    """Return today's 5m OHLCV bars for a symbol."""
+    client = _get_bq()
+    table = _table(f"{market}_bars_5m")
+    full_symbol = f"{'US' if market == 'us' else 'HK'}.{symbol}"
+    query = f"""
+        SELECT timestamp, open, high, low, close, volume
+        FROM `{table}`
+        WHERE symbol = '{full_symbol}'
+          AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+        ORDER BY timestamp
+        LIMIT {limit}
+    """
+    rows = client.query(query).result()
+    return [{"ts": _serialize(r.timestamp), "o": r.open, "h": r.high,
+             "l": r.low, "c": r.close, "v": r.volume} for r in rows]
+
+
+@app.get("/api/market/symbols/{market}")
+async def market_symbols(market: str):
+    """Return symbol list for a market from symbols.yaml."""
+    import yaml
+    from pathlib import Path
+    config_path = Path("config/symbols.yaml")
+    if not config_path.exists():
+        config_path = Path("/opt/quant-dev/config/symbols.yaml")
+    cfg = yaml.safe_load(config_path.read_text())
+    syms = cfg.get("markets", {}).get(market, {}).get("symbols", [])
+    prefix = f"{'US' if market == 'us' else 'HK'}."
+    return [s.replace(prefix, "") for s in syms if s.startswith(prefix)]
+
+
+@app.get("/api/experiments/{exp_id}/positions")
+async def experiment_positions(exp_id: str):
+    """Compute current positions from trades for an experiment."""
+    client = _get_bq()
+    trades_q = f"""
+        SELECT symbol, side, SUM(qty) as total_qty,
+               SUM(qty * price) / SUM(qty) as avg_price
+        FROM {_table("experiment_trades")}
+        WHERE exp_id = '{exp_id}'
+        GROUP BY symbol, side
+    """
+    rows = list(client.query(trades_q).result())
+    positions = {}
+    for r in rows:
+        sym = r.symbol
+        qty = float(r.total_qty)
+        if r.side == 'buy':
+            positions[sym] = positions.get(sym, {'qty': 0, 'cost': 0})
+            positions[sym]['qty'] += qty
+            positions[sym]['cost'] += qty * float(r.avg_price)
+        else:
+            if sym in positions:
+                positions[sym]['qty'] -= qty
+                if positions[sym]['qty'] <= 0:
+                    del positions[sym]
+
+    if not positions:
+        return []
+
+    # Get current prices from latest bar
+    result = []
+    for sym, pos in positions.items():
+        if pos['qty'] <= 0:
+            continue
+        avg_cost = pos['cost'] / pos['qty']
+        us_prefix = sym.startswith('US.')
+        market = 'us' if us_prefix else 'hk'
+        bare = sym[3:] if us_prefix else sym
+        table = _table(f"{market}_bars_5m")
+        price_q = f"""
+            SELECT close FROM `{table}`
+            WHERE symbol = '{sym}'
+            ORDER BY timestamp DESC LIMIT 1
+        """
+        price_rows = list(client.query(price_q).result())
+        current_price = float(price_rows[0].close) if price_rows else avg_cost
+        pnl = (current_price - avg_cost) * pos['qty']
+        pnl_pct = (current_price - avg_cost) / avg_cost * 100 if avg_cost > 0 else 0
+        result.append({
+            "symbol": bare,
+            "qty": round(pos['qty'], 2),
+            "avg_cost": round(avg_cost, 2),
+            "current_price": round(current_price, 2),
+            "pnl": round(pnl, 2),
+            "pnl_pct": round(pnl_pct, 2),
+        })
+    return result

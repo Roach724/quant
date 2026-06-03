@@ -420,6 +420,14 @@ body {
                 </div>
               </div>
             </div>
+            <!-- Positions -->
+            <div v-if="exp.positions && exp.positions.length" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
+              <div v-for="p in exp.positions.slice(0,3)" :key="p.symbol" style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);">
+                <span>{{ p.symbol }}</span>
+                <span :style="{color: p.pnl >= 0 ? 'var(--green)' : 'var(--red)'}">{{ fmtUSD(p.pnl) }} ({{ fmtPct(p.pnl_pct/100) }})</span>
+              </div>
+              <div v-if="exp.positions.length > 3" style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:4px;">+{{ exp.positions.length - 3 }} more</div>
+            </div>
           </div>
         </div>
 
@@ -440,6 +448,28 @@ body {
           <span class="pipeline-ts" v-if="pipeline.ts">
             Updated {{ timeAgo(pipeline.ts) }}
           </span>
+        </div>
+
+        <!-- Market Charts -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <h3>🇺🇸 US Market</h3>
+              <select v-model="usChartSymbol" @change="loadMarketChart('us')" style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;">
+                <option v-for="s in usSymbols" :value="s">{{ s }}</option>
+              </select>
+            </div>
+            <div id="chart-us" style="height:350px;"></div>
+          </div>
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <h3>🇭🇰 HK Market</h3>
+              <select v-model="hkChartSymbol" @change="loadMarketChart('hk')" style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;">
+                <option v-for="s in hkSymbols" :value="s">{{ s }}</option>
+              </select>
+            </div>
+            <div id="chart-hk" style="height:350px;"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -580,6 +610,17 @@ const app = createApp({
     const selectedExp = ref('');
     const experiments = ref([]);
     const showActiveOnly = ref(true);
+
+    // ── Market Charts ──
+    const usChartSymbol = ref('AAPL');
+    const hkChartSymbol = ref('00700');
+    const usSymbols = ref(['AAPL']);
+    const hkSymbols = ref(['00700']);
+    const chartTheme = {
+      paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
+      font:{color:'#e2e8f0'}, margin:{t:10,l:50,r:10,b:30},
+      xaxis:{gridcolor:'#334155'}, yaxis:{gridcolor:'#334155'}
+    };
     const filteredExperiments = computed(() => {
       if (!showActiveOnly.value) return experiments.value;
       const now = Date.now();
@@ -600,7 +641,7 @@ const app = createApp({
 
     const tabs = [
       { id: 'overview', label: 'Overview' },
-      { id: 'detail', label: 'Detail' },
+      { id: 'detail', label: 'Live Run' },
       { id: 'pipeline', label: 'Pipeline' },
       { id: 'alerts', label: 'Alerts' },
     ];
@@ -783,6 +824,14 @@ const app = createApp({
       }
       connected.value = !!(bqData || meta);
       loading.experiments = false;
+      // Load positions for non-sleeping experiments
+      experiments.value.forEach((exp, i) => {
+        if (!exp.sleeping) {
+          fetchJSON(`/api/experiments/${exp.exp_id}/positions`).then(pos => {
+            if (pos) experiments.value[i] = { ...experiments.value[i], positions: pos };
+          });
+        }
+      });
     }
 
     async function loadPipeline() {
@@ -862,6 +911,25 @@ const app = createApp({
       if (ws) { ws.close(); ws = null; }
     }
 
+
+    async function loadMarketChart(market, silent) {
+      const sym = market === 'us' ? usChartSymbol.value : hkChartSymbol.value;
+      if (!sym) return;
+      try {
+        const data = await fetchJSON(\`/api/market/\${market}/\${sym}\`);
+        if (!data || !data.length) return;
+        const layout = { ...chartTheme, title: sym };
+        const trace = {
+          x: data.map(d => d.ts), open: data.map(d => d.o),
+          high: data.map(d => d.h), low: data.map(d => d.l),
+          close: data.map(d => d.c), type: 'candlestick',
+          increasing: {line:{color:'#34d399'}}, decreasing: {line:{color:'#f87171'}},
+          name: sym,
+        };
+        Plotly.react(\`chart-\${market}\`, [trace], layout, {responsive:true});
+      } catch(e) { if (!silent) console.error('Chart load error:', e); }
+    }
+
     // ── Lifecycle ──
     onMounted(() => {
       connectWS();
@@ -883,6 +951,8 @@ const app = createApp({
       experiments,
       showActiveOnly,
       filteredExperiments,
+      usChartSymbol, hkChartSymbol, usSymbols, hkSymbols,
+      loadMarketChart, chartTheme,
       pipeline,
       equityData,
       trades,
