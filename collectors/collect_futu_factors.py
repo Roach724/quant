@@ -67,9 +67,9 @@ def collect_table(table_name: str):  # type: ignore[no-untyped-def]
     logger.info(f"Collected {len(df)} rows for {table_name}")
 
     if not df.empty:
-        source = table_name.split("_", 1)[1]
-        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
-        collector.save_to_gcs(df, source, date_str)
+        from common.bq_writer import write_rows_to_bq
+        n = write_rows_to_bq(df, table_name=table_name)
+        logger.info(f"Wrote {n} rows to BQ table {table_name}")
 
     return df
 
