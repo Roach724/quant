@@ -355,7 +355,10 @@ body {
 <div id="app">
   <!-- Header -->
   <div class="header">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
     <h1>📊 Quant Trading Dashboard</h1>
+    <button @click="refreshAll" style="background:var(--blue);color:#fff;border:none;border-radius:6px;padding:8px 20px;cursor:pointer;font-size:14px;font-weight:600;">🔄 Refresh</button>
+  </div>
     <div class="header-right">
       <span :class="['status-dot', connected ? 'live' : 'off']"></span>
       <span :class="['status-text', connected ? 'live' : 'off']">
@@ -959,15 +962,20 @@ const app = createApp({
         const data = await fetchJSON(`/api/market/${market}/${sym}`);
         if (!data || !data.length) return;
         const layout = { ...chartTheme, title: sym };
-        const trace = {
+        const candle = {
           x: data.map(d => d.ts), open: data.map(d => d.o),
           high: data.map(d => d.h), low: data.map(d => d.l),
           close: data.map(d => d.c), type: 'candlestick',
           increasing: {line:{color:'#34d399'}}, decreasing: {line:{color:'#f87171'}},
           name: sym,
-          line: {color: '#60a5fa'},
         };
-        Plotly.react(`chart-${market}`, [trace], layout, {responsive:true});
+        const line = {
+          x: data.map(d => d.ts), y: data.map(d => d.c),
+          type: 'scatter', mode: 'lines',
+          line: {color: '#60a5fa', width: 1.5},
+          name: sym + ' close',
+        };
+        Plotly.react(`chart-${market}`, [candle, line], layout, {responsive:true});
       } catch(e) { if (!silent) console.error('Chart load error:', e); }
     }
 
