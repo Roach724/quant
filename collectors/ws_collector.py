@@ -121,6 +121,7 @@ class BarHandler(CurKlineHandlerBase):
         self.label = label
         self.bar_count = 0
         self._latest: dict[tuple[str, str], dict] = {}  # (symbol, timestamp) → bar
+        self._already_flushed: set[tuple[str, str]] = set()  # keys already written to BQ
 
     def on_recv_rsp(self, rsp_pb):
         ret_code, data = super().on_recv_rsp(rsp_pb)
@@ -143,19 +144,36 @@ class BarHandler(CurKlineHandlerBase):
         return ret_code, data
 
     def drain_to_buffer(self) -> int:
-        """Atomically swap out _latest dict and move bars to the shared buffer.
+        """Drain completed bars (not the current per-symbol bar) to the buffer.
 
-        Thread-safe: creates a new _latest dict so background callbacks can
-        continue writing without losing data during flush.
+        Only drains bars whose timestamp is NOT the latest per symbol.
+        The latest bar per symbol is kept in _latest until a newer timestamp
+        arrives, ensuring we capture the most complete OHLCV.
+
+        Thread-safe: dict operations are atomic under the GIL.
 
         Returns number of bars moved.
         """
-        old = self._latest
-        self._latest = {}
-        bars = list(old.values())
-        if bars:
-            self.buffer.extend(bars)
-        return len(bars)
+        if not self._latest:
+            return 0
+
+        # Find latest timestamp per symbol
+        latest_ts: dict[str, str] = {}
+        for (sym, ts) in self._latest:
+            if sym not in latest_ts or ts > latest_ts[sym]:
+                latest_ts[sym] = ts
+
+        # Drain completed bars (not latest) that haven't been flushed yet
+        new_bars: list[dict] = []
+        for (sym, ts), bar in list(self._latest.items()):
+            if ts != latest_ts.get(sym):
+                if (sym, ts) not in self._already_flushed:
+                    new_bars.append(bar)
+                    self._already_flushed.add((sym, ts))
+
+        if new_bars:
+            self.buffer.extend(new_bars)
+        return len(new_bars)
 
 
 # ── Main loop ──
