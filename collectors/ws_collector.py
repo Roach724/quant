@@ -47,6 +47,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ws_collector")
 
+# ── JSON file logging → /var/log/quant/prod/collector/ ──
+try:
+    from common.logging_util import QuantJsonFormatter, _ContextFilter
+
+    _json_log = "/var/log/quant/prod/collector/ws_collector.log"
+    _fh = logging.FileHandler(_json_log)
+    _fh.setFormatter(QuantJsonFormatter())
+    _fh.addFilter(_ContextFilter(env="prod", module="collector"))
+    logger.addHandler(_fh)
+    # Also add to root so child loggers get JSON output
+    logging.getLogger().addHandler(_fh)
+except Exception:
+    logger.warning("Failed to set up JSON file logging (non-fatal)", exc_info=True)
+
 # ── Config from env ──
 GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
 OPEND_HOST = os.environ.get("OPEND_HOST", "127.0.0.1")
