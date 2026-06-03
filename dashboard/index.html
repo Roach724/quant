@@ -420,14 +420,7 @@ body {
                 </div>
               </div>
             </div>
-            <!-- Positions -->
-            <div v-if="exp.positions && exp.positions.length" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;">
-              <div v-for="p in exp.positions.slice(0,3)" :key="p.symbol" style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-secondary);">
-                <span>{{ p.symbol }}</span>
-                <span :style="{color: p.pnl >= 0 ? 'var(--green)' : 'var(--red)'}">{{ fmtUSD(p.pnl) }} ({{ fmtPct(p.pnl_pct/100) }})</span>
-              </div>
-              <div v-if="exp.positions.length > 3" style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:4px;">+{{ exp.positions.length - 3 }} more</div>
-            </div>
+
           </div>
         </div>
 
@@ -511,6 +504,34 @@ body {
         <!-- Drawdown Chart -->
         <div class="chart-container">
           <div ref="drawdownChartRef" class="plotly" style="width:100%;height:200px"></div>
+        </div>
+
+        <!-- Current Positions -->
+        <div class="trades-table-wrap">
+          <table class="trades-table">
+            <thead>
+              <tr>
+                <th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Current</th>
+                <th>PnL</th><th>PnL %</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!positions || !positions.length">
+                <td colspan="6" class="empty-state">No open positions.</td>
+              </tr>
+              <tr v-for="p in paginatedPositions" :key="p.symbol">
+                <td style="font-weight:600">{{ p.symbol }}</td>
+                <td>{{ p.qty }}</td>
+                <td>{{ fmtUSD(p.avg_cost, 2) }}</td>
+                <td>{{ fmtUSD(p.current_price, 2) }}</td>
+                <td :style="{color: p.pnl >= 0 ? 'var(--green)' : 'var(--red)'}">{{ fmtUSD(p.pnl, 2) }}</td>
+                <td :style="{color: p.pnl_pct >= 0 ? 'var(--green)' : 'var(--red)'}">{{ fmtPct(p.pnl_pct/100) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="positions && positions.length > pageSize" style="display:flex;justify-content:center;gap:8px;margin-top:12px;">
+            <button v-for="p in totalPages" :key="p" @click="posPage = p" :style="{background:p===posPage?'var(--blue)':'var(--bg-card)',color:'var(--text)',border:'1px solid var(--border)',borderRadius:'4px',padding:'4px 12px',cursor:'pointer'}">{{ p }}</button>
+          </div>
         </div>
 
         <!-- Recent Trades -->
@@ -633,6 +654,14 @@ const app = createApp({
     const pipeline = ref(null);
     const equityData = ref([]);
     const trades = ref([]);
+    const positions = ref([]);
+    const posPage = ref(1);
+    const pageSize = 10;
+    const totalPages = computed(() => Math.ceil((positions.value?.length || 0) / pageSize));
+    const paginatedPositions = computed(() => {
+      const start = (posPage.value - 1) * pageSize;
+      return (positions.value || []).slice(start, start + pageSize);
+    });
     const loading = reactive({
       experiments: false,
       equity: false,
@@ -641,7 +670,7 @@ const app = createApp({
 
     const tabs = [
       { id: 'overview', label: 'Overview' },
-      { id: 'detail', label: 'Live Run' },
+      { id: 'detail', label: 'Live Experiment' },
       { id: 'pipeline', label: 'Pipeline' },
       { id: 'alerts', label: 'Alerts' },
     ];
@@ -864,6 +893,14 @@ const app = createApp({
       const expId = selectedExp.value;
       loadEquity(expId);
       loadTrades(expId);
+      loadPositions(expId);
+    }
+
+    async function loadPositions(expId) {
+      positions.value = [];
+      posPage.value = 1;
+      const data = await fetchJSON(`/api/experiments/${expId}/positions`);
+      if (data) positions.value = data;
     }
 
     // ── WebSocket ──
@@ -956,6 +993,7 @@ const app = createApp({
       pipeline,
       equityData,
       trades,
+      positions, posPage, pageSize, totalPages, paginatedPositions,
       loading,
       tabs,
       equityChartRef,
