@@ -357,14 +357,12 @@ body {
   <div class="header">
     <div style="display:flex;justify-content:space-between;align-items:center;">
     <h1>📊 Quant Trading Dashboard</h1>
-    <button @click="refreshAll" style="background:var(--blue);color:#fff;border:none;border-radius:6px;padding:8px 20px;cursor:pointer;font-size:14px;font-weight:600;">🔄 Refresh</button>
-  </div>
-    <div class="header-right">
+    <div style="display:flex;align-items:center;gap:16px;">
+      <button @click="refreshAll" style="background:var(--blue);color:#fff;border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;font-weight:600;">🔄 Refresh</button>
       <span :class="['status-dot', connected ? 'live' : 'off']"></span>
-      <span :class="['status-text', connected ? 'live' : 'off']">
-        {{ connected ? 'LIVE' : 'OFFLINE' }}
-      </span>
+      <span :class="['status-text', connected ? 'live' : 'off']">{{ connected ? 'LIVE' : 'OFFLINE' }}</span>
     </div>
+  </div>
   </div>
 
   <!-- Tabs -->
