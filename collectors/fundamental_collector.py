@@ -81,17 +81,17 @@ def main():
             data = adapter.fetch_all()
             log.info("  %s: got data for %d symbols", source, len(data))
             if data:
-                _write_to_gcs(data, source, args.gcs_bucket)
+                _write_to_bq(data, source)
         finally:
             adapter.close()
 
 
-def _write_to_gcs(data: dict, source: str, bucket_name: str):
-    """Write F10 data to GCS Parquet. Market derived from symbol prefix."""
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    now = datetime.now(timezone.utc)
-    paths = []
+def _write_to_bq(data: dict[str, pd.DataFrame], source: str):
+    """Write F10 data directly to BigQuery. Market detected from symbol prefix."""
+    from common.bq_writer import write_rows_to_bq
+    import pandas as pd
+
+    dfs = []
     us_count = hk_count = 0
     for sym, df in data.items():
         if df.empty:
@@ -101,15 +101,18 @@ def _write_to_gcs(data: dict, source: str, bucket_name: str):
             hk_count += 1
         else:
             us_count += 1
-        path = _build_f10_gcs_path(market, source, sym, now)
-        blob = bucket.blob(path)
-        blob.upload_from_string(
-            _df_to_parquet_bytes(df),
-            content_type="application/octet-stream",
-        )
-        paths.append(f"gs://{bucket_name}/{path}")
-    log.info("  Wrote %d files (%d US + %d HK) to gs://%s/raw/{us,hk}/f10/%s/",
-             len(paths), us_count, hk_count, bucket_name, source)
+        df = df.copy()
+        df["market"] = df.get("market", market)
+        dfs.append(df)
+
+    if not dfs:
+        log.info("  No data to write for %s", source)
+        return
+
+    combined = pd.concat(dfs, ignore_index=True)
+    table_name = f"us_{source}"
+    n = write_rows_to_bq(combined, table_name=table_name)
+    log.info("  Wrote %d rows (%d US + %d HK) to BQ table %s", n, us_count, hk_count, table_name)
 
 
 if __name__ == "__main__":

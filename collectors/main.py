@@ -183,9 +183,11 @@ def main():
             logger.warning("No data returned for %d symbols", len(symbols))
             return
 
+        from common.bq_writer import write_bars_to_bq
         market_dir = os.environ.get("MARKET", adapter.market.lower())
-        paths = write_bars_to_gcs(df, bucket, market=market_dir, frequency=frequency)
-        logger.info("Wrote %d rows to %d GCS paths", len(df), len(paths))
+        table = f"{market_dir}_bars_{frequency}"
+        n = write_bars_to_bq(df, table_id=table)
+        logger.info("Wrote %d rows to BQ table %s", n, table)
     except Exception:
         logger.exception("Collection failed")
         sys.exit(1)

@@ -5,3 +5,4 @@ yfinance>=0.2.50
 alpaca-py>=0.34.0
 ccxt>=4.4
 futu-api
+google-cloud-bigquery-storage>=2.0.0

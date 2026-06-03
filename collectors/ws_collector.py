@@ -284,11 +284,9 @@ def _flush_buffer(buffer: list, label: str):
         if mkt_df.empty:
             continue
         try:
-            paths = write_bars_to_gcs(
-                mkt_df, GCS_BUCKET, market=market.lower(), frequency="5m",
-            )
-            logger.info("Flushed %d bars (market=%s) → %d GCS paths",
-                        len(mkt_df), market, len(paths))
+            from common.bq_writer import write_bars_to_bq
+            n = write_bars_to_bq(mkt_df, table_id=f"{market.lower()}_bars_5m")
+            logger.info("Flushed %d bars (market=%s) → BQ", n, market)
         except Exception as e:
             logger.error("GCS write failed for %s: %s", market, e)
             return
