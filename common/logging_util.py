@@ -7,7 +7,7 @@ Usage:
                      log_file="/var/log/quant/dev/live/exp1.log")
     log.info("Day 1 starting...")
     # → {"ts":"2026-06-03T04:00:00.123Z","level":"INFO","logger":"live.runner",
-    #    "env":"dev","module":"live","msg":"Day 1 starting..."}
+    #    "quant_env":"dev","quant_module":"live","msg":"Day 1 starting..."}
 """
 
 import json
@@ -27,8 +27,8 @@ class QuantJsonFormatter(logging.Formatter):
             "ts": ts,
             "level": record.levelname,
             "logger": record.name,
-            "env": getattr(record, "env", "unknown"),
-            "module": getattr(record, "module", "unknown"),
+            "quant_env": getattr(record, "env", "unknown"),
+            "quant_module": getattr(record, "module", "unknown"),
             "msg": record.getMessage(),
         }
 
