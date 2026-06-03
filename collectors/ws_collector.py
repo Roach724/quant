@@ -55,8 +55,7 @@ try:
     _fh = logging.FileHandler(_json_log)
     _fh.setFormatter(QuantJsonFormatter())
     _fh.addFilter(_ContextFilter(env="prod", module="collector"))
-    logger.addHandler(_fh)
-    # Also add to root so child loggers get JSON output
+    # Add to root so all child loggers (live.calendar, etc.) write JSON
     logging.getLogger().addHandler(_fh)
 except Exception:
     logger.warning("Failed to set up JSON file logging (non-fatal)", exc_info=True)
