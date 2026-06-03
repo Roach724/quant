@@ -385,8 +385,15 @@ body {
         No experiment data. Run a backtest with DashboardObserver to populate.
       </div>
       <div v-else>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" v-model="showActiveOnly" style="accent-color:var(--blue);">
+            <span style="color:var(--text-secondary);font-size:13px;">Active only</span>
+          </label>
+          <span style="color:var(--text-muted);font-size:12px;">{{ filteredExperiments.length }}/{{ experiments.length }}</span>
+        </div>
         <div class="exp-grid">
-          <div class="exp-card" v-for="exp in experiments" :key="exp.exp_id">
+          <div class="exp-card" v-for="exp in filteredExperiments" :key="exp.exp_id">
             <div class="exp-id">{{ exp.exp_id }}</div>
             <div class="exp-metrics">
               <div>
@@ -569,6 +576,15 @@ const app = createApp({
     const activeTab = ref('overview');
     const selectedExp = ref('');
     const experiments = ref([]);
+    const showActiveOnly = ref(true);
+    const filteredExperiments = computed(() => {
+      if (!showActiveOnly.value) return experiments.value;
+      const now = Date.now();
+      return experiments.value.filter(e => {
+        const t = new Date(e.ts).getTime();
+        return (now - t) < 10 * 60 * 1000; // active in last 10 min
+      });
+    });
     const pipeline = ref(null);
     const equityData = ref([]);
     const trades = ref([]);
