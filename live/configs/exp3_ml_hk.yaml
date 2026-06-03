@@ -40,7 +40,7 @@ observer:
 
 state:
   enabled: true
-  dir: output/live/state_ml_hk/
+  dir: /var/quant/state/ml_hk/
   checkpoint_interval: 300
 
 experiment:

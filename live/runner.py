@@ -44,6 +44,7 @@ from engine.strategy import StrategyContext
 from live.calendar import MarketCalendar
 from live.config import load_config
 from live.observer import Observer
+from dashboard.observer import DashboardObserver
 from live.reporter import Reporter
 from live.state import StateManager
 from oms.bridge import convert_signal
@@ -159,6 +160,10 @@ class LiveRunner:
             output_dir=self._output_dir,
             snapshot_interval=int(obs_cfg.get("snapshot_interval", 60)),
         )
+
+        # Dashboard BQ observer
+        exp_id = self.config.get("experiment", {}).get("id", "unknown")
+        self._dash_observer = DashboardObserver(exp_id, self._market)
 
         # Save config copy to output dir
         self._save_config_copy()
@@ -363,6 +368,15 @@ class LiveRunner:
                     cash=portfolio.cash,
                     return_pct=0.0,
                 )
+                if hasattr(self, '_dash_observer'):
+                    self._dash_observer.record_equity(
+                        bar=bar_idx,
+                        equity=portfolio._mark_to_market(bar_data),
+                        cash=portfolio.cash,
+                        portfolio_value=portfolio._mark_to_market(bar_data),
+                        daily_pnl=getattr(portfolio, 'daily_pnl', 0),
+                        drawdown=getattr(portfolio, 'drawdown', 0),
+                    )
                 continue
 
             # 7e. Process signals
@@ -401,6 +415,15 @@ class LiveRunner:
                 cash=portfolio.cash,
                 return_pct=0.0,
             )
+            if hasattr(self, '_dash_observer'):
+                self._dash_observer.record_equity(
+                    bar=bar_idx,
+                    equity=final_equity,
+                    cash=portfolio.cash,
+                    portfolio_value=final_equity,
+                    daily_pnl=getattr(portfolio, 'daily_pnl', 0),
+                    drawdown=getattr(portfolio, 'drawdown', 0),
+                )
 
         # 8. End
         final_equity = portfolio._mark_to_market(bar_data if 'bar_data' in dir() else {})
@@ -510,6 +533,15 @@ class LiveRunner:
                 price=fill_price,
                 commission=commission,
             )
+            if hasattr(self, '_dash_observer'):
+                self._dash_observer.record_trade(
+                    bar=getattr(self, '_live_bar_count', 0),
+                    symbol=symbol,
+                    side=side,
+                    qty=fill_qty,
+                    price=fill_price,
+                    commission=commission,
+                )
 
             # Record in position tracker
             self.position_tracker.record_fill(symbol, side, fill_qty)
@@ -1060,6 +1092,15 @@ class LiveRunner:
                                 ts, tracked.symbol, tracked.side,
                                 int(tracked.filled_qty), price,
                             )
+                            if hasattr(self, '_dash_observer'):
+                                self._dash_observer.record_trade(
+                                    bar=self._live_bar_count,
+                                    symbol=tracked.symbol,
+                                    side=tracked.side,
+                                    qty=tracked.filled_qty,
+                                    price=price,
+                                    commission=getattr(tracked, 'commission', 0),
+                                )
 
                 # Periodic snapshot
                 if self.observer.snapshot_due(ts):
@@ -1077,6 +1118,16 @@ class LiveRunner:
                     self.observer.snapshot_portfolio(ts, pos_list)
 
                 self.observer.record_bar(ts, eq, portfolio.cash, 0.0)
+
+                if hasattr(self, '_dash_observer'):
+                    self._dash_observer.record_equity(
+                        bar=self._live_bar_count,
+                        equity=eq,
+                        cash=portfolio.cash,
+                        portfolio_value=eq,
+                        daily_pnl=eq - self._live_daily_start_equity if self._live_daily_start_equity > 0 else 0,
+                        drawdown=current_dd,
+                    )
 
                 # ── Intraday checkpoint ──
                 now = datetime.now(timezone.utc)

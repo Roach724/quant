@@ -37,7 +37,11 @@ def load_config(path: str) -> dict:
         raise ValueError(f"live.market must be us/hk/crypto, got '{market}'")
     from datetime import datetime, timezone
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    subdir = f"{market}_{mode}_{ts}"
+    exp_id = config.get("experiment", {}).get("id", "")
+    if exp_id:
+        subdir = f"{market}_{mode}_{exp_id}_{ts}"
+    else:
+        subdir = f"{market}_{mode}_{ts}"
     output_root = config.get("live", {}).get("output_dir", "output/live/")
     config["_output_dir"] = str(Path(output_root) / subdir)
     return config

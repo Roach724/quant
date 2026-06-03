@@ -5,7 +5,7 @@ Loads OHLCV from bars table, computes factors on-the-fly via TechFactorBuilder
 of pre-computed data.
 """
 import logging, sys, os
-sys.path.insert(0, "/opt/quant-prod")
+sys.path.insert(0, "/opt/quant-dev")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("train_hk_tech")
 

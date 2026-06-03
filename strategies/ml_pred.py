@@ -118,6 +118,13 @@ class MLPredStrategy(Strategy):
             logger.warning("No factor data loaded for training")
             return
 
+        n_trained = df["symbol"].nunique()
+        if n_trained < len(symbols):
+            logger.warning(
+                "Training on %d/%d symbols (missing historical data for %d)",
+                n_trained, len(symbols), len(symbols) - n_trained,
+            )
+
         train_df, val_df, _ = trainer.split_data(
             train_end="2024-12-31",
             val_end=self.train_end,

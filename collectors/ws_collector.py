@@ -109,14 +109,18 @@ def _desired_symbols() -> set[str]:
 # ── K-line handler ──
 
 class BarHandler(CurKlineHandlerBase):
-    """Receives completed 5m K-line bars and appends to a shared buffer."""
+    """Receives K-line bar updates; keeps latest OHLCV per (symbol, timestamp).
+
+    CurKlineHandlerBase pushes the current incomplete bar multiple times as
+    OHLCV expands. We keep the LATEST update (most complete OHLCV) per key.
+    """
 
     def __init__(self, buffer: list, label: str = ""):
         super().__init__()
         self.buffer = buffer
         self.label = label
         self.bar_count = 0
-        self._seen: set[tuple[str, str]] = set()  # (symbol, timestamp) dedup
+        self._latest: dict[tuple[str, str], dict] = {}  # (symbol, timestamp) → bar
 
     def on_recv_rsp(self, rsp_pb):
         ret_code, data = super().on_recv_rsp(rsp_pb)
@@ -124,13 +128,9 @@ class BarHandler(CurKlineHandlerBase):
             logger.warning("[%s] Handler error: %s", self.label, data)
             return ret_code, data
 
-        new_bars = 0
         for _, row in data.iterrows():
             key = (row.get("code", ""), str(row["time_key"]))
-            if key in self._seen:
-                continue
-            self._seen.add(key)
-            self.buffer.append({
+            self._latest[key] = {
                 "symbol": row.get("code", ""),
                 "timestamp": row["time_key"],
                 "open": float(row["open"]),
@@ -138,12 +138,24 @@ class BarHandler(CurKlineHandlerBase):
                 "low": float(row["low"]),
                 "close": float(row["close"]),
                 "volume": int(float(row["volume"])),
-            })
-            new_bars += 1
-        if new_bars < len(data):
-            logger.debug("[%s] Dedup: %d/%d bars skipped", self.label, len(data) - new_bars, len(data))
-        self.bar_count += new_bars
+            }
+        self.bar_count += len(data)
         return ret_code, data
+
+    def drain_to_buffer(self) -> int:
+        """Atomically swap out _latest dict and move bars to the shared buffer.
+
+        Thread-safe: creates a new _latest dict so background callbacks can
+        continue writing without losing data during flush.
+
+        Returns number of bars moved.
+        """
+        old = self._latest
+        self._latest = {}
+        bars = list(old.values())
+        if bars:
+            self.buffer.extend(bars)
+        return len(bars)
 
 
 # ── Main loop ──
@@ -238,6 +250,7 @@ def main():
                     pass
 
         # ── Flush buffer ──
+        handler.drain_to_buffer()
         if buffer and (now_ts - last_flush > FLUSH_INTERVAL_SEC or len(buffer) >= BUFFER_MAX):
             _flush_buffer(buffer, handler.label)
             last_flush = now_ts
@@ -254,6 +267,7 @@ def main():
 
     # ── Shutdown ──
     logger.info("Shutting down — final flush...")
+    handler.drain_to_buffer()
     _flush_buffer(buffer, handler.label)
     if ctx is not None:
         try:

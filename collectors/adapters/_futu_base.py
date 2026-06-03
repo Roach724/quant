@@ -112,21 +112,17 @@ class FutuBaseAdapter:
             self._ctx = None
 
     def _default_symbols(self) -> list[str]:
-        """Load symbol pool from FutuStockAdapter static list (no OpenD needed)."""
+        """Load symbol pool from SSOT (config/symbols.yaml), falling back to static list."""
         try:
             from collectors.adapters.futu_stock_adapter import FutuStockAdapter
-            syms = list(FutuStockAdapter._DEFAULT_SYMBOLS)
+            adapter = FutuStockAdapter()
+            syms = adapter.fetch_supported_symbols()
+            adapter.close()
             us_count = sum(1 for s in syms if s.startswith("US."))
             hk_count = sum(1 for s in syms if s.startswith("HK."))
-            logger.info("Loaded %d symbols (%d US + %d HK) from static list", len(syms), us_count, hk_count)
+            logger.info("Loaded %d symbols (%d US + %d HK) from SSOT", len(syms), us_count, hk_count)
             return syms
         except Exception:
-            logger.warning("Cannot load symbols; using static fallback")
-            return [
-                "HK.00700", "HK.09988", "HK.00941", "HK.00005", "HK.00388",
-                "HK.01299", "HK.02318", "HK.01810",
-                "US.AAPL", "US.MSFT", "US.NVDA", "US.AMZN", "US.META", "US.GOOGL",
-                "US.AVGO", "US.TSLA", "US.COST", "US.NFLX", "US.ADBE", "US.AMD",
-                "US.JPM", "US.V", "US.UNH", "US.XOM", "US.MA", "US.JNJ", "US.WMT",
-                "US.PG", "US.HD", "US.BAC", "US.CVX",
-            ]
+            logger.warning("Cannot load symbols from SSOT; using static fallback")
+            from collectors.adapters.futu_stock_adapter import FutuStockAdapter
+            return list(FutuStockAdapter._DEFAULT_SYMBOLS)
