@@ -13,6 +13,7 @@ import './App.css';
 import Experiments from './pages/Experiments';
 import DataMap from './pages/DataMap';
 import LogViewer from './pages/LogViewer';
+import CronJobs from './pages/CronJobs';
 
 const menuData = [
   { path: '/experiments', name: '实验管理', icon: <ExperimentOutlined /> },
@@ -55,7 +56,7 @@ function AppLayout() {
         <Route path="/experiments" element={<Experiments />} />
         <Route path="/data" element={<DataMap />} />
         <Route path="/logs" element={<LogViewer />} />
-        <Route path="/cron" element={<PlaceholderPage title="Cron 任务" />} />
+        <Route path="/cron" element={<CronJobs />} />
         <Route path="/models" element={<PlaceholderPage title="模型 & 策略" />} />
         <Route path="/factors" element={<PlaceholderPage title="因子管理" />} />
         <Route path="/" element={<Experiments />} />

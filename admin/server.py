@@ -208,6 +208,59 @@ def admin_collector_action(action: str):
     return {"task_id": task.id, "status": "pending"}
 
 
+# ── Cron Management ───────────────────────────────────────────────────────────
+
+@app.get("/api/admin/cron")
+def admin_cron_list():
+    """Read system crontab, parse into structured jobs."""
+    r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    lines = r.stdout.strip().split("\n") if r.stdout.strip() else []
+    jobs = []
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            if line.startswith("#"):
+                jobs.append({
+                    "index": i, "raw": line, "enabled": False,
+                    "schedule": "", "command": "", "comment": line.lstrip("# ")
+                })
+            continue
+        parts = line.split(None, 5)
+        if len(parts) >= 6:
+            jobs.append({
+                "index": i, "raw": line, "enabled": True,
+                "schedule": " ".join(parts[:5]),
+                "command": parts[5], "comment": "",
+            })
+    return jobs
+
+
+@app.post("/api/admin/cron")
+def admin_cron_save(jobs: list[dict]):
+    """Save updated crontab."""
+    lines = []
+    for j in jobs:
+        if j.get("raw"):
+            lines.append(j["raw"])
+        elif j.get("enabled"):
+            lines.append(f"{j['schedule']} {j['command']}")
+    crontab_content = "\n".join(lines) + "\n"
+    proc = subprocess.run(["crontab", "-"], input=crontab_content, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return {"error": proc.stderr}, 400
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/cron/run")
+def admin_cron_run(command: str = Query("")):
+    """Manually trigger a cron command via task queue."""
+    session = get_session()
+    task = Task(type="shell", params={"cmd": command}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id}
+
+
 # ── Log Browser ───────────────────────────────────────────────────────────────
 
 LOG_ROOT = "/var/log/quant/prod"
