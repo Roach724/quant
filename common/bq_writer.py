@@ -1,6 +1,6 @@
 """BigQuery direct writer — replaces GCS → BQ Loader pipeline.
 
-Uses client.insert_rows_json() for simplicity and reliability.
+Uses client.insert_rows_json() with timeout to prevent hanging.
 At our data volume (~1 row/second), this is more than sufficient.
 
 Usage:
@@ -81,12 +81,18 @@ def write_rows_to_bq(
     written = 0
     for attempt in range(MAX_RETRIES):
         try:
-            errors = client.insert_rows_json(table_ref, rows)
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(client.insert_rows_json, table_ref, rows)
+                errors = future.result(timeout=30)
             if errors:
                 error_msgs = [e.get("errors", e) for e in errors]
                 raise RuntimeError(f"Insert errors: {error_msgs[:3]}")
             written = total
             break
+        except concurrent.futures.TimeoutError:
+            logger.error("BQ write timed out after 30s (attempt %d/%d)", attempt + 1, MAX_RETRIES)
+            client = bigquery.Client(project=project)
         except (gapi_exceptions.ServiceUnavailable, gapi_exceptions.ResourceExhausted, RuntimeError) as e:
             if attempt < MAX_RETRIES - 1:
                 wait = RETRY_BASE_S * (2 ** attempt)
