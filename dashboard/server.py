@@ -177,10 +177,19 @@ async def trades(exp_id: str, limit: int = 200, run_id: str = ""):
     """Return the most-recent trades for an experiment.
     
     Optional query params:
-        run_id: filter by specific run. Useful for experiments with multiple runs.
+        run_id: filter by specific run. Defaults to latest run.
         limit: max number of trades to return (default 200).
     """
     client = _get_bq()
+    if not run_id:
+        latest_q = f"""
+            SELECT run_id FROM {_table("experiment_trades")}
+            WHERE exp_id = '{exp_id}'
+            ORDER BY ts DESC LIMIT 1
+        """
+        latest_rows = list(client.query(latest_q).result())
+        if latest_rows:
+            run_id = latest_rows[0].run_id or ""
     run_filter = f"AND run_id = @run_id" if run_id else ""
     query = f"""
         SELECT ts, bar, symbol, side, qty, price, commission
@@ -522,13 +531,24 @@ async def market_symbols(market: str):
 
 
 @app.get("/api/experiments/{exp_id}/positions")
-async def experiment_positions(exp_id: str):
+async def experiment_positions(exp_id: str, run_id: str = ""):
     """Compute current positions from all trades, with correct cost basis."""
     client = _get_bq()
+    if not run_id:
+        # Default to latest run
+        latest_q = f"""
+            SELECT run_id FROM {_table("experiment_trades")}
+            WHERE exp_id = '{exp_id}'
+            ORDER BY ts DESC LIMIT 1
+        """
+        latest_rows = list(client.query(latest_q).result())
+        if latest_rows:
+            run_id = latest_rows[0].run_id or ""
+    run_filter = f"AND run_id = '{run_id}'" if run_id else ""
     trades_q = f"""
         SELECT symbol, side, qty, price, ts
         FROM {_table("experiment_trades")}
-        WHERE exp_id = '{exp_id}'
+        WHERE exp_id = '{exp_id}' {run_filter}
         ORDER BY ts
     """
     rows = list(client.query(trades_q).result())
