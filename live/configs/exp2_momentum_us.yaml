@@ -44,5 +44,8 @@ state:
   checkpoint_interval: 300
 
 experiment:
-  id: exp2_simple_momentum
-  name: "Exp2 — SimpleMomentum (control)"
+  type: live
+  market: us
+  strategy: mom
+  version: 1
+  name: "SimpleMomentum US (control)"

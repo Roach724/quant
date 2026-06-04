@@ -44,5 +44,8 @@ state:
   checkpoint_interval: 300
 
 experiment:
-  id: exp1_ml_v2
-  name: "Exp1 — MLPredStrategy us_tech v2 (39 features)"
+  type: live
+  market: us
+  strategy: ml
+  version: 2
+  name: "MLPredStrategy us_tech v2"

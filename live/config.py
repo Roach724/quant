@@ -54,6 +54,15 @@ def _apply_defaults(config: dict, defaults: dict):
         elif isinstance(value, dict) and isinstance(config.get(key), dict):
             _apply_defaults(config[key], value)
 
+    # Derive experiment ID from type/market/strategy/version
+    exp_cfg = config.get("experiment", {})
+    if exp_cfg and "id" not in exp_cfg:
+        _type = exp_cfg.get("type", "live")
+        market = exp_cfg.get("market", "us")
+        strategy = exp_cfg.get("strategy", "ml")
+        version = exp_cfg.get("version", 1)
+        exp_cfg["id"] = f"{_type}_{market}_{strategy}_v{version}"
+
 def record_experiment(config: dict, output_dir: str):
     """Register this live run session in ExperimentTracker if experiment.id is configured."""
     exp_cfg = config.get("experiment", {})

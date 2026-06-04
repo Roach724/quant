@@ -32,6 +32,7 @@ TABLE_TRADES = "experiment_trades"
 EQUITY_SCHEMA: list[bigquery.SchemaField] = [
     bigquery.SchemaField("ts", "TIMESTAMP", mode="REQUIRED"),
     bigquery.SchemaField("exp_id", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("run_id", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("bar", "INTEGER", mode="REQUIRED"),
     bigquery.SchemaField("equity", "FLOAT64", mode="REQUIRED"),
     bigquery.SchemaField("cash", "FLOAT64", mode="REQUIRED"),
@@ -43,6 +44,7 @@ EQUITY_SCHEMA: list[bigquery.SchemaField] = [
 TRADES_SCHEMA: list[bigquery.SchemaField] = [
     bigquery.SchemaField("ts", "TIMESTAMP", mode="REQUIRED"),
     bigquery.SchemaField("exp_id", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("run_id", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("bar", "INTEGER", mode="REQUIRED"),
     bigquery.SchemaField("symbol", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("side", "STRING", mode="REQUIRED"),
@@ -102,11 +104,13 @@ class DashboardObserver:
         portfolio_value: float,
         daily_pnl: float,
         drawdown: float,
+        run_id: str = "",
     ) -> None:
         """Write one equity snapshot row to experiment_equity."""
         row = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "exp_id": self.exp_id,
+            "run_id": run_id,
             "bar": bar,
             "equity": equity,
             "cash": cash,
@@ -128,11 +132,13 @@ class DashboardObserver:
         qty: float,
         price: float,
         commission: float,
+        run_id: str = "",
     ) -> None:
         """Write one trade row to experiment_trades."""
         row = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "exp_id": self.exp_id,
+            "run_id": run_id,
             "bar": bar,
             "symbol": symbol,
             "side": side,

@@ -96,6 +96,36 @@ class LiveRunner:
         multi_day = self.config.get("schedule", {}).get("multi_day", False)
         mode_label = f"{self._mode}" + (" (multi-day)" if multi_day else "")
         logger.info("LiveRunner starting — mode=%s market=%s", mode_label, self._market)
+
+        # ── Experiment lifecycle integration ──
+        exp_cfg = self.config.get("experiment", {})
+        exp_id = exp_cfg.get("id", "")
+        run_id = None
+
+        if exp_id:
+            from live.experiment_manager import ExperimentManager
+            mgr = ExperimentManager()
+            try:
+                exp = mgr.get(exp_id)
+                if exp.status == "archived":
+                    logger.warning("Experiment %s is archived, skipping lifecycle", exp_id)
+                else:
+                    run_id = mgr.start(exp_id)
+                    logger.info("Experiment %s started -> run %s", exp_id, run_id)
+                    self.config["_run_id"] = run_id
+            except KeyError:
+                # Not registered - auto-register
+                _type = exp_cfg.get("type", "live")
+                market = exp_cfg.get("market", "us")
+                strategy = exp_cfg.get("strategy", "ml")
+                version = exp_cfg.get("version", 1)
+                config_path = getattr(self, '_config_path', '')
+                mgr.register(_type, market, strategy, version, config_path,
+                             name=exp_cfg.get("name", ""))
+                run_id = mgr.start(exp_id)
+                logger.info("Auto-registered %s -> run %s", exp_id, run_id)
+                self.config["_run_id"] = run_id
+
         self._init_components()
 
         try:
@@ -109,10 +139,26 @@ class LiveRunner:
                 raise ValueError(f"Unknown mode: {self._mode}")
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
-        except Exception:
+        except Exception as e:
             logger.exception("Fatal error in run loop")
+            if exp_id:
+                from live.experiment_manager import ExperimentManager as EM
+                try:
+                    EM().fail(exp_id, notes=str(e))
+                except Exception:
+                    pass
             raise
         finally:
+            # ── Experiment lifecycle cleanup ──
+            if exp_id and run_id:
+                from live.experiment_manager import ExperimentManager as EM
+                try:
+                    exp = EM().get(exp_id)
+                    if exp.status == "running":
+                        EM().stop(exp_id)
+                        logger.info("Experiment %s stopped", exp_id)
+                except Exception:
+                    pass
             self._shutdown()
 
     # ── Component initialisation ─────────────────────────────────────
@@ -376,6 +422,7 @@ class LiveRunner:
                         portfolio_value=portfolio._mark_to_market(bar_data),
                         daily_pnl=getattr(portfolio, 'daily_pnl', 0),
                         drawdown=getattr(portfolio, 'drawdown', 0),
+                        run_id=self.config.get("_run_id", ""),
                     )
                 continue
 
@@ -423,6 +470,7 @@ class LiveRunner:
                     portfolio_value=final_equity,
                     daily_pnl=getattr(portfolio, 'daily_pnl', 0),
                     drawdown=getattr(portfolio, 'drawdown', 0),
+                    run_id=self.config.get("_run_id", ""),
                 )
 
         # 8. End
@@ -541,6 +589,7 @@ class LiveRunner:
                     qty=fill_qty,
                     price=fill_price,
                     commission=commission,
+                    run_id=self.config.get("_run_id", ""),
                 )
 
             # Record in position tracker
@@ -1100,6 +1149,7 @@ class LiveRunner:
                                     qty=tracked.filled_qty,
                                     price=price,
                                     commission=getattr(tracked, 'commission', 0),
+                                    run_id=self.config.get("_run_id", ""),
                                 )
 
                 # Periodic snapshot
@@ -1127,6 +1177,7 @@ class LiveRunner:
                         portfolio_value=eq,
                         daily_pnl=eq - self._live_daily_start_equity if self._live_daily_start_equity > 0 else 0,
                         drawdown=current_dd,
+                        run_id=self.config.get("_run_id", ""),
                     )
 
                 # ── Intraday checkpoint ──
