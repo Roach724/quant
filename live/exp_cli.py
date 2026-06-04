@@ -377,6 +377,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_stop.add_argument("id", help="Experiment id")
     p_stop.set_defaults(func=cmd_stop)
 
+    # restart
+    p_restart = sub.add_parser("restart", help="Restart an experiment (stop + start)")
+    p_restart.add_argument("id", help="Experiment id")
+    p_restart.set_defaults(func=cmd_restart)
+
     # archive
     p_archive = sub.add_parser("archive", help="Archive a completed or failed experiment")
     p_archive.add_argument("id", help="Experiment id")
