@@ -209,12 +209,13 @@ async def paper_run_detail(run_id: str):
     """
     client = _get_bq()
     try:
-        # Run metadata
+        # Run metadata (latest status by created_at)
         run_query = f"""
             SELECT run_id, name, strategy, market, status, n_periods,
                    config_json, created_at, error_msg
             FROM {_table("paper_runs")}
             WHERE run_id = '{run_id}'
+            ORDER BY created_at DESC LIMIT 1
         """
         run_rows = list(client.query(run_query).result())
         if not run_rows:

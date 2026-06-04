@@ -158,7 +158,12 @@ class PaperRunRunner:
         self, status: str, started_at: datetime,
         n_periods: int | None = None, error: str | None = None,
     ) -> None:
-        """Write/update paper_runs row."""
+        """Write/update paper_runs row (DELETE old + INSERT new to dedup)."""
+        # Delete existing rows for this run_id first
+        try:
+            self._bq.query(f"DELETE FROM {_table_ref(TABLE_PAPER_RUNS)} WHERE run_id = '{self.run_id}'").result()
+        except Exception:
+            pass
         rows = [{
             "run_id": self.run_id,
             "name": self.config.get("experiment", {}).get("name", self.run_id),
@@ -176,9 +181,12 @@ class PaperRunRunner:
 
     def _write_metrics(self, metrics: dict) -> None:
         """Write computed metrics to paper_metrics table."""
+        # Only include fields that exist in the table schema
+        schema_fields = {f.name for f in PAPER_METRICS_SCHEMA} - {"run_id", "computed_at"}
+        filtered = {k: v for k, v in metrics.items() if k in schema_fields}
         rows = [{
             "run_id": self.run_id,
-            **metrics,
+            **filtered,
             "computed_at": datetime.now(timezone.utc).isoformat(),
         }]
         write_rows_to_bq(pd.DataFrame(rows), table_name=TABLE_PAPER_METRICS)
