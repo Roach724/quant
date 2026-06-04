@@ -161,6 +161,19 @@ class ExperimentManager:
         tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
         os.replace(tmp_path, self._path)
 
+    def get_pid(self, exp_id: str) -> int | None:
+        d = self._data.get(exp_id)
+        if d is None:
+            raise KeyError(f"Experiment '{exp_id}' not found")
+        return d.get("pid")
+
+    def set_pid(self, exp_id: str, pid: int | None) -> None:
+        d = self._data.get(exp_id)
+        if d is None:
+            raise KeyError(f"Experiment '{exp_id}' not found")
+        d["pid"] = pid
+        self._save()
+
     def _get_exp(self, exp_id: str) -> dict[str, Any]:
         """Look up an experiment dict, raising KeyError if missing."""
         if exp_id not in self._data:

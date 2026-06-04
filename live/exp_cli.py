@@ -17,7 +17,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
+import subprocess
 import sys
+import time
 from typing import Sequence
 
 from live.experiment_manager import ExperimentManager
@@ -94,15 +98,131 @@ def cmd_register(mgr: ExperimentManager, args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _runner_cmd(config_path: str) -> list[str]:
+    """Build the shell command to launch an experiment runner."""
+    return [
+        "nohup", ".venv/bin/python3", "live/run.py",
+        "--config", config_path,
+    ]
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Check if a process with the given PID is still running."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
 def cmd_start(mgr: ExperimentManager, args: argparse.Namespace) -> None:
-    """Handle the 'start' subcommand."""
+    """Start an experiment: launch daemon process + record PID."""
     exp_id = args.id
     try:
-        run_id = mgr.start(exp_id)
-        print(f"Started {exp_id} → run {run_id}")
-    except (RuntimeError, KeyError) as e:
+        exp = mgr.get(exp_id)
+    except KeyError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # Check if already running
+    existing_pid = mgr.get_pid(exp_id)
+    if existing_pid and _is_pid_alive(existing_pid):
+        print(f"Error: {exp_id} is already running (PID={existing_pid})", file=sys.stderr)
+        sys.exit(1)
+
+    config_path = exp.config_path
+    if not config_path:
+        print(f"Error: no config_path for {exp_id}", file=sys.stderr)
+        sys.exit(1)
+
+    # Set status to paused so Runner can call mgr.start() on its own
+    if exp.status != "paused":
+        mgr._data[exp_id]["status"] = "paused"
+        mgr._save()
+
+    # Launch daemon
+    project_root = os.environ.get("QUANT_ROOT", "/opt/quant-prod")
+    cmd = _runner_cmd(config_path)
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=project_root,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,  # daemonize
+        )
+    except OSError as e:
+        print(f"Error: failed to start process: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    mgr.set_pid(exp_id, proc.pid)
+    print(f"Started {exp_id} (PID={proc.pid})")
+
+
+def cmd_stop(mgr: ExperimentManager, args: argparse.Namespace) -> None:
+    """Stop an experiment: kill process + clear PID."""
+    exp_id = args.id
+    try:
+        mgr.get(exp_id)
+    except KeyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    pid = mgr.get_pid(exp_id)
+    if pid and _is_pid_alive(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(1)
+            if _is_pid_alive(pid):
+                os.kill(pid, signal.SIGKILL)
+                time.sleep(0.5)
+            print(f"Stopped {exp_id} (PID={pid})")
+        except OSError as e:
+            print(f"Error killing PID {pid}: {e}", file=sys.stderr)
+    elif pid:
+        print(f"Stopped {exp_id} (PID={pid} already dead)")
+    else:
+        print(f"Stopped {exp_id} (no PID recorded)")
+
+    mgr.set_pid(exp_id, None)
+    # Runner's cleanup should have set status; if not, mark paused
+    try:
+        exp = mgr.get(exp_id)
+        if exp.status == "running":
+            mgr._data[exp_id]["status"] = "paused"
+            mgr._save()
+    except KeyError:
+        pass
+
+
+def cmd_restart(mgr: ExperimentManager, args: argparse.Namespace) -> None:
+    """Restart an experiment: stop then start."""
+    exp_id = args.id
+    # Stop
+    pid = mgr.get_pid(exp_id)
+    if pid and _is_pid_alive(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(1)
+            if _is_pid_alive(pid):
+                os.kill(pid, signal.SIGKILL)
+                time.sleep(0.5)
+        except OSError:
+            pass
+    mgr.set_pid(exp_id, None)
+
+    # Start
+    exp = mgr.get(exp_id)
+    config_path = exp.config_path
+    mgr._data[exp_id]["status"] = "paused"
+    mgr._save()
+
+    project_root = os.environ.get("QUANT_ROOT", "/opt/quant-prod")
+    proc = subprocess.Popen(
+        _runner_cmd(config_path), cwd=project_root,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    mgr.set_pid(exp_id, proc.pid)
+    print(f"Restarted {exp_id} (PID={proc.pid})")
 
 
 def cmd_pause(mgr: ExperimentManager, args: argparse.Namespace) -> None:
@@ -126,16 +246,6 @@ def cmd_resume(mgr: ExperimentManager, args: argparse.Namespace) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-
-def cmd_stop(mgr: ExperimentManager, args: argparse.Namespace) -> None:
-    """Handle the 'stop' subcommand."""
-    exp_id = args.id
-    try:
-        mgr.stop(exp_id)
-        print(f"Stopped {exp_id}")
-    except (RuntimeError, KeyError) as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
 
 
 def cmd_archive(mgr: ExperimentManager, args: argparse.Namespace) -> None:
