@@ -1124,7 +1124,7 @@ class LiveRunner:
                                 signal_id=sd.get("signal_id"),
                             )
                         )
-                        self.observer.record_signal(ts, sd["symbol"], sd["side"], 0, 1)
+                        self.observer.record_signal(ts, sd["symbol"], sd["side"], sd.get("score", 0), sd.get("rank", 0))
 
                         if tracked and tracked.filled_qty > 0:
                             pos = portfolio.positions.get(tracked.symbol)
