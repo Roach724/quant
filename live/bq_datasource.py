@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from google.cloud import bigquery
 
-from live.calendar import MarketCalendar
+from live.market_calendar import MarketCalendar
 
 logger = logging.getLogger(__name__)
 
