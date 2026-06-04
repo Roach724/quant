@@ -10,6 +10,7 @@ import ProLayout, { PageContainer } from '@ant-design/pro-layout';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import './App.css';
+import Experiments from './pages/Experiments';
 
 const menuData = [
   { path: '/experiments', name: '实验管理', icon: <ExperimentOutlined /> },
@@ -49,13 +50,13 @@ function AppLayout() {
       )}
     >
       <Routes>
-        <Route path="/experiments" element={<PlaceholderPage title="实验管理" />} />
+        <Route path="/experiments" element={<Experiments />} />
         <Route path="/data" element={<PlaceholderPage title="数据采集" />} />
         <Route path="/logs" element={<PlaceholderPage title="日志浏览" />} />
         <Route path="/cron" element={<PlaceholderPage title="Cron 任务" />} />
         <Route path="/models" element={<PlaceholderPage title="模型 & 策略" />} />
         <Route path="/factors" element={<PlaceholderPage title="因子管理" />} />
-        <Route path="/" element={<PlaceholderPage title="实验管理" />} />
+        <Route path="/" element={<Experiments />} />
       </Routes>
     </ProLayout>
   );

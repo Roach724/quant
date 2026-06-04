@@ -27,7 +27,7 @@ def run_one(task: Task) -> None:
         t.started_at = datetime.utcnow()
         session.commit()
 
-        command = t.params.get("command", "echo no command") if t.params else "echo no command"
+        command = (t.params or {}).get("cmd") or (t.params or {}).get("command", "echo no command")
         proc = subprocess.run(
             command,
             shell=True,
@@ -37,7 +37,7 @@ def run_one(task: Task) -> None:
             cwd=PROJECT_ROOT,
         )
 
-        t.status = "done" if proc.returncode == 0 else "failed"
+        t.status = "completed" if proc.returncode == 0 else "failed"
         t.result = proc.stdout.strip() or proc.stderr.strip()
         t.finished_at = datetime.utcnow()
         session.commit()

@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional
 
 from admin.models import init_db, get_session, Task
+from live.experiment_manager import ExperimentManager
 
 DB_SESSION_DEP = Depends(get_session)
 
@@ -96,6 +97,37 @@ def get_task(task_id: int, db: Session = DB_SESSION_DEP):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return TaskOut.model_validate(task)
+
+
+# ── Experiment management ─────────────────────────────────────────────────────
+
+@app.get("/api/admin/experiments")
+def admin_experiments():
+    mgr = ExperimentManager()
+    return [{
+        "exp_id": e.id, "name": e.name, "type": e.type,
+        "market": e.market, "strategy": e.strategy,
+        "version": e.version, "status": e.status,
+        "current_run": e.current_run, "config_path": e.config_path,
+        "pid": mgr.get_pid(e.id),
+    } for e in mgr.list()]
+
+
+@app.post("/api/admin/experiments/{exp_id}/{action}")
+def admin_experiment_action(exp_id: str, action: str):
+    """start / stop / restart an experiment via task queue."""
+    cmd_map = {
+        "start": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py start {exp_id}",
+        "stop": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py stop {exp_id}",
+        "restart": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py restart {exp_id}",
+    }
+    if action not in cmd_map:
+        return {"error": f"Unknown action: {action}"}, 400
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd_map[action]}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id, "status": "pending"}
 
 
 if __name__ == "__main__":
