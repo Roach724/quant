@@ -1,9 +1,9 @@
 """Quant Admin Platform — FastAPI server."""
 
-import subprocess, json as _json
+import subprocess, json as _json, os, glob
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Depends
+from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_serializer
 from sqlalchemy.orm import Session
@@ -206,6 +206,95 @@ def admin_collector_action(action: str):
     session.add(task)
     session.commit()
     return {"task_id": task.id, "status": "pending"}
+
+
+# ── Log Browser ───────────────────────────────────────────────────────────────
+
+LOG_ROOT = "/var/log/quant/prod"
+LOG_MODULES = ["collector", "live", "factor", "cron", "train", "loader", "backfill", "quality", "adhoc"]
+
+
+@app.get("/api/admin/logs/modules")
+def admin_log_modules():
+    modules = []
+    for mod in LOG_MODULES:
+        path = os.path.join(LOG_ROOT, mod)
+        if os.path.isdir(path):
+            files = glob.glob(os.path.join(path, "*.log"))
+            modules.append({"name": mod, "file_count": len(files)})
+    return modules
+
+
+@app.get("/api/admin/logs")
+def admin_logs(
+    module: str = Query("collector"),
+    level: str = Query(""),
+    search: str = Query(""),
+    lines: int = Query(100),
+):
+    """Read log lines from /var/log/quant/prod/{module}/, filtered."""
+    log_dir = os.path.join(LOG_ROOT, module)
+    if not os.path.isdir(log_dir):
+        return {"error": f"Unknown module: {module}", "lines": []}
+    files = sorted(glob.glob(os.path.join(log_dir, "*.log")), reverse=True)
+    if not files:
+        return {"module": module, "lines": [], "file": None}
+    log_file = files[0]
+    result_lines = []
+    with open(log_file) as f:
+        all_lines = f.readlines()
+        for line in reversed(all_lines[-max(lines * 3, 1000):]):
+            if len(result_lines) >= lines:
+                break
+            try:
+                entry = _json.loads(line)
+                lvl = entry.get("level", "")
+                msg = entry.get("msg", "")
+                ts = entry.get("ts", "")
+            except Exception:
+                lvl = ""
+                msg = line.strip()
+                ts = ""
+            if level and level.upper() != lvl.upper():
+                continue
+            if search and search.lower() not in msg.lower():
+                continue
+            result_lines.append({"ts": ts, "level": lvl, "msg": msg})
+    result_lines.reverse()
+    return {"module": module, "file": os.path.basename(log_file), "lines": result_lines}
+
+
+@app.websocket("/ws/logs")
+async def ws_logs(websocket: WebSocket, module: str = "collector"):
+    """Real-time log tail via WebSocket."""
+    await websocket.accept()
+    log_dir = os.path.join(LOG_ROOT, module)
+    files = sorted(glob.glob(os.path.join(log_dir, "*.log")), reverse=True)
+    if not files:
+        await websocket.close()
+        return
+    log_file = files[0]
+    import asyncio
+
+    try:
+        with open(log_file) as f:
+            f.seek(0, 2)
+            while True:
+                line = f.readline()
+                if line:
+                    try:
+                        entry = _json.loads(line)
+                        await websocket.send_json({
+                            "ts": entry.get("ts", ""),
+                            "level": entry.get("level", ""),
+                            "msg": entry.get("msg", ""),
+                        })
+                    except Exception:
+                        await websocket.send_json({"ts": "", "level": "", "msg": line.strip()})
+                else:
+                    await asyncio.sleep(0.5)
+    except (WebSocketDisconnect, Exception):
+        await websocket.close()
 
 
 if __name__ == "__main__":
