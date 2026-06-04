@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-from live.calendar import MarketCalendar
+from live.market_calendar import MarketCalendar
 
 from storage import write_bars_to_gcs
 
@@ -280,6 +280,21 @@ def main():
                 "[HEARTBEAT] subscriptions=%d buffer=%d bars_received=%d",
                 len(current_subscriptions), len(buffer), handler.bar_count,
             )
+
+        # ── Watchdog: force reconnect if main loop frozen for > 2x heartbeat ──
+        WATCHDOG_TIMEOUT = HEARTBEAT_INTERVAL_SEC * 2
+        if now_ts - last_heartbeat > WATCHDOG_TIMEOUT:
+            logger.error(
+                "WATCHDOG: no heartbeat for %ds (vs %ds limit), forcing reconnect",
+                int(now_ts - last_heartbeat), WATCHDOG_TIMEOUT,
+            )
+            try:
+                ctx.close()
+            except Exception:
+                pass
+            ctx = None
+            current_subscriptions.clear()
+            last_heartbeat = now_ts  # reset to avoid immediate re-trigger
 
         time.sleep(5)
 

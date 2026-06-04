@@ -41,7 +41,7 @@ from google.cloud import bigquery
 from engine.data import DataFrameSource
 from engine.portfolio import Portfolio, Position
 from engine.strategy import StrategyContext
-from live.calendar import MarketCalendar
+from live.market_calendar import MarketCalendar
 from live.config import load_config
 from live.observer import Observer
 from dashboard.observer import DashboardObserver
