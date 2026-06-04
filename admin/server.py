@@ -1,6 +1,7 @@
 """Quant Admin Platform — FastAPI server."""
 
 import subprocess, json as _json, os, glob
+import requests
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect
@@ -348,6 +349,84 @@ async def ws_logs(websocket: WebSocket, module: str = "collector"):
                     await asyncio.sleep(0.5)
     except (WebSocketDisconnect, Exception):
         await websocket.close()
+
+
+# ── Model & Strategy Management ──────────────────────────────────────────────
+
+MLFLOW_API = "http://localhost:5000/api/2.0/mlflow"
+
+@app.get("/api/admin/models")
+def admin_models():
+    """List registered models with versions from MLflow."""
+    try:
+        r = requests.get(f"{MLFLOW_API}/registered-models/list", timeout=5)
+        models = r.json().get("registered_models", [])
+        result = []
+        for m in models:
+            name = m["name"]
+            rv = requests.post(
+                f"{MLFLOW_API}/model-versions/search",
+                json={"filter": f"name='{name}'"},
+                timeout=5,
+            )
+            versions = rv.json().get("model_versions", [])
+            result.append({
+                "name": name,
+                "versions": [{
+                    "version": v["version"],
+                    "stage": v.get("current_stage", ""),
+                    "run_id": v.get("run_id", ""),
+                } for v in versions],
+            })
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/admin/models/train")
+def admin_train_model(model_name: str, market: str = "us"):
+    """Trigger model training via task queue."""
+    script_map = {
+        ("us_tech", "us"): "scripts/train_us_tech_v1_explicit.py",
+        ("hk_tech", "hk"): "scripts/train_hk_tech_v1.py",
+    }
+    script = script_map.get((model_name, market), "")
+    if not script:
+        return {"error": f"No training script for {model_name}/{market}"}, 400
+    cmd = f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 {script}"
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id}
+
+
+@app.get("/api/admin/strategies")
+def admin_strategies():
+    """List strategy files in strategies/ directory."""
+    files = glob.glob("/opt/quant-prod/strategies/*.py")
+    return [{"name": os.path.basename(f), "path": f} for f in sorted(files)]
+
+
+@app.get("/api/admin/strategies/{name}")
+def admin_strategy_read(name: str):
+    """Read a strategy source file."""
+    path = f"/opt/quant-prod/strategies/{name}"
+    if not os.path.isfile(path) or not name.endswith(".py"):
+        return {"error": "Invalid strategy name"}, 400
+    with open(path) as f:
+        return {"name": name, "source": f.read()}
+
+
+@app.put("/api/admin/strategies/{name}")
+def admin_strategy_save(name: str, source: str = ""):
+    """Save a strategy source file."""
+    path = f"/opt/quant-prod/strategies/{name}"
+    if not name.endswith(".py"):
+        return {"error": "Invalid strategy name"}, 400
+    with open(path, "w") as f:
+        f.write(source)
+    return {"status": "saved"}
 
 
 if __name__ == "__main__":
