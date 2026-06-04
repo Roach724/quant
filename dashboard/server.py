@@ -91,16 +91,24 @@ async def root():
 # GET /api/experiments — latest equity snapshot per experiment
 # ---------------------------------------------------------------------------
 @app.get("/api/experiments")
-async def experiments():
-    """Return the most-recent equity snapshot for every distinct experiment."""
+async def experiments(type: str = ""):
+    """Return the most-recent equity snapshot for every distinct experiment.
+    
+    Optional query params:
+        type: filter by experiment type prefix (e.g. "live", "paper", "sim").
+              Uses LIKE '{type}_%' to match all experiments of that category.
+    """
     client = _get_bq()
+    prefix_filter = ""
+    if type:
+        prefix_filter = f"AND exp_id LIKE '{type}_%'"
     query = f"""
         SELECT * EXCEPT (rn)
         FROM (
             SELECT *,
                    ROW_NUMBER() OVER (PARTITION BY exp_id ORDER BY ts DESC) AS rn
             FROM {_table("experiment_equity")}
-            WHERE NOT STARTS_WITH(exp_id, "test_")
+            WHERE NOT STARTS_WITH(exp_id, "test_") {prefix_filter}
         )
         WHERE rn = 1
         ORDER BY ts DESC
@@ -122,13 +130,18 @@ async def experiments():
 # GET /api/equity/{exp_id} — time-series equity for one experiment
 # ---------------------------------------------------------------------------
 @app.get("/api/equity/{exp_id}")
-async def equity_series(exp_id: str):
-    """Return the full equity curve for a single experiment (ordered by bar)."""
+async def equity_series(exp_id: str, run_id: str = ""):
+    """Return the full equity curve for a single experiment (ordered by bar).
+    
+    Optional query params:
+        run_id: filter by specific run. Useful for experiments with multiple runs.
+    """
     client = _get_bq()
+    run_filter = f"AND run_id = '{run_id}'" if run_id else ""
     query = f"""
-        SELECT ts, bar, equity, cash, portfolio_value, daily_pnl, drawdown
+        SELECT ts, bar, equity, cash, portfolio_value, daily_pnl, drawdown, run_id
         FROM {_table("experiment_equity")}
-        WHERE exp_id = @exp_id
+        WHERE exp_id = @exp_id {run_filter}
         ORDER BY bar ASC
     """
     job_config = bigquery.QueryJobConfig(
@@ -137,7 +150,7 @@ async def equity_series(exp_id: str):
     try:
         rows = client.query(query, job_config=job_config).result()
         return [_row_to_dict(r, ["ts", "bar", "equity", "cash",
-                                  "portfolio_value", "daily_pnl", "drawdown"])
+                                  "portfolio_value", "daily_pnl", "drawdown", "run_id"])
                 for r in rows]
     except Exception as exc:
         logger.error("equity_series query error for %s: %s", exp_id, exc)
@@ -148,22 +161,29 @@ async def equity_series(exp_id: str):
 # GET /api/trades/{exp_id} — recent trades for one experiment
 # ---------------------------------------------------------------------------
 @app.get("/api/trades/{exp_id}")
-async def trades(exp_id: str, limit: int = 200):
-    """Return the most-recent trades for an experiment."""
+async def trades(exp_id: str, limit: int = 200, run_id: str = ""):
+    """Return the most-recent trades for an experiment.
+    
+    Optional query params:
+        run_id: filter by specific run. Useful for experiments with multiple runs.
+        limit: max number of trades to return (default 200).
+    """
     client = _get_bq()
+    run_filter = f"AND run_id = @run_id" if run_id else ""
     query = f"""
         SELECT ts, bar, symbol, side, qty, price, commission
         FROM {_table("experiment_trades")}
-        WHERE exp_id = @exp_id
+        WHERE exp_id = @exp_id {run_filter}
         ORDER BY ts DESC
         LIMIT @limit
     """
-    job_config = bigquery.QueryJobConfig(
-        query_parameters=[
-            bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id),
-            bigquery.ScalarQueryParameter("limit", "INT64", limit),
-        ]
-    )
+    params = [
+        bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id),
+        bigquery.ScalarQueryParameter("limit", "INT64", limit),
+    ]
+    if run_id:
+        params.append(bigquery.ScalarQueryParameter("run_id", "STRING", run_id))
+    job_config = bigquery.QueryJobConfig(query_parameters=params)
     try:
         rows = client.query(query, job_config=job_config).result()
         result = []
@@ -177,6 +197,28 @@ async def trades(exp_id: str, limit: int = 200):
         return result
     except Exception as exc:
         logger.error("trades query error for %s: %s", exp_id, exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# GET /api/experiments/{exp_id}/runs — list all runs for an experiment
+# ---------------------------------------------------------------------------
+@app.get("/api/experiments/{exp_id}/runs")
+async def experiment_runs(exp_id: str):
+    """Return all runs for a given experiment (metadata from experiment_runs table)."""
+    client = _get_bq()
+    query = f"""
+        SELECT run_id, status, started_at, ended_at, base_run
+        FROM {_table("experiment_runs")}
+        WHERE exp_id = '{exp_id}'
+        ORDER BY started_at DESC
+    """
+    try:
+        rows = client.query(query).result()
+        return [_row_to_dict(r, ["run_id", "status", "started_at", "ended_at", "base_run"])
+                for r in rows]
+    except Exception as exc:
+        logger.error("experiment_runs query error for %s: %s", exp_id, exc)
         return []
 
 
