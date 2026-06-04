@@ -507,103 +507,133 @@ body {
       </div>
     </div>
 
-    <!-- ═══════ DETAIL TAB ═══════ -->
-    <div v-if="activeTab === 'detail'">
-      <div class="detail-controls">
-        <select v-model="selectedExp" @change="onSelectExperiment">
-          <option value="">— Select experiment —</option>
-          <option v-for="exp in experiments" :key="exp.exp_id" :value="exp.exp_id">
-            {{ exp.exp_id }}
+    <!-- ═══════ LIVE TAB ═══════ -->
+    <div v-if="activeTab === 'live'">
+      <div style="margin-bottom:16px;display:flex;gap:10px;align-items:center;">
+        <select v-model="selectedLiveExp" @change="loadLiveExperiment"
+                style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;">
+          <option value="">— Select Experiment —</option>
+          <option v-for="e in liveExperiments" :value="e.exp_id">
+            {{ e.exp_id }} <template v-if="e.status">[{{ e.status }}]</template>
           </option>
         </select>
-        <div class="detail-metrics" v-if="latestPoint">
-          <div class="detail-metric">
-            <div class="val" style="color:var(--text-primary)">{{ fmtUSD(latestPoint.equity, 0) }}</div>
-            <div class="lbl">Equity</div>
-          </div>
-          <div class="detail-metric">
-            <div :class="['val', latestPoint.daily_pnl >= 0 ? 'exp-pnl pos' : 'exp-pnl neg']">
-              {{ fmtUSD(latestPoint.daily_pnl) }}
-            </div>
-            <div class="lbl">Daily PnL</div>
-          </div>
-          <div class="detail-metric">
-            <div class="val exp-pnl neg">{{ fmtPct(latestPoint.drawdown) }}</div>
-            <div class="lbl">Drawdown</div>
-          </div>
-        </div>
+        <select v-if="selectedLiveExp" v-model="selectedRun" @change="loadLiveExperiment"
+                style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;">
+          <option value="">— Latest Run —</option>
+          <option v-for="r in currentRuns" :value="r.run_id">
+            {{ r.run_id }} [{{ r.status }}]
+          </option>
+        </select>
       </div>
 
-      <div v-if="!selectedExp" class="empty-state">Select an experiment to view details.</div>
-      <div v-else-if="loading.equity" class="empty-state"><span class="spinner"></span> Loading...</div>
-      <template v-else>
-        <!-- Equity Curve Chart -->
-        <div class="chart-container">
-          <div ref="equityChartRef" class="plotly" style="width:100%;height:380px"></div>
-        </div>
-        <!-- Drawdown Chart -->
-        <div class="chart-container">
-          <div ref="drawdownChartRef" class="plotly" style="width:100%;height:200px"></div>
-        </div>
+      <!-- Equity card -->
+      <div v-if="selectedLiveExp" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+        <div class="metric-card"><div class="metric-label">Bar</div><div class="metric-value">{{ latestPoint?.bar }}</div></div>
+        <div class="metric-card"><div class="metric-label">Equity</div><div class="metric-value">{{ fmtUSD(latestPoint?.equity) }}</div></div>
+        <div class="metric-card"><div class="metric-label">Daily PnL</div><div :class="['metric-value', (latestPoint?.daily_pnl||0) >= 0 ? 'green' : 'red']">{{ fmtUSD(latestPoint?.daily_pnl) }}</div></div>
+        <div class="metric-card"><div class="metric-label">Drawdown</div><div class="metric-value red">{{ fmtPct(latestPoint?.drawdown) }}</div></div>
+      </div>
 
-        <!-- Current Positions -->
-        <h3 style="text-align:left;margin:20px 0 12px;">📋 Current Positions</h3>
-        <div class="trades-table-wrap">
-          <table class="trades-table">
-            <thead>
-              <tr>
-                <th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Current</th>
-                <th>PnL</th><th>PnL %</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="!positions || !positions.length">
-                <td colspan="6" class="empty-state">No open positions.</td>
-              </tr>
-              <tr v-for="p in paginatedPositions" :key="p.symbol">
-                <td style="font-weight:600">{{ p.symbol }}</td>
-                <td>{{ p.qty }}</td>
-                <td>{{ fmtUSD(p.avg_cost, 2) }}</td>
-                <td>{{ fmtUSD(p.current_price, 2) }}</td>
-                <td :style="{color: p.pnl >= 0 ? 'var(--green)' : 'var(--red)'}">{{ fmtUSD(p.pnl, 2) }}</td>
-                <td :style="{color: p.pnl_pct >= 0 ? 'var(--green)' : 'var(--red)'}">{{ fmtPct(p.pnl_pct/100) }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <div v-if="positions && positions.length > pageSize" style="display:flex;justify-content:center;gap:8px;margin-top:12px;">
-            <button v-for="p in totalPages" :key="p" @click="posPage = p" :style="{background:p===posPage?'var(--blue)':'var(--bg-card)',color:'var(--text)',border:'1px solid var(--border)',borderRadius:'4px',padding:'4px 12px',cursor:'pointer'}">{{ p }}</button>
-          </div>
-        </div>
+      <!-- Chart -->
+      <div ref="equityChartRef" class="plotly" style="width:100%;height:380px"></div>
+      <div ref="drawdownChartRef" class="plotly" style="width:100%;height:200px"></div>
 
-        <h3 style="text-align:left;margin:20px 0 12px;">📜 Recent Trades</h3>
-        <!-- Recent Trades -->
-        <div class="trades-table-wrap">
-          <table class="trades-table">
-            <thead>
-              <tr>
-                <th>Time</th><th>Bar</th><th>Symbol</th><th>Side</th>
-                <th>Qty</th><th>Price</th><th>Commission</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="!trades.length">
-                <td colspan="7" class="empty-state">No trades recorded.</td>
-              </tr>
-              <tr v-for="t in trades" :key="t.ts + t.bar + t.symbol">
-                <td>{{ fmtTime(t.ts) }}</td>
-                <td>#{{ t.bar }}</td>
-                <td style="font-weight:600">{{ t.symbol }}</td>
-                <td :class="t.side === 'BUY' ? 'side-buy' : 'side-sell'">{{ t.side }}</td>
-                <td>{{ Math.round(t.qty*100)/100 }}</td>
-                <td>{{ fmtUSD(t.price, 2) }}</td>
-                <td style="color:var(--text-muted)">{{ fmtUSD(t.commission, 4) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </template>
+      <!-- Positions -->
+      <h4 style="margin-top:16px;">Positions</h4>
+      <table class="trades-table">
+        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>PnL</th><th>PnL%</th></tr></thead>
+        <tbody>
+          <tr v-for="p in positions" :key="p.symbol">
+            <td style="font-weight:600">{{ p.symbol }}</td>
+            <td>{{ Math.round(p.qty*100)/100 }}</td>
+            <td>{{ fmtUSD(p.avg_cost, 2) }}</td>
+            <td>{{ fmtUSD(p.current_price, 2) }}</td>
+            <td :class="p.pnl >= 0 ? 'green' : 'red'">{{ fmtUSD(p.pnl, 2) }}</td>
+            <td :class="p.pnl_pct >= 0 ? 'green' : 'red'">{{ p.pnl_pct.toFixed(2) }}%</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Trades -->
+      <h4 style="margin-top:16px;">Recent Trades</h4>
+      <table class="trades-table">
+        <thead><tr><th>Time</th><th>Bar</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th></tr></thead>
+        <tbody>
+          <tr v-for="t in trades" :key="t.ts + t.bar + t.symbol">
+            <td>{{ fmtTime(t.ts) }}</td>
+            <td>#{{ t.bar }}</td>
+            <td style="font-weight:600">{{ t.symbol }}</td>
+            <td :class="t.side === 'BUY' ? 'side-buy' : 'side-sell'">{{ t.side }}</td>
+            <td>{{ Math.round(t.qty*100)/100 }}</td>
+            <td>{{ fmtUSD(t.price, 2) }}</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
 
+    <!-- ═══════ PROD TAB ═══════ -->
+    <div v-if="activeTab === 'prod'">
+      <div style="margin-bottom:16px;display:flex;gap:10px;align-items:center;">
+        <select v-model="selectedProdExp" @change="loadProdExperiment"
+                style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;">
+          <option value="">— Select Experiment —</option>
+          <option v-for="e in prodExperiments" :value="e.exp_id">
+            {{ e.exp_id }} <template v-if="e.status">[{{ e.status }}]</template>
+          </option>
+        </select>
+        <select v-if="selectedProdExp" v-model="selectedRun" @change="loadProdExperiment"
+                style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;">
+          <option value="">— Latest Run —</option>
+          <option v-for="r in currentRuns" :value="r.run_id">
+            {{ r.run_id }} [{{ r.status }}]
+          </option>
+        </select>
+      </div>
+
+      <!-- Equity card -->
+      <div v-if="selectedProdExp" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+        <div class="metric-card"><div class="metric-label">Bar</div><div class="metric-value">{{ latestPoint?.bar }}</div></div>
+        <div class="metric-card"><div class="metric-label">Equity</div><div class="metric-value">{{ fmtUSD(latestPoint?.equity) }}</div></div>
+        <div class="metric-card"><div class="metric-label">Daily PnL</div><div :class="['metric-value', (latestPoint?.daily_pnl||0) >= 0 ? 'green' : 'red']">{{ fmtUSD(latestPoint?.daily_pnl) }}</div></div>
+        <div class="metric-card"><div class="metric-label">Drawdown</div><div class="metric-value red">{{ fmtPct(latestPoint?.drawdown) }}</div></div>
+      </div>
+
+      <!-- Chart -->
+      <div ref="equityChartRef" class="plotly" style="width:100%;height:380px"></div>
+      <div ref="drawdownChartRef" class="plotly" style="width:100%;height:200px"></div>
+
+      <!-- Positions -->
+      <h4 style="margin-top:16px;">Positions</h4>
+      <table class="trades-table">
+        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>PnL</th><th>PnL%</th></tr></thead>
+        <tbody>
+          <tr v-for="p in positions" :key="p.symbol">
+            <td style="font-weight:600">{{ p.symbol }}</td>
+            <td>{{ Math.round(p.qty*100)/100 }}</td>
+            <td>{{ fmtUSD(p.avg_cost, 2) }}</td>
+            <td>{{ fmtUSD(p.current_price, 2) }}</td>
+            <td :class="p.pnl >= 0 ? 'green' : 'red'">{{ fmtUSD(p.pnl, 2) }}</td>
+            <td :class="p.pnl_pct >= 0 ? 'green' : 'red'">{{ p.pnl_pct.toFixed(2) }}%</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Trades -->
+      <h4 style="margin-top:16px;">Recent Trades</h4>
+      <table class="trades-table">
+        <thead><tr><th>Time</th><th>Bar</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th></tr></thead>
+        <tbody>
+          <tr v-for="t in trades" :key="t.ts + t.bar + t.symbol">
+            <td>{{ fmtTime(t.ts) }}</td>
+            <td>#{{ t.bar }}</td>
+            <td style="font-weight:600">{{ t.symbol }}</td>
+            <td :class="t.side === 'BUY' ? 'side-buy' : 'side-sell'">{{ t.side }}</td>
+            <td>{{ Math.round(t.qty*100)/100 }}</td>
+            <td>{{ fmtUSD(t.price, 2) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <!-- ═══════ PIPELINE TAB ═══════ -->
     <div v-if="activeTab === 'pipeline'">
       <div v-if="loading.pipeline" class="empty-state">
@@ -660,6 +690,15 @@ body {
 
     <!-- ═══════ PAPER RUN TAB ═══════ -->
     <div v-if="activeTab === 'paper'">
+      <div style="margin-bottom:16px;display:flex;gap:10px;align-items:center;">
+        <select v-model="selectedPaperExp"
+                style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;">
+          <option value="">— Select Paper Experiment —</option>
+          <option v-for="e in paperExperiments" :value="e.exp_id">
+            {{ e.exp_id }} <template v-if="e.status">[{{ e.status }}]</template>
+          </option>
+        </select>
+      </div>
       <div class="paper-run-layout">
         <!-- Left: Run Selector -->
         <div class="paper-sidebar">
@@ -794,6 +833,14 @@ const app = createApp({
     const equityData = ref([]);
     const trades = ref([]);
     const positions = ref([]);
+    const liveExperiments = ref([]);
+    const paperExperiments = ref([]);
+    const prodExperiments = ref([]);
+    const selectedLiveExp = ref('');
+    const selectedPaperExp = ref('');
+    const selectedProdExp = ref('');
+    const selectedRun = ref('');
+    const currentRuns = ref([]);
     const posPage = ref(1);
     const pageSize = 10;
     // ── Paper Run state ──
@@ -813,8 +860,9 @@ const app = createApp({
 
     const tabs = [
       { id: 'overview', label: 'Overview' },
-      { id: 'detail', label: 'Live Experiment' },
+      { id: 'live', label: 'Live' },
       { id: 'paper', label: 'Paper Run' },
+      { id: 'prod', label: 'Prod' },
       { id: 'pipeline', label: 'Pipeline' },
       { id: 'alerts', label: 'Alerts' },
     ];
@@ -1049,6 +1097,52 @@ const app = createApp({
       if (data) positions.value = data;
     }
 
+    async function loadTypedExperiments() {
+      const all = await fetchJSON('/api/experiments');
+      const meta = await fetchJSON('/api/experiments/meta');
+      if (!all || !meta) return;
+      const bqMap = {};
+      all.forEach(e => { bqMap[e.exp_id] = e; });
+      const enrich = (m) => ({
+        ...m,
+        ...(bqMap[m.exp_id] || { bar: 0, equity: 0, cash: 0, daily_pnl: 0, drawdown: 0 }),
+      });
+      liveExperiments.value = meta.filter(m => m.exp_id.startsWith('live_')).map(enrich);
+      paperExperiments.value = meta.filter(m => m.exp_id.startsWith('paper_')).map(enrich);
+      prodExperiments.value = meta.filter(m => m.exp_id.startsWith('prod_')).map(enrich);
+    }
+
+    async function loadLiveExperiment() {
+      if (!selectedLiveExp.value) return;
+      const runParam = selectedRun.value ? `?run_id=${selectedRun.value}` : '';
+      equityData.value = await fetchJSON(`/api/equity/${selectedLiveExp.value}${runParam}`) || [];
+      trades.value = await fetchJSON(`/api/trades/${selectedLiveExp.value}${runParam}`) || [];
+      positions.value = await fetchJSON(`/api/experiments/${selectedLiveExp.value}/positions`) || [];
+      currentRuns.value = await fetchJSON(`/api/experiments/${selectedLiveExp.value}/runs`) || [];
+      await nextTick();
+      renderEquityChart();
+      renderDrawdownChart();
+    }
+
+    async function loadProdExperiment() {
+      if (!selectedProdExp.value) return;
+      const runParam = selectedRun.value ? `?run_id=${selectedRun.value}` : '';
+      equityData.value = await fetchJSON(`/api/equity/${selectedProdExp.value}${runParam}`) || [];
+      trades.value = await fetchJSON(`/api/trades/${selectedProdExp.value}${runParam}`) || [];
+      positions.value = await fetchJSON(`/api/experiments/${selectedProdExp.value}/positions`) || [];
+      currentRuns.value = await fetchJSON(`/api/experiments/${selectedProdExp.value}/runs`) || [];
+      await nextTick();
+      renderEquityChart();
+      renderDrawdownChart();
+    }
+
+    async function refresh() {
+      await Promise.all([
+        loadTypedExperiments(),
+        loadPipeline(),
+      ]);
+    }
+
     // ── WebSocket ──
     let ws = null;
     function connectWS() {
@@ -1202,6 +1296,8 @@ const app = createApp({
       } catch(e) { console.error('Init error:', e); }
       connectWS();
       startTimers();
+      refresh();
+      setInterval(refresh, 30000);
     });
     onUnmounted(() => {
       stopTimers();
@@ -1210,7 +1306,8 @@ const app = createApp({
     // ── Watch activeTab to load pipeline when switching ──
     watch(activeTab, (tab) => {
       if (tab === 'pipeline') loadPipeline();
-      if (tab === 'paper') { loadPaperRuns(); }
+      if (tab === 'paper') { loadTypedExperiments(); loadPaperRuns(); }
+      if (tab === 'live' || tab === 'prod') loadTypedExperiments();
     });
 
     return {
@@ -1238,6 +1335,11 @@ const app = createApp({
       timeAgo,
       onSelectExperiment,
       refreshAll,
+      // ── Typed Experiments ──
+      liveExperiments, paperExperiments, prodExperiments,
+      selectedLiveExp, selectedPaperExp, selectedProdExp,
+      selectedRun, currentRuns,
+      loadTypedExperiments, loadLiveExperiment, loadProdExperiment, refresh,
       // ── Paper Run ──
       paperRuns, selectedPaperRun, paperRun,
       loadPaperRuns, loadPaperRun, renderPaperEquityChart,
