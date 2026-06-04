@@ -48,9 +48,10 @@
 ```
 
 **环境分离：**
-- **开发**: `/opt/quant-dev/` — 代码开发、测试、PR
-- **生产**: `/opt/quant-prod/` — 实盘数据采集、Live 实验
+- **主工作目录**: `/opt/quant-dev/` — **所有开发必须在此完成**（代码开发、测试、PR）
+- **生产**: `/opt/quant-prod/` — 只做数据采集、入库、实盘交易
 - **流程**: dev → git commit → PR → CI → merge stable → CD → prod
+- **禁止在 prod 直接开发**, 禁止在 prod 执行训练/回测/因子计算等开发操作
 
 **关键路径：**
 - 数据流: Futu OpenD → ws_collector → BQ → LiveRunner → Dashboard
@@ -532,6 +533,25 @@ ID 由 `{type}_{market}_{strategy}_v{version}` 自动生成，不在 yaml 中硬
 - 不同类型实验互相不可见，杜绝串扰
 
 ---
+
+### 8.8 Debug 实验（开发调试专用）
+
+**目的**：代码改动先走 debug 实验验证，确认无误后再应用到正式实验。
+
+**配置**：`live/configs/debug_us_ml.yaml`（type=debug，数据完全隔离）
+
+**启动**：
+```bash
+cd /opt/quant-prod
+.venv/bin/python3 live/run.py --config live/configs/debug_us_ml.yaml
+```
+
+**Dashboard**：Debug Tab 自动过滤 `debug_*` 实验，不会和 Live/Prod/Paper 混在一起。
+
+**约束**：
+- 验证代码改动 → 用 debug config 启动
+- 观察结果确认 OK → 再应用到正式实验
+- 禁止直接在正式实验上 debug（每次重启都会产生新 run_id + BQ 垃圾数据）
 
 ## 9. Live Runner 子系统
 
