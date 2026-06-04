@@ -166,9 +166,15 @@ async def trades(exp_id: str, limit: int = 200):
     )
     try:
         rows = client.query(query, job_config=job_config).result()
-        return [_row_to_dict(r, ["ts", "bar", "symbol", "side",
+        result = []
+        for r in rows:
+            d = _row_to_dict(r, ["ts", "bar", "symbol", "side",
                                   "qty", "price", "commission"])
-                for r in rows]
+            # Pad HK symbols to 5 digits (stored bare, display with leading zeros)
+            if "hk" in exp_id and d.get("symbol"):
+                d["symbol"] = d["symbol"].zfill(5)
+            result.append(d)
+        return result
     except Exception as exc:
         logger.error("trades query error for %s: %s", exp_id, exc)
         return []
@@ -181,14 +187,15 @@ async def paper_runs(limit: int = 50, status: str | None = None):
     """List paper runs, most recent first. Optional status filter."""
     client = _get_bq()
     try:
-        where = ""
-        if status:
-            where = f"WHERE status = '{status}'"
+        # Dedup: return only the latest status per run_id
         query = f"""
             SELECT run_id, name, strategy, market, status, n_periods,
                    created_at, error_msg
-            FROM {_table("paper_runs")}
-            {where}
+            FROM (
+              SELECT *, ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY created_at DESC) AS rn
+              FROM {_table("paper_runs")}
+            )
+            WHERE rn = 1
             ORDER BY created_at DESC
             LIMIT {min(limit, 200)}
         """
@@ -209,12 +216,13 @@ async def paper_run_detail(run_id: str):
     """
     client = _get_bq()
     try:
-        # Run metadata
+        # Run metadata (latest status by created_at)
         run_query = f"""
             SELECT run_id, name, strategy, market, status, n_periods,
                    config_json, created_at, error_msg
             FROM {_table("paper_runs")}
             WHERE run_id = '{run_id}'
+            ORDER BY created_at DESC LIMIT 1
         """
         run_rows = list(client.query(run_query).result())
         if not run_rows:
@@ -233,10 +241,14 @@ async def paper_run_detail(run_id: str):
             """
             m_rows = list(client.query(m_query).result())
             if m_rows:
-                m_names = [f.name for f in m_rows[0].fields]
+                m_names = ["run_id", "total_return", "annual_return", "annual_vol",
+                          "sharpe", "sortino", "max_drawdown", "calmar",
+                          "win_rate", "total_trades", "profit_factor",
+                          "start_equity", "end_equity", "computed_at"]
                 metrics = _row_to_dict(m_rows[0], m_names)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("paper_metrics query failed")
+            metrics = {"error": str(e)}
 
         # Equity curve (from experiment_equity)
         equity = []
@@ -266,6 +278,11 @@ async def paper_run_detail(run_id: str):
             t_rows = client.query(t_query).result()
             t_names = ["ts", "bar", "symbol", "side", "qty", "price", "commission"]
             trades = [_row_to_dict(r, t_names) for r in t_rows]
+            # Pad HK symbols to 5 digits
+            if run.get("market", "").lower() == "hk":
+                for t in trades:
+                    if t.get("symbol"):
+                        t["symbol"] = t["symbol"].zfill(5)
         except Exception:
             pass
 
@@ -305,7 +322,9 @@ async def pipeline():
 
     try:
         q = f"""
-            SELECT MAX(timestamp) AS latest FROM {_table("us_bars_5m")}
+            SELECT MAX(
+              TIMESTAMP(DATETIME(timestamp), "America/New_York")
+            ) AS latest FROM {_table("us_bars_5m")}
             WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
         """
         rows = list(client.query(q).result())
@@ -316,7 +335,9 @@ async def pipeline():
 
     try:
         q = f"""
-            SELECT MAX(timestamp) AS latest FROM {_table("hk_bars_5m")}
+            SELECT MAX(
+              TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)
+            ) AS latest FROM {_table("hk_bars_5m")}
             WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
         """
         rows = list(client.query(q).result())
@@ -506,6 +527,9 @@ async def experiment_positions(exp_id: str):
             market = 'hk' if 'hk' in exp_id else 'us'
             bare = sym
         prefix = 'US.' if market == 'us' else 'HK.'
+        # HK symbols need 5-digit zero-padding (Futu format: HK.01186 not HK.1186)
+        if market == 'hk':
+            bare = bare.zfill(5)
         bq_sym = f"{prefix}{bare}"
         table = _table(f"{market}_bars_5m")
         try:
@@ -534,19 +558,32 @@ async def experiment_positions(exp_id: str):
 
 @app.get("/api/market/{market}/{symbol}")
 async def market_bars(market: str, symbol: str, limit: int = 78):
-    """Return today's 5m OHLCV bars for a symbol."""
+    """Return today's 5m OHLCV bars for a symbol, with timestamps corrected to UTC."""
     client = _get_bq()
     table = _table(f"{market}_bars_5m")
     full_symbol = f"{'US' if market == 'us' else 'HK'}.{symbol}"
+
+    # Timezone correction: bars stored as local time, convert to UTC
+    if market == "hk":
+        ts_expr = "TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)"
+    else:  # us
+        ts_expr = 'TIMESTAMP(DATETIME(timestamp), "America/New_York")'
+
     query = f"""
+        WITH dedup AS (
+          SELECT {ts_expr} AS timestamp, open, high, low, close, volume,
+            ROW_NUMBER() OVER (PARTITION BY symbol, timestamp ORDER BY _ingest_time DESC NULLS LAST) AS rn
+          FROM `{table}`
+          WHERE symbol = '{full_symbol}'
+            AND {ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
+        )
         SELECT timestamp, open, high, low, close, volume
-        FROM `{table}`
-        WHERE symbol = '{full_symbol}'
-          AND timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
-        ORDER BY timestamp
+        FROM dedup WHERE rn = 1
+        ORDER BY timestamp DESC
         LIMIT {limit}
     """
-    rows = client.query(query).result()
+    rows = list(client.query(query).result())
+    rows.reverse()  # oldest first for chart display
     return [{"ts": _serialize(r.timestamp), "o": r.open, "h": r.high,
              "l": r.low, "c": r.close, "v": r.volume} for r in rows]
 
