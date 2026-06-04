@@ -641,32 +641,65 @@ class ModelTrainer:
 
     # ── Prediction ─────────────────────────────────────────────────
 
-    def predict(self, model, df: pd.DataFrame) -> pd.Series:
-        """Generate predictions for a DataFrame.
+    @staticmethod
+    def _is_tree_model(model) -> bool:
+        """Check if model is a tree-based model that handles NaN natively."""
+        if isinstance(model, lgb.Booster):
+            return True
+        if hasattr(model, "_Booster") or hasattr(model, "booster_"):
+            return True  # LGBMRegressor, LGBMClassifier, XGBoost
+        model_class = type(model).__name__.lower()
+        return any(kw in model_class for kw in ("lgbm", "xgb", "catboost"))
 
-        Uses scaler if fitted, otherwise raw features with NaN fill.
+    def predict(
+        self, model, df: pd.DataFrame,
+        fillna_method: str = "median", fillna_value: float | None = None,
+    ) -> pd.Series:
+        """Generate predictions from a feature DataFrame.
+
+        Tree models (LightGBM, XGBoost) handle NaN natively — no
+        imputation needed. Other models use fillna with configurable
+        method (default: median).
 
         Args:
-            model: Trained model.
+            model: Trained model (lgb.Booster, LGBMRegressor, sklearn, etc).
             df: DataFrame with feature columns.
+            fillna_method: Imputation method for non-tree models.
+                "median", "mean", "ffill", "bfill", or "value".
+            fillna_value: Value to use when fillna_method="value".
 
         Returns:
-            Flat pd.Series of predictions, indexed by the clean DataFrame's index.
+            Flat pd.Series of predictions, indexed by the input DataFrame.
         """
-        df_clean = df.dropna(subset=self.feature_cols)
-        X_raw = df_clean[self.feature_cols].values.astype(np.float64)
+        X = df[self.feature_cols].copy()
 
-        use_scaler = hasattr(self.scaler, "mean_") and not isinstance(model, lgb.Booster)
-        if use_scaler:
-            X = self.scaler.transform(X_raw)
+        # Tree models handle NaN natively
+        if self._is_tree_model(model):
+            X_arr = X.values.astype(np.float64)
+            if isinstance(model, lgb.Booster):
+                preds = model.predict(X_arr)
+            else:
+                preds = model.predict(X_arr)
+            return pd.Series(preds.flatten(), index=df.index, name="prediction")
+
+        # Non-tree models: impute NaN
+        if fillna_method == "value" and fillna_value is not None:
+            X = X.fillna(fillna_value)
+        elif fillna_method in ("median", "mean"):
+            X = X.fillna(getattr(X, fillna_method)())
+        elif fillna_method in ("ffill", "bfill"):
+            X = X.fillna(method=fillna_method)
         else:
-            col_means = np.nanmean(X_raw, axis=0)
-            inds = np.where(np.isnan(X_raw))
-            X_raw[inds] = np.take(col_means, inds[1])
-            X = X_raw
+            raise ValueError(f"Unknown fillna_method: {fillna_method}")
 
-        preds = model.predict(X)
-        return pd.Series(preds.flatten(), index=df_clean.index, name="prediction")
+        X_arr = X.values.astype(np.float64)
+
+        use_scaler = hasattr(self.scaler, "mean_")
+        if use_scaler:
+            X_arr = self.scaler.transform(X_arr)
+
+        preds = model.predict(X_arr)
+        return pd.Series(preds.flatten(), index=df.index, name="prediction")
 
     # ── Save / Load ────────────────────────────────────────────────
 
