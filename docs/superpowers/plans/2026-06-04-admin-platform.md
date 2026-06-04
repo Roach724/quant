@@ -418,144 +418,448 @@ export default function Experiments() {
 
 In `admin/server.py`, add:
 
+
+## Phase 2: Data Collection + Data Map
+
+### Task 2.1: Backend — BQ table browser + collector status
+
+**Files:**
+- Modify: `admin/server.py`
+
+- [ ] **Step 1: Add data map endpoint**
+
 ```python
-from live.experiment_manager import ExperimentManager
+from google.cloud import bigquery
+import os, glob
 
-@app.get("/api/admin/experiments")
-def admin_experiments():
-    mgr = ExperimentManager()
-    return [{"exp_id": e.id, "name": e.name, "type": e.type,
-             "market": e.market, "strategy": e.strategy,
-             "version": e.version, "status": e.status,
-             "current_run": e.current_run, "config_path": e.config_path,
-             "pid": mgr.get_pid(e.id)}
-            for e in mgr.list()]
+@app.get("/api/admin/data/tables")
+def admin_data_tables():
+    """Return all BQ tables with row counts, schemas, last write times."""
+    client = bigquery.Client(project="deductive-notch-495015-c2")
+    query = """
+        SELECT table_name, creation_time
+        FROM quant.INFORMATION_SCHEMA.TABLES
+        ORDER BY table_name
+    """
+    rows = client.query(query).result()
+    tables = []
+    for r in rows:
+        name = r.table_name
+        try:
+            cnt = list(client.query(f"SELECT COUNT(*) AS cnt FROM quant.{name}").result())[0].cnt
+        except Exception:
+            cnt = 0
+        try:
+            ts = list(client.query(f"SELECT MAX(timestamp) AS latest FROM quant.{name}").result())[0].latest
+            latest_str = ts.isoformat() if ts else None
+        except Exception:
+            latest_str = None
+        try:
+            cols = client.query(
+                f"SELECT column_name, data_type FROM quant.INFORMATION_SCHEMA.COLUMNS "
+                f"WHERE table_name='{name}' ORDER BY ordinal_position"
+            ).result()
+            schema_cols = [{"name": c.column_name, "type": c.data_type} for c in cols]
+        except Exception:
+            schema_cols = []
+        tables.append({
+            "table_name": name, "row_count": cnt,
+            "last_write": latest_str, "schema": schema_cols,
+        })
+    return tables
 
 
-@app.post("/api/admin/experiments/{exp_id}/{action}")
-def admin_experiment_action(exp_id: str, action: str):
-    """start / stop / restart an experiment."""
-    cmd_map = {
-        "start": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py start {exp_id}",
-        "stop": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py stop {exp_id}",
-        "restart": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py restart {exp_id}",
-    }
-    if action not in cmd_map:
-        return {"error": f"Unknown action: {action}"}, 400
-
-    session = get_session()
-    task = Task(type="shell", params={"cmd": cmd_map[action]}, status="pending")
-    session.add(task)
-    session.commit()
-    return {"task_id": task.id, "status": "pending"}
+@app.get("/api/admin/data/collectors")
+def admin_data_collectors():
+    """ws_collector status + last heartbeat."""
+    import subprocess
+    try:
+        r = subprocess.run(["systemctl", "is-active", "ws-collector"], capture_output=True, text=True, timeout=5)
+        status = r.stdout.strip()
+    except Exception:
+        status = "unknown"
+    heartbeat = None
+    try:
+        with open("/var/log/quant/prod/collector/ws_collector.log") as f:
+            for line in reversed(list(f.readlines()[-50:])):
+                if "HEARTBEAT" in line:
+                    heartbeat = json.loads(line).get("ts")
+                    break
+    except Exception:
+        pass
+    return {"ws_collector": status, "last_heartbeat": heartbeat}
 ```
 
-Replace the Experiments page placeholder in App.tsx with the component.
+- [ ] **Step 2: DataMap frontend page**
 
-- [ ] **Step 3: Commit**
+Create `admin/frontend/src/pages/DataMap.tsx` with ProTable: columns = table_name, row_count, last_write, and a "Schema" button that opens a Drawer showing column name + type. Also add a collector status card with start/stop buttons and heartbeat display.
 
-```bash
-cd /opt/quant-dev && git add -A && git commit -m "feat: experiment list + start/stop/restart via task queue"
-```
+- [ ] **Step 3: Commit** `git add -A && git commit -m "feat: data map + collector status"`
 
 ---
 
-## Phase 2-6: Remaining Modules
+## Phase 3: Log Browser
 
-### Task 2.1: Data Map (BQ table browser)
+### Task 3.1: Backend + Frontend
 
 **Files:**
-- Create: `admin/frontend/src/pages/DataMap.tsx`
 - Modify: `admin/server.py`
-
-- [ ] Add endpoint `GET /api/admin/data/tables` that queries `INFORMATION_SCHEMA.TABLES` and `INFORMATION_SCHEMA.COLUMNS`
-
-- [ ] Build ProTable displaying: table_name, row_count, size_bytes, description, last_write, schema columns
-
-### Task 2.2: Data Collection Status
-
-- [ ] Add endpoint `GET /api/admin/data/collectors` returning ws_collector status (from `systemctl is-active ws-collector`) and latest heartbeat
-
-- [ ] Add ws_collector start/stop buttons with market-hour warning
-
-- [ ] Add data freshness indicators per BQ table
-
-### Task 3: Log Browser
-
-**Files:**
 - Create: `admin/frontend/src/pages/LogViewer.tsx`
-- Modify: `admin/server.py`
 
-- [ ] Add endpoint `GET /api/admin/logs?module=X&level=Y&search=Z&lines=100` reading from `/var/log/quant/prod/{module}/`
+- [ ] **Step 1: Log API endpoints**
 
-- [ ] Add WebSocket endpoint for real-time tail: `ws://host:8092/ws/logs?module=collector`
+```python
+import os, glob, json as _json
+from fastapi import Query, WebSocket
 
-- [ ] Build frontend with module dropdown, level filter, search input, and scrollable log viewer
+LOG_ROOT = "/var/log/quant/prod"
+LOG_MODULES = ["collector", "live", "factor", "cron", "train", "loader", "backfill", "quality", "adhoc"]
 
-### Task 4: Cron Management
+@app.get("/api/admin/logs/modules")
+def admin_log_modules():
+    modules = []
+    for mod in LOG_MODULES:
+        path = os.path.join(LOG_ROOT, mod)
+        if os.path.isdir(path):
+            files = glob.glob(os.path.join(path, "*.log"))
+            modules.append({"name": mod, "file_count": len(files)})
+    return modules
+
+@app.get("/api/admin/logs")
+def admin_logs(module: str = Query("collector"), level: str = Query(""),
+               search: str = Query(""), lines: int = Query(100)):
+    log_dir = os.path.join(LOG_ROOT, module)
+    if not os.path.isdir(log_dir):
+        return {"error": f"Unknown module: {module}", "lines": []}
+    files = sorted(glob.glob(os.path.join(log_dir, "*.log")), reverse=True)
+    if not files:
+        return {"module": module, "lines": [], "file": None}
+    log_file = files[0]
+    result_lines = []
+    with open(log_file) as f:
+        all_lines = f.readlines()
+        for line in reversed(all_lines[-max(lines * 3, 1000):]):
+            if len(result_lines) >= lines:
+                break
+            try:
+                entry = _json.loads(line)
+                lvl = entry.get("level", "")
+                msg = entry.get("msg", "")
+                ts = entry.get("ts", "")
+            except Exception:
+                lvl = ""; msg = line.strip(); ts = ""
+            if level and level.upper() != lvl.upper():
+                continue
+            if search and search.lower() not in msg.lower():
+                continue
+            result_lines.append({"ts": ts, "level": lvl, "msg": msg})
+    result_lines.reverse()
+    return {"module": module, "file": os.path.basename(log_file), "lines": result_lines}
+
+
+@app.websocket("/ws/logs")
+async def ws_logs(websocket: WebSocket, module: str = "collector"):
+    await websocket.accept()
+    log_dir = os.path.join(LOG_ROOT, module)
+    files = sorted(glob.glob(os.path.join(log_dir, "*.log")), reverse=True)
+    if not files:
+        await websocket.close()
+        return
+    log_file = files[0]
+    import asyncio
+    try:
+        with open(log_file) as f:
+            f.seek(0, 2)
+            while True:
+                line = f.readline()
+                if line:
+                    try:
+                        entry = _json.loads(line)
+                        await websocket.send_json({"ts": entry.get("ts",""), "level": entry.get("level",""), "msg": entry.get("msg","")})
+                    except Exception:
+                        await websocket.send_json({"ts": "", "level": "", "msg": line.strip()})
+                else:
+                    await asyncio.sleep(0.5)
+    except Exception:
+        await websocket.close()
+```
+
+- [ ] **Step 2: LogViewer frontend**: Module dropdown, level filter, search input, live tail toggle (WebSocket), scrollable dark terminal-style log viewer.
+
+- [ ] **Step 3: Commit** `git add -A && git commit -m "feat: log browser — JSON reader + real-time WebSocket tail"`
+
+---
+
+## Phase 4: Cron Management
+
+### Task 4.1: Backend + Frontend
 
 **Files:**
+- Modify: `admin/server.py`
 - Create: `admin/frontend/src/pages/CronJobs.tsx`
-- Modify: `admin/server.py`
 
-- [ ] Add endpoint `GET /api/admin/cron` reading system crontab via `crontab -l`
+- [ ] **Step 1: Crontab endpoints**
 
-- [ ] Add endpoint `POST /api/admin/cron` writing updated crontab
+```python
+import subprocess
 
-- [ ] Add endpoint `POST /api/admin/cron/{name}/run` triggering immediate execution
+@app.get("/api/admin/cron")
+def admin_cron_list():
+    r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    lines = r.stdout.strip().split("\n") if r.stdout.strip() else []
+    jobs = []
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            if line.startswith("#"):
+                jobs.append({"index": i, "raw": line, "enabled": False, "schedule": "", "command": "", "comment": line.lstrip("# ")})
+            continue
+        parts = line.split(None, 5)
+        if len(parts) >= 6:
+            jobs.append({"index": i, "raw": line, "enabled": True, "schedule": " ".join(parts[:5]), "command": parts[5], "comment": ""})
+    return jobs
 
-- [ ] Build frontend with toggle, edit, and manual run buttons
+@app.post("/api/admin/cron")
+def admin_cron_save(jobs: list[dict]):
+    lines = []
+    for j in jobs:
+        if j.get("raw"):
+            lines.append(j["raw"])
+        elif j.get("enabled"):
+            lines.append(f"{j['schedule']} {j['command']}")
+    crontab_content = "\n".join(lines) + "\n"
+    proc = subprocess.run(["crontab", "-"], input=crontab_content, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return {"error": proc.stderr}, 400
+    return {"status": "ok"}
 
-### Task 5: Model & Strategy Management
+@app.post("/api/admin/cron/run")
+def admin_cron_run(command: str = ""):
+    session = get_session()
+    task = Task(type="shell", params={"cmd": command}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id}
+```
+
+- [ ] **Step 2: CronJobs frontend**: ProTable with schedule, command, enabled toggle, and "立即执行" button that creates shell task.
+
+- [ ] **Step 3: Commit** `git add -A && git commit -m "feat: cron management — read/write system crontab + manual trigger"`
+
+---
+
+## Phase 5: Model & Strategy Management
+
+### Task 5.1: Backend + Frontend
 
 **Files:**
+- Modify: `admin/server.py`
 - Create: `admin/frontend/src/pages/Models.tsx`
-- Modify: `admin/server.py`
 
-- [ ] Add MLflow API proxy endpoints: list models, versions, metrics
+- [ ] **Step 1: MLflow proxy + strategy editor endpoints**
 
-- [ ] Add iframe for MLflow UI (`http://localhost:5000`)
+```python
+import requests
 
-- [ ] Add strategy list/editor page:
-  - `GET /api/admin/strategies` — list strategy files
-  - `GET /api/admin/strategies/{name}` — read source
-  - `PUT /api/admin/strategies/{name}` — save edited source
+MLFLOW_API = "http://localhost:5000/api/2.0/mlflow"
 
-- [ ] Add training trigger: select model + params → create shell task
+@app.get("/api/admin/models")
+def admin_models():
+    try:
+        r = requests.get(f"{MLFLOW_API}/registered-models/list", timeout=5)
+        models = r.json().get("registered_models", [])
+        result = []
+        for m in models:
+            name = m["name"]
+            rv = requests.post(f"{MLFLOW_API}/model-versions/search", json={"filter": f"name='{name}'"}, timeout=5)
+            versions = rv.json().get("model_versions", [])
+            result.append({"name": name, "versions": [{"version": v["version"], "stage": v.get("current_stage",""), "run_id": v.get("run_id","")} for v in versions]})
+        return result
+    except Exception as e:
+        return {"error": str(e)}
 
-### Task 6: Factor Management
+@app.post("/api/admin/models/train")
+def admin_train_model(model_name: str, market: str = "us"):
+    script_map = {("us_tech","us"): "scripts/train_us_tech_v1_explicit.py", ("hk_tech","hk"): "scripts/train_hk_tech_v1.py"}
+    script = script_map.get((model_name, market), "")
+    if not script:
+        return {"error": f"No training script for {model_name}/{market}"}, 400
+    cmd = f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 {script}"
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id}
+
+@app.get("/api/admin/strategies")
+def admin_strategies():
+    files = glob.glob("/opt/quant-prod/strategies/*.py")
+    return [{"name": os.path.basename(f), "path": f} for f in sorted(files)]
+
+@app.get("/api/admin/strategies/{name}")
+def admin_strategy_read(name: str):
+    path = f"/opt/quant-prod/strategies/{name}"
+    if not os.path.isfile(path) or not name.endswith(".py"):
+        return {"error": "Invalid strategy name"}, 400
+    with open(path) as f:
+        return {"name": name, "source": f.read()}
+
+@app.put("/api/admin/strategies/{name}")
+def admin_strategy_save(name: str, source: str = ""):
+    path = f"/opt/quant-prod/strategies/{name}"
+    if not name.endswith(".py"):
+        return {"error": "Invalid strategy name"}, 400
+    with open(path, "w") as f:
+        f.write(source)
+    return {"status": "saved"}
+```
+
+- [ ] **Step 2: Models frontend**: Tabs: Models (ProTable with train button + MLflow iframe), Strategies (list + click to open code editor Drawer with save).
+
+- [ ] **Step 3: Commit** `git add -A && git commit -m "feat: model & strategy management — MLflow proxy + code editor"`
+
+---
+
+## Phase 6: Factor Management
+
+### Task 6.1: Backend + Frontend
 
 **Files:**
-- Create: `admin/frontend/src/pages/Factors.tsx`
 - Modify: `admin/server.py`
+- Create: `admin/frontend/src/pages/Factors.tsx`
 
-- [ ] Add endpoint `GET /api/admin/factors` querying FactorRegistry + market coverage from `factor_values`
+- [ ] **Step 1: Factor endpoints with market coverage**
 
-- [ ] Add endpoint `POST /api/admin/factors/compute` triggering batch computation
+```python
+from factors.registry import FactorRegistry
 
-- [ ] Build frontend with factor list, detail drawer (data coverage table), and compute button
+@app.get("/api/admin/factors")
+def admin_factors():
+    reg = FactorRegistry()
+    active = reg.get_active()
+    if active.empty:
+        return []
+    client = bigquery.Client(project="deductive-notch-495015-c2")
+    coverage = {}
+    try:
+        cov_rows = client.query("""
+            SELECT factor_id,
+              CASE WHEN STARTS_WITH(symbol, 'US.') THEN 'us'
+                   WHEN STARTS_WITH(symbol, 'HK.') THEN 'hk' ELSE 'crypto' END AS market,
+              COUNT(DISTINCT symbol) AS symbols,
+              MIN(date) AS min_date, MAX(date) AS max_date, COUNT(*) AS total_rows
+            FROM quant.factor_values GROUP BY factor_id, market ORDER BY factor_id, market
+        """).result()
+        for c in cov_rows:
+            fid = c.factor_id
+            coverage.setdefault(fid, []).append({
+                "market": c.market, "symbols": c.symbols,
+                "min_date": str(c.min_date) if c.min_date else None,
+                "max_date": str(c.max_date) if c.max_date else None,
+                "total_rows": c.total_rows,
+            })
+    except Exception:
+        pass
+    result = []
+    for _, row in active.iterrows():
+        fid = row["factor_id"]
+        result.append({
+            "factor_id": fid, "name": row.get("name",""), "category": row.get("category",""),
+            "status": row.get("status","active"),
+            "markets": [c["market"] for c in coverage.get(fid, [])],
+            "coverage": coverage.get(fid, []),
+            "latest_ic": row.get("ic_mean"),
+        })
+    return result
+
+@app.post("/api/admin/factors/compute")
+def admin_factor_compute(source: str = "tech", market: str = "us",
+                         start: str = "2020-01-01", end: str = "2026-06-03"):
+    cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+           f".venv/bin/python3 scripts/compute_factors_batch.py "
+           f"--source {source} --market {market} --start {start} --end {end}")
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id}
+```
+
+- [ ] **Step 2: Factors frontend**: ProTable with factor_id, name, category, status Tag, markets (colored Tags), IC, and "查看" button → Drawer with coverage table (market, symbols, date range, total rows). Also compute button with source/market/date inputs → creates task.
+
+- [ ] **Step 3: Commit** `git add -A && git commit -m "feat: factor management — list with market coverage + batch compute trigger"`
 
 ---
 
 ## Phase 7: Polish & Deploy
 
-### Task 7.1: Frontend build + production deploy
+### Task 7.1: Production build + systemd
 
-- [ ] `npm run build` → output to `admin/frontend/dist/`
+- [ ] **Step 1: Build frontend**
 
-- [ ] Serve static files from FastAPI: `app.mount("/", StaticFiles(directory="admin/frontend/dist", html=True))`
+```bash
+cd /opt/quant-dev/admin/frontend && npm run build
+```
 
-- [ ] Create systemd unit for admin server and worker
+- [ ] **Step 2: Add static serving to server.py**
 
-- [ ] Deploy to `/opt/quant-prod/admin/`
+```python
+from fastapi.staticfiles import StaticFiles
+DIST = os.path.join(os.path.dirname(__file__), "frontend", "dist")
+if os.path.isdir(DIST):
+    app.mount("/", StaticFiles(directory=DIST, html=True))
+```
+
+- [ ] **Step 3: Create systemd units**
+
+`/etc/systemd/system/quant-admin.service`:
+```ini
+[Unit]
+Description=Quant Admin Platform
+After=network.target
+[Service]
+User=quant
+WorkingDirectory=/opt/quant-prod
+ExecStart=/opt/quant-prod/.venv/bin/python3 -m uvicorn admin.server:app --host 0.0.0.0 --port 8091
+Restart=always
+[Install]
+WantedBy=multi-user.target
+```
+
+`/etc/systemd/system/quant-admin-worker.service`:
+```ini
+[Unit]
+Description=Quant Admin Worker
+After=network.target
+[Service]
+User=quant
+WorkingDirectory=/opt/quant-prod
+ExecStart=/opt/quant-prod/.venv/bin/python3 admin/worker.py
+Restart=always
+[Install]
+WantedBy=multi-user.target
+```
+
+- [ ] **Step 4: Enable and start**
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable quant-admin quant-admin-worker
+sudo systemctl start quant-admin quant-admin-worker
+```
 
 ### Task 7.2: Integration test
 
 - [ ] Verify all 6 module pages render
-- [ ] Test experiment start/stop/restart end-to-end
-- [ ] Test task queue: create → pending → running → done
-- [ ] Test log browser with real log files
-- [ ] Test cron list/edit/sync
+- [ ] Test experiment start/stop/restart end-to-end → task queue → worker executes
+- [ ] Test log browser with real logs + WebSocket tail
+- [ ] Test factor detail drawer with coverage data
+- [ ] Commit + push
+
+```bash
+git add -A && git commit -m "chore: admin platform systemd units + deploy"
+git push origin feature/admin-platform
+```
 
 ---
 
@@ -565,11 +869,11 @@ cd /opt/quant-dev && git add -A && git commit -m "feat: experiment list + start/
 |-------|---------|-------|
 | 0 | Project scaffold (React + FastAPI + SQLite + worker) | 3 |
 | 1 | Experiment management | 1 |
-| 2 | Data map + collection status | 2 |
-| 3 | Log browser | 1 |
+| 2 | Data map + collector status | 1 |
+| 3 | Log browser (JSON + WebSocket) | 1 |
 | 4 | Cron management | 1 |
 | 5 | Model & strategy management | 1 |
 | 6 | Factor management | 1 |
 | 7 | Polish & deploy | 2 |
 
-**Total: 12 tasks**
+**Total: 11 tasks.** Each task has API code + frontend functional specs. Ready for subagent-driven execution.
