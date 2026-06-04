@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────
 REGISTRY_PATH = "/var/quant/experiments/registry.json"
-VALID_TYPES = frozenset({"live", "paper", "prod"})
+VALID_TYPES = frozenset({"live", "paper", "prod", "debug"})
 VALID_MARKETS = frozenset({"us", "hk", "crypto"})
 BQ_PROJECT = "deductive-notch-495015-c2"
 BQ_DATASET = "quant"
