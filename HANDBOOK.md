@@ -534,6 +534,25 @@ ID 由 `{type}_{market}_{strategy}_v{version}` 自动生成，不在 yaml 中硬
 
 ---
 
+### 8.8 Debug 实验（开发调试专用）
+
+**目的**：代码改动先走 debug 实验验证，确认无误后再应用到正式实验。
+
+**配置**：`live/configs/debug_us_ml.yaml`（type=debug，数据完全隔离）
+
+**启动**：
+```bash
+cd /opt/quant-prod
+.venv/bin/python3 live/run.py --config live/configs/debug_us_ml.yaml
+```
+
+**Dashboard**：Debug Tab 自动过滤 `debug_*` 实验，不会和 Live/Prod/Paper 混在一起。
+
+**约束**：
+- 验证代码改动 → 用 debug config 启动
+- 观察结果确认 OK → 再应用到正式实验
+- 禁止直接在正式实验上 debug（每次重启都会产生新 run_id + BQ 垃圾数据）
+
 ## 9. Live Runner 子系统
 
 ### 9.1 概述
