@@ -97,9 +97,11 @@ class BQDataSource:
         today_open = now_local.replace(hour=open_h, minute=open_m, second=0, microsecond=0)
 
         if now_local >= today_open:
-            seed = today_open
-        else:
+            # Market is open — start from yesterday to replay all historical bars
             seed = today_open - td(days=1)
+        else:
+            # Market hasn't opened yet — start from 2 days ago
+            seed = today_open - td(days=2)
 
         # Return as plain string (no tz suffix) — BQ treats as UTC
         return seed.strftime("%Y-%m-%d %H:%M:%S")
