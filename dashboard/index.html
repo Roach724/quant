@@ -440,7 +440,7 @@ body {
             </div>
             <div class="exp-metrics">
               <div>
-                <div class="exp-metric-label">Daily PnL</div>
+                <div class="exp-metric-label">Day PnL</div>
                 <div :class="['exp-metric-value', 'exp-pnl', exp.daily_pnl >= 0 ? 'pos' : 'neg']">
                   {{ fmtUSD(exp.daily_pnl) }}
                 </div>
@@ -530,7 +530,8 @@ body {
       <div v-if="selectedLiveExp" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
         <div class="metric-card"><div class="metric-label">Bar</div><div class="metric-value">{{ latestPoint?.bar }}</div></div>
         <div class="metric-card"><div class="metric-label">Equity</div><div class="metric-value">{{ fmtUSD(latestPoint?.equity) }}</div></div>
-        <div class="metric-card"><div class="metric-label">Daily PnL</div><div :class="['metric-value', (latestPoint?.daily_pnl||0) >= 0 ? 'green' : 'red']">{{ fmtUSD(latestPoint?.daily_pnl) }}</div></div>
+        <div class="metric-card"><div class="metric-label">Day PnL</div><div :class="['metric-value', (latestPoint?.daily_pnl||0) >= 0 ? 'green' : 'red']">{{ fmtUSD(latestPoint?.daily_pnl) }}</div></div>
+        <div class="metric-card"><div class="metric-label">Total PnL</div><div :class="['metric-value', (positionsSummary?.pnl||0) >= 0 ? 'green' : 'red']">{{ fmtUSD(positionsSummary?.pnl) }}</div></div>
         <div class="metric-card"><div class="metric-label">Drawdown</div><div class="metric-value red">{{ fmtPct(latestPoint?.drawdown) }}</div></div>
       </div>
 
@@ -541,23 +542,35 @@ body {
       <!-- Positions -->
       <h4 style="margin-top:16px;">Positions</h4>
       <table class="trades-table">
-        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>PnL</th><th>PnL%</th></tr></thead>
+        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>Mkt Value</th><th>Total PnL</th><th>Total PnL%</th></tr></thead>
         <tbody>
           <tr v-for="p in positions" :key="p.symbol">
             <td style="font-weight:600">{{ p.symbol }}</td>
             <td>{{ Math.round(p.qty*100)/100 }}</td>
             <td>{{ fmtUSD(p.avg_cost, 2) }}</td>
             <td>{{ fmtUSD(p.current_price, 2) }}</td>
+            <td>{{ fmtUSD(p.qty * p.current_price, 0) }}</td>
             <td :class="p.pnl >= 0 ? 'green' : 'red'">{{ fmtUSD(p.pnl, 2) }}</td>
             <td :class="p.pnl_pct >= 0 ? 'green' : 'red'">{{ p.pnl_pct.toFixed(2) }}%</td>
           </tr>
         </tbody>
+        <tfoot v-if="positionsSummary" style="border-top:2px solid var(--border);font-weight:700">
+          <tr>
+            <td>Total</td>
+            <td>{{ Math.round(positionsSummary.qty*100)/100 }}</td>
+            <td>{{ fmtUSD(positionsSummary.avg_cost, 2) }}</td>
+            <td>{{ fmtUSD(positionsSummary.price, 2) }}</td>
+            <td>{{ fmtUSD(positionsSummary.mkt_value, 0) }}</td>
+            <td :class="positionsSummary.pnl >= 0 ? 'green' : 'red'">{{ fmtUSD(positionsSummary.pnl, 2) }}</td>
+            <td :class="positionsSummary.pnl_pct >= 0 ? 'green' : 'red'">{{ positionsSummary.pnl_pct.toFixed(2) }}%</td>
+          </tr>
+        </tfoot>
       </table>
 
       <!-- Trades -->
       <h4 style="margin-top:16px;">Recent Trades</h4>
       <table class="trades-table">
-        <thead><tr><th>Time</th><th>Bar</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th></tr></thead>
+        <thead><tr><th>Time</th><th>Bar</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Value</th></tr></thead>
         <tbody>
           <tr v-for="t in trades" :key="t.ts + t.bar + t.symbol">
             <td>{{ fmtTime(t.ts) }}</td>
@@ -566,6 +579,7 @@ body {
             <td :class="t.side === 'BUY' ? 'side-buy' : 'side-sell'">{{ t.side }}</td>
             <td>{{ Math.round(t.qty*100)/100 }}</td>
             <td>{{ fmtUSD(t.price, 2) }}</td>
+            <td>{{ fmtUSD(t.qty * t.price, 0) }}</td>
           </tr>
         </tbody>
       </table>
@@ -594,7 +608,8 @@ body {
       <div v-if="selectedProdExp" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
         <div class="metric-card"><div class="metric-label">Bar</div><div class="metric-value">{{ latestPoint?.bar }}</div></div>
         <div class="metric-card"><div class="metric-label">Equity</div><div class="metric-value">{{ fmtUSD(latestPoint?.equity) }}</div></div>
-        <div class="metric-card"><div class="metric-label">Daily PnL</div><div :class="['metric-value', (latestPoint?.daily_pnl||0) >= 0 ? 'green' : 'red']">{{ fmtUSD(latestPoint?.daily_pnl) }}</div></div>
+        <div class="metric-card"><div class="metric-label">Day PnL</div><div :class="['metric-value', (latestPoint?.daily_pnl||0) >= 0 ? 'green' : 'red']">{{ fmtUSD(latestPoint?.daily_pnl) }}</div></div>
+        <div class="metric-card"><div class="metric-label">Total PnL</div><div :class="['metric-value', (positionsSummary?.pnl||0) >= 0 ? 'green' : 'red']">{{ fmtUSD(positionsSummary?.pnl) }}</div></div>
         <div class="metric-card"><div class="metric-label">Drawdown</div><div class="metric-value red">{{ fmtPct(latestPoint?.drawdown) }}</div></div>
       </div>
 
@@ -605,23 +620,35 @@ body {
       <!-- Positions -->
       <h4 style="margin-top:16px;">Positions</h4>
       <table class="trades-table">
-        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>PnL</th><th>PnL%</th></tr></thead>
+        <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>Mkt Value</th><th>Total PnL</th><th>Total PnL%</th></tr></thead>
         <tbody>
           <tr v-for="p in positions" :key="p.symbol">
             <td style="font-weight:600">{{ p.symbol }}</td>
             <td>{{ Math.round(p.qty*100)/100 }}</td>
             <td>{{ fmtUSD(p.avg_cost, 2) }}</td>
             <td>{{ fmtUSD(p.current_price, 2) }}</td>
+            <td>{{ fmtUSD(p.qty * p.current_price, 0) }}</td>
             <td :class="p.pnl >= 0 ? 'green' : 'red'">{{ fmtUSD(p.pnl, 2) }}</td>
             <td :class="p.pnl_pct >= 0 ? 'green' : 'red'">{{ p.pnl_pct.toFixed(2) }}%</td>
           </tr>
         </tbody>
+        <tfoot v-if="positionsSummary" style="border-top:2px solid var(--border);font-weight:700">
+          <tr>
+            <td>Total</td>
+            <td>{{ Math.round(positionsSummary.qty*100)/100 }}</td>
+            <td>{{ fmtUSD(positionsSummary.avg_cost, 2) }}</td>
+            <td>{{ fmtUSD(positionsSummary.price, 2) }}</td>
+            <td>{{ fmtUSD(positionsSummary.mkt_value, 0) }}</td>
+            <td :class="positionsSummary.pnl >= 0 ? 'green' : 'red'">{{ fmtUSD(positionsSummary.pnl, 2) }}</td>
+            <td :class="positionsSummary.pnl_pct >= 0 ? 'green' : 'red'">{{ positionsSummary.pnl_pct.toFixed(2) }}%</td>
+          </tr>
+        </tfoot>
       </table>
 
       <!-- Trades -->
       <h4 style="margin-top:16px;">Recent Trades</h4>
       <table class="trades-table">
-        <thead><tr><th>Time</th><th>Bar</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th></tr></thead>
+        <thead><tr><th>Time</th><th>Bar</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Value</th></tr></thead>
         <tbody>
           <tr v-for="t in trades" :key="t.ts + t.bar + t.symbol">
             <td>{{ fmtTime(t.ts) }}</td>
@@ -630,6 +657,7 @@ body {
             <td :class="t.side === 'BUY' ? 'side-buy' : 'side-sell'">{{ t.side }}</td>
             <td>{{ Math.round(t.qty*100)/100 }}</td>
             <td>{{ fmtUSD(t.price, 2) }}</td>
+            <td>{{ fmtUSD(t.qty * t.price, 0) }}</td>
           </tr>
         </tbody>
       </table>
@@ -833,6 +861,22 @@ const app = createApp({
     const equityData = ref([]);
     const trades = ref([]);
     const positions = ref([]);
+    const positionsSummary = computed(() => {
+      const ps = positions.value || [];
+      if (!ps.length) return null;
+      const totalQty = ps.reduce((s, p) => s + (p.qty || 0), 0);
+      const totalCost = ps.reduce((s, p) => s + (p.qty || 0) * (p.avg_cost || 0), 0);
+      const totalMkt = ps.reduce((s, p) => s + (p.qty || 0) * (p.current_price || 0), 0);
+      const totalPnl = totalMkt - totalCost;
+      return {
+        qty: totalQty,
+        avg_cost: totalCost / totalQty,
+        price: totalMkt / totalQty,
+        mkt_value: totalMkt,
+        pnl: totalPnl,
+        pnl_pct: totalCost > 0 ? (totalPnl / totalCost) * 100 : 0,
+      };
+    });
     const liveExperiments = ref([]);
     const paperExperiments = ref([]);
     const prodExperiments = ref([]);
@@ -965,7 +1009,8 @@ const app = createApp({
           gridcolor: '#334155',
           zerolinecolor: '#334155',
           color: '#94a3b8',
-          tickformat: '.1%',
+          tickformat: '.1f',
+          ticksuffix: '%',
         },
         showlegend: false,
         dragmode: false,
@@ -1322,7 +1367,7 @@ const app = createApp({
       pipeline,
       equityData,
       trades,
-      positions, posPage, pageSize, totalPages, paginatedPositions,
+      positions, positionsSummary, posPage, pageSize, totalPages, paginatedPositions,
       loading,
       tabs,
       equityChartRef,
