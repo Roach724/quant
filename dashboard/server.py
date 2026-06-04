@@ -142,7 +142,7 @@ async def equity_series(exp_id: str, run_id: str = ""):
         latest_q = f"""
             SELECT run_id FROM {_table("experiment_equity")}
             WHERE exp_id = @exp_id
-            ORDER BY bar DESC LIMIT 1
+            ORDER BY ts DESC LIMIT 1
         """
         latest_rows = list(client.query(latest_q, job_config=bigquery.QueryJobConfig(
             query_parameters=[bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id)]
