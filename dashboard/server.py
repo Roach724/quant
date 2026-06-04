@@ -137,6 +137,18 @@ async def equity_series(exp_id: str, run_id: str = ""):
         run_id: filter by specific run. Useful for experiments with multiple runs.
     """
     client = _get_bq()
+    if not run_id:
+        # Default to latest run — avoid showing all historical runs overlapped
+        latest_q = f"""
+            SELECT run_id FROM {_table("experiment_equity")}
+            WHERE exp_id = @exp_id
+            ORDER BY bar DESC LIMIT 1
+        """
+        latest_rows = list(client.query(latest_q, job_config=bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id)]
+        )).result())
+        if latest_rows:
+            run_id = latest_rows[0].run_id or ""
     run_filter = f"AND run_id = '{run_id}'" if run_id else ""
     query = f"""
         SELECT ts, bar, equity, cash, portfolio_value, daily_pnl, drawdown, run_id
