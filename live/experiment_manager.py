@@ -66,7 +66,10 @@ class Experiment:
 
     @property
     def can_start(self) -> bool:
-        """Ready to start: pending, paused (resume), completed (replay), or archived (revive)."""
+        """Ready to start: pending, paused (resume), completed (replay), archived (revive),
+        or running with no current run (migrated experiment)."""
+        if self.status == "running" and not self.current_run:
+            return True
         return self.status in ("pending", "paused", "completed", "archived")
 
     @property
