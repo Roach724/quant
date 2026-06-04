@@ -118,7 +118,8 @@ class PaperRunRunner:
             return result
 
         # 3. Load equity curve from observer output
-        output_dir = Path(self.config.get("live", {}).get("output_dir", "output/live/"))
+        # LiveRunner sets config["_output_dir"] to the timestamped subdirectory
+        output_dir = Path(self.config.get("_output_dir", self.config.get("live", {}).get("output_dir", "output/live/")))
         equity_path = output_dir / "equity_curve.csv"
         if not equity_path.exists():
             logger.error("No equity curve found at %s", equity_path)
@@ -157,7 +158,7 @@ class PaperRunRunner:
         self, status: str, started_at: datetime,
         n_periods: int | None = None, error: str | None = None,
     ) -> None:
-        """Write/update paper_runs row."""
+        """Write paper_runs row (each status update gets a fresh timestamp for ordering)."""
         rows = [{
             "run_id": self.run_id,
             "name": self.config.get("experiment", {}).get("name", self.run_id),
@@ -169,15 +170,18 @@ class PaperRunRunner:
             "n_periods": n_periods,
             "config_json": json.dumps(self.config, default=str),
             "error_msg": error,
-            "created_at": started_at.isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }]
         write_rows_to_bq(pd.DataFrame(rows), table_name=TABLE_PAPER_RUNS)
 
     def _write_metrics(self, metrics: dict) -> None:
         """Write computed metrics to paper_metrics table."""
+        # Only include fields that exist in the table schema
+        schema_fields = {f.name for f in PAPER_METRICS_SCHEMA} - {"run_id", "computed_at"}
+        filtered = {k: v for k, v in metrics.items() if k in schema_fields}
         rows = [{
             "run_id": self.run_id,
-            **metrics,
+            **filtered,
             "computed_at": datetime.now(timezone.utc).isoformat(),
         }]
         write_rows_to_bq(pd.DataFrame(rows), table_name=TABLE_PAPER_METRICS)

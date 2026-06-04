@@ -56,8 +56,7 @@ class ModelRegistry:
 
     @classmethod
     def _tracking_uri(cls) -> str:
-        home = os.environ.get("HOME", "/root")
-        return f"sqlite:///{home}/.mlflow/mlflow.db"
+        return "http://127.0.0.1:5000"
 
     # ── Init ────────────────────────────────────────────────────────────
 
@@ -67,12 +66,8 @@ class ModelRegistry:
         if cls._initialized:
             return
 
-        tracking_uri = cls._tracking_uri()
-        db_dir = os.path.dirname(tracking_uri.replace("sqlite:///", ""))
-        os.makedirs(db_dir, exist_ok=True)
         os.makedirs(cls._ARTIFACT_ROOT, exist_ok=True)
-
-        mlflow.set_tracking_uri(tracking_uri)
+        mlflow.set_tracking_uri(cls._tracking_uri())
 
         try:
             mlflow.create_experiment("quant", artifact_location=cls._ARTIFACT_ROOT)
@@ -81,7 +76,7 @@ class ModelRegistry:
 
         mlflow.set_experiment("quant")
         cls._initialized = True
-        logger.info("ModelRegistry initialised: %s", tracking_uri)
+        logger.info("ModelRegistry initialised: %s", cls._tracking_uri())
 
     # ── Helpers ─────────────────────────────────────────────────────────
 

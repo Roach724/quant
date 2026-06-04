@@ -124,6 +124,8 @@ def write_factor_values(
             val = row[col]
             if pd.isna(val):
                 continue
+            if np.isinf(float(val)):
+                continue
             rows.append(
                 {
                     "factor_id": f"{market}_{col}",

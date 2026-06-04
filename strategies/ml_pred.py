@@ -81,70 +81,21 @@ class MLPredStrategy(Strategy):
         return self._symbols if hasattr(self, '_symbols') and self._symbols else []
 
     def _load_model(self):
-        """Load trained model from ModelRegistry. Falls back to live training."""
-        try:
-            from ml.registry import ModelRegistry
-            bundle = ModelRegistry.load(self.model_name, self.model_version)
-            self._model = bundle.model
-            self._config = bundle.config
-            self._features = bundle.features
-            # Also store the trainer for predict
-            from ml.trainer import ModelTrainer
-            self._model_trainer = ModelTrainer(factor_path=None)
-            # Set feature_cols so predict() finds the right columns
-            self._model_trainer.feature_cols = self._features
-            logger.info("Loaded %s v%d (%d features)",
-                        bundle.name, bundle.version, len(bundle.features))
-            self._trained = True
-        except Exception:
-            logger.exception("Failed to load model from registry, falling back to BQ training")
-            symbols = self._get_symbols()
-            self._fallback_train(symbols)
-
-    def _fallback_train(self, symbols):
-        """Train LightGBM on historical factor data from BQ."""
+        """Load trained model from ModelRegistry. Fails fast if not found."""
+        from ml.registry import ModelRegistry
+        bundle = ModelRegistry.load(self.model_name, self.model_version)
+        self._model = bundle.model
+        self._config = bundle.config
+        self._features = bundle.features
+        # Also store the trainer for predict
         from ml.trainer import ModelTrainer
-        
-        trainer = ModelTrainer(factor_path=None)
-        df = trainer.load_from_bq(
-            symbols=symbols,
-            start=self.train_start,
-            end=self.train_end,
-            market=self.market,
-            top_n=self.factor_top_n,
-        )
-
-        if df.empty:
-            logger.warning("No factor data loaded for training")
-            return
-
-        n_trained = df["symbol"].nunique()
-        if n_trained < len(symbols):
-            logger.warning(
-                "Training on %d/%d symbols (missing historical data for %d)",
-                n_trained, len(symbols), len(symbols) - n_trained,
-            )
-
-        train_df, val_df, _ = trainer.split_data(
-            train_end="2024-12-31",
-            val_end=self.train_end,
-        )
-
-        if self.model_type == "lightgbm":
-            result = trainer.train_lightgbm(train_df, val_df)
-        elif self.model_type == "ridge":
-            result = trainer.train_ridge(train_df, val_df)
-        else:
-            logger.warning("Unknown model_type: %s", self.model_type)
-            return
-
-        self._model_trainer = trainer
-        self._model = result.get("model")
+        self._model_trainer = ModelTrainer(factor_path=None)
+        # Set feature_cols so predict() finds the right columns
+        self._model_trainer.feature_cols = self._features
+        logger.info("Loaded %s v%d (%d features)",
+                    bundle.name, bundle.version, len(bundle.features))
         self._trained = True
-        logger.info("MLPredStrategy trained: %d features, RMSE=%.4f",
-                     len(trainer.feature_cols),
-                     result.get("rmse_val", result.get("rmse", 0.0)))
-    
+
     def _is_trainer_broken(self):
         """Check if trainer and model are usable."""
         if self._model_trainer is None:

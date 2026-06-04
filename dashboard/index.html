@@ -928,9 +928,10 @@ const app = createApp({
       const el = equityChartRef.value;
       if (!el || !equityData.value.length) return;
       const bars = equityData.value.map(d => d.bar);
+      const timestamps = equityData.value.map(d => d.ts);
       const equity = equityData.value.map(d => d.equity);
       const trace = {
-        x: bars,
+        x: timestamps,
         y: equity,
         type: 'scatter',
         mode: 'lines',
@@ -948,9 +949,10 @@ const app = createApp({
       const el = drawdownChartRef.value;
       if (!el || !equityData.value.length) return;
       const bars = equityData.value.map(d => d.bar);
+      const timestamps = equityData.value.map(d => d.ts);
       const dd = equityData.value.map(d => (d.drawdown || 0) * 100); // pct
       const trace = {
-        x: bars,
+        x: timestamps,
         y: dd,
         type: 'scatter',
         mode: 'lines',
