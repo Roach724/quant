@@ -375,6 +375,9 @@ class ModelTrainer:
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Prepare feature matrix X and label vector y with scaling.
 
+        Linear models cannot handle NaN, so features are imputed before
+        scaling. Only rows with NaN label are dropped.
+
         Args:
             df: Input DataFrame.
             fit_scaler: If True, fit the scaler on this data (use for training).
@@ -382,34 +385,34 @@ class ModelTrainer:
         Returns:
             (X, y) arrays.
         """
-        df_clean = df.dropna(subset=self.feature_cols + [self.label_col])
-        X = df_clean[self.feature_cols].values.astype(np.float64)
+        df_clean = df.dropna(subset=[self.label_col])
+        X = df_clean[self.feature_cols].copy()
+        # Impute NaN with median before scaling (linear models need clean inputs)
+        X = X.fillna(X.median())
+        X_arr = X.values.astype(np.float64)
         y = df_clean[self.label_col].values.astype(np.float64)
 
         if fit_scaler:
-            X = self.scaler.fit_transform(X)
+            X_arr = self.scaler.fit_transform(X_arr)
         else:
-            X = self.scaler.transform(X)
+            X_arr = self.scaler.transform(X_arr)
 
-        return X, y
+        return X_arr, y
 
     def _prepare_raw_xy(
         self, df: pd.DataFrame
     ) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
-        """Prepare raw X/y for tree models (no scaling, NaN-fill with col means).
+        """Prepare raw X/y for tree models (no scaling, NaN passthrough).
+
+        Tree models (LightGBM/XGBoost) handle NaN natively, so features
+        are passed through as-is. Only rows with NaN label are dropped.
 
         Returns:
-            (df_clean, X, y) — X is NaN-filled raw features.
+            (df_clean, X, y)
         """
-        df_clean = df.dropna(subset=self.feature_cols + [self.label_col])
+        df_clean = df.dropna(subset=[self.label_col])
         X = df_clean[self.feature_cols].values.astype(np.float64)
         y = df_clean[self.label_col].values.astype(np.float64)
-
-        # NaN fill with column means
-        col_means = np.nanmean(X, axis=0)
-        inds = np.where(np.isnan(X))
-        X[inds] = np.take(col_means, inds[1])
-
         return df_clean, X, y
 
     # ── OLS Baseline ───────────────────────────────────────────────
@@ -588,18 +591,16 @@ class ModelTrainer:
         Returns:
             dict with keys: overall_rank_ic, mean_daily_ic, daily_ic_std, icir.
         """
-        df_clean = df.dropna(subset=self.feature_cols + [self.label_col])
+        df_clean = df.dropna(subset=[self.label_col])
 
-        # Prepare features: use scaler for linear models, raw for tree models
-        X_raw = df_clean[self.feature_cols].values.astype(np.float64)
+        # Prepare features: tree models pass NaN through, linear models fill
+        X_raw = df_clean[self.feature_cols].copy()
         use_scaler = hasattr(self.scaler, "mean_") and not isinstance(model, lgb.Booster)
         if use_scaler:
-            X = self.scaler.transform(X_raw)
+            X_raw = X_raw.fillna(X_raw.median())
+            X = self.scaler.transform(X_raw.values.astype(np.float64))
         else:
-            col_means = np.nanmean(X_raw, axis=0)
-            inds = np.where(np.isnan(X_raw))
-            X_raw[inds] = np.take(col_means, inds[1])
-            X = X_raw
+            X = X_raw.values.astype(np.float64)
 
         pred = model.predict(X)
         actual = df_clean[self.label_col].values
