@@ -1,5 +1,6 @@
 """Quant Admin Platform — FastAPI server."""
 
+import subprocess, json as _json
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Depends
@@ -8,6 +9,8 @@ from pydantic import BaseModel, field_serializer
 from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import Optional
+
+from google.cloud import bigquery
 
 from admin.models import init_db, get_session, Task
 from live.experiment_manager import ExperimentManager
@@ -125,6 +128,81 @@ def admin_experiment_action(exp_id: str, action: str):
         return {"error": f"Unknown action: {action}"}, 400
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd_map[action]}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id, "status": "pending"}
+
+
+# ── Data Map + Collector status ──────────────────────────────────────────────
+
+@app.get("/api/admin/data/tables")
+def admin_data_tables():
+    """Return all BQ tables with row counts, schemas, last write times."""
+    client = bigquery.Client(project="deductive-notch-495015-c2")
+    query = """
+        SELECT table_name, creation_time
+        FROM quant.INFORMATION_SCHEMA.TABLES
+        ORDER BY table_name
+    """
+    rows = client.query(query).result()
+    tables = []
+    for r in rows:
+        name = r.table_name
+        try:
+            cnt = list(client.query(f"SELECT COUNT(*) AS cnt FROM quant.{name}").result())[0].cnt
+        except Exception:
+            cnt = 0
+        try:
+            ts = list(client.query(f"SELECT MAX(timestamp) AS latest FROM quant.{name}").result())[0].latest
+            latest_str = ts.isoformat() if ts else None
+        except Exception:
+            latest_str = None
+        try:
+            cols = client.query(
+                f"SELECT column_name, data_type FROM quant.INFORMATION_SCHEMA.COLUMNS "
+                f"WHERE table_name='{name}' ORDER BY ordinal_position"
+            ).result()
+            schema_cols = [{"name": c.column_name, "type": c.data_type} for c in cols]
+        except Exception:
+            schema_cols = []
+        tables.append({
+            "table_name": name, "row_count": cnt,
+            "last_write": latest_str, "schema": schema_cols,
+        })
+    return tables
+
+
+@app.get("/api/admin/data/collectors")
+def admin_data_collectors():
+    """ws_collector status + last heartbeat."""
+    try:
+        r = subprocess.run(
+            ["systemctl", "is-active", "ws-collector"],
+            capture_output=True, text=True, timeout=5,
+        )
+        status = r.stdout.strip()
+    except Exception:
+        status = "unknown"
+    heartbeat = None
+    try:
+        with open("/var/log/quant/prod/collector/ws_collector.log") as f:
+            lines = f.readlines()
+            for line in reversed(lines[-100:]):
+                if "HEARTBEAT" in line:
+                    heartbeat = _json.loads(line).get("ts")
+                    break
+    except Exception:
+        pass
+    return {"ws_collector": status, "last_heartbeat": heartbeat}
+
+
+@app.post("/api/admin/data/collector/{action}")
+def admin_collector_action(action: str):
+    if action not in ("start", "stop", "restart"):
+        return {"error": f"Unknown action: {action}"}, 400
+    cmd = f"sudo systemctl {action} ws-collector"
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd}, status="pending")
     session.add(task)
     session.commit()
     return {"task_id": task.id, "status": "pending"}

@@ -3,7 +3,8 @@ import {
   PauseCircleOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import ProTable, { ProColumns, ActionType } from '@ant-design/pro-table';
+import ProTable from '@ant-design/pro-table';
+import type { ProColumns, ActionType } from '@ant-design/pro-table';
 import { Tag, Button, Space, message, Tooltip } from 'antd';
 import { useRef } from 'react';
 import { api } from '../api';
@@ -48,7 +49,7 @@ const pollTask = (taskId: number): Promise<{ status: string; result: string | nu
 };
 
 const Experiments: React.FC = () => {
-  const actionRef = useRef<ActionType>();
+  const actionRef = useRef<ActionType | undefined>(undefined);
 
   const handleAction = async (expId: string, action: string) => {
     try {
