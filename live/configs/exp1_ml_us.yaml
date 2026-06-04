@@ -17,7 +17,7 @@ strategy:
   market: us
   model_type: lightgbm
   model_name: us_tech
-  model_version: 1
+  model_version: 2
   train_start: "2020-01-01"
   train_end: "2025-12-31"
   top_k: 5

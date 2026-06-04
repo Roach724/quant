@@ -40,5 +40,5 @@ state:
   checkpoint_interval: 300
 
 experiment:
-  id: exp4_momentum_hk
-  name: "Exp4 — SimpleMomentum HK (control)"
+  id: exp4_momentum_hk_v2
+  name: "Exp4 — SimpleMomentum HK v2 (control)"
