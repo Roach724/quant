@@ -17,7 +17,7 @@ strategy:
   market: hk
   model_type: lightgbm
   model_name: hk_tech
-  model_version: 1
+  model_version: 3
   train_start: "2020-01-01"
   train_end: "2025-12-31"
   top_k: 5
@@ -40,9 +40,9 @@ observer:
 
 state:
   enabled: true
-  dir: output/live/state_ml_hk/
+  dir: /var/quant/state/ml_hk/
   checkpoint_interval: 300
 
 experiment:
-  id: exp3_ml_hk
-  name: "Exp3 — MLPredStrategy hk_tech v1 (HK, 4 days, $1M)"
+  id: exp3_ml_hk_v3
+  name: "Exp3 — MLPredStrategy hk_tech v3 (HK, 4 days, $1M)"

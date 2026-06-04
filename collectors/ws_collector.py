@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-from live.calendar import MarketCalendar
+from live.market_calendar import MarketCalendar
 
 from storage import write_bars_to_gcs
 
@@ -109,14 +109,19 @@ def _desired_symbols() -> set[str]:
 # ── K-line handler ──
 
 class BarHandler(CurKlineHandlerBase):
-    """Receives completed 5m K-line bars and appends to a shared buffer."""
+    """Receives K-line bar updates; keeps latest OHLCV per (symbol, timestamp).
+
+    CurKlineHandlerBase pushes the current incomplete bar multiple times as
+    OHLCV expands. We keep the LATEST update (most complete OHLCV) per key.
+    """
 
     def __init__(self, buffer: list, label: str = ""):
         super().__init__()
         self.buffer = buffer
         self.label = label
         self.bar_count = 0
-        self._seen: set[tuple[str, str]] = set()  # (symbol, timestamp) dedup
+        self._latest: dict[tuple[str, str], dict] = {}  # (symbol, timestamp) → bar
+        self._already_flushed: set[tuple[str, str]] = set()  # keys already written to BQ
 
     def on_recv_rsp(self, rsp_pb):
         ret_code, data = super().on_recv_rsp(rsp_pb)
@@ -124,13 +129,9 @@ class BarHandler(CurKlineHandlerBase):
             logger.warning("[%s] Handler error: %s", self.label, data)
             return ret_code, data
 
-        new_bars = 0
         for _, row in data.iterrows():
             key = (row.get("code", ""), str(row["time_key"]))
-            if key in self._seen:
-                continue
-            self._seen.add(key)
-            self.buffer.append({
+            self._latest[key] = {
                 "symbol": row.get("code", ""),
                 "timestamp": row["time_key"],
                 "open": float(row["open"]),
@@ -138,12 +139,41 @@ class BarHandler(CurKlineHandlerBase):
                 "low": float(row["low"]),
                 "close": float(row["close"]),
                 "volume": int(float(row["volume"])),
-            })
-            new_bars += 1
-        if new_bars < len(data):
-            logger.debug("[%s] Dedup: %d/%d bars skipped", self.label, len(data) - new_bars, len(data))
-        self.bar_count += new_bars
+            }
+        self.bar_count += len(data)
         return ret_code, data
+
+    def drain_to_buffer(self) -> int:
+        """Drain completed bars (not the current per-symbol bar) to the buffer.
+
+        Only drains bars whose timestamp is NOT the latest per symbol.
+        The latest bar per symbol is kept in _latest until a newer timestamp
+        arrives, ensuring we capture the most complete OHLCV.
+
+        Thread-safe: dict operations are atomic under the GIL.
+
+        Returns number of bars moved.
+        """
+        if not self._latest:
+            return 0
+
+        # Find latest timestamp per symbol
+        latest_ts: dict[str, str] = {}
+        for (sym, ts) in self._latest:
+            if sym not in latest_ts or ts > latest_ts[sym]:
+                latest_ts[sym] = ts
+
+        # Drain completed bars (not latest) that haven't been flushed yet
+        new_bars: list[dict] = []
+        for (sym, ts), bar in list(self._latest.items()):
+            if ts != latest_ts.get(sym):
+                if (sym, ts) not in self._already_flushed:
+                    new_bars.append(bar)
+                    self._already_flushed.add((sym, ts))
+
+        if new_bars:
+            self.buffer.extend(new_bars)
+        return len(new_bars)
 
 
 # ── Main loop ──
@@ -238,6 +268,7 @@ def main():
                     pass
 
         # ── Flush buffer ──
+        handler.drain_to_buffer()
         if buffer and (now_ts - last_flush > FLUSH_INTERVAL_SEC or len(buffer) >= BUFFER_MAX):
             _flush_buffer(buffer, handler.label)
             last_flush = now_ts
@@ -250,10 +281,26 @@ def main():
                 len(current_subscriptions), len(buffer), handler.bar_count,
             )
 
+        # ── Watchdog: force reconnect if main loop frozen for > 2x heartbeat ──
+        WATCHDOG_TIMEOUT = HEARTBEAT_INTERVAL_SEC * 2
+        if now_ts - last_heartbeat > WATCHDOG_TIMEOUT:
+            logger.error(
+                "WATCHDOG: no heartbeat for %ds (vs %ds limit), forcing reconnect",
+                int(now_ts - last_heartbeat), WATCHDOG_TIMEOUT,
+            )
+            try:
+                ctx.close()
+            except Exception:
+                pass
+            ctx = None
+            current_subscriptions.clear()
+            last_heartbeat = now_ts  # reset to avoid immediate re-trigger
+
         time.sleep(5)
 
     # ── Shutdown ──
     logger.info("Shutting down — final flush...")
+    handler.drain_to_buffer()
     _flush_buffer(buffer, handler.label)
     if ctx is not None:
         try:

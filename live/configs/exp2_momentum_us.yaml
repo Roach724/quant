@@ -40,7 +40,7 @@ dashboard:
 
 state:
   enabled: true
-  dir: output/live/state_momentum/
+  dir: /var/quant/state/momentum/
   checkpoint_interval: 300
 
 experiment:

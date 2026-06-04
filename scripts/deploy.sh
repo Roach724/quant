@@ -10,6 +10,7 @@ PROD_ROOT="/opt/quant-prod"
 HISTORY_FILE="$PROD_ROOT/.deploy_history"
 VENV_PYTHON="$PROD_ROOT/.venv/bin/python3.12"
 VENV_PIP="$PROD_ROOT/.venv/bin/pip"
+MARKET_CHECK="$PROD_ROOT/scripts/market_open.sh"
 LOG_TAG="[deploy $(date '+%Y-%m-%d %H:%M:%S')]"
 
 log() { echo "$LOG_TAG $*"; }
@@ -45,7 +46,7 @@ print('All core modules imported successfully')
         log "Rolling back to $CURRENT_COMMIT..."
         cd "$PROD_ROOT" && sudo -u quant git checkout "$CURRENT_COMMIT"
         "$VENV_PIP" install -r requirements.txt --quiet
-        sudo systemctl restart ws-collector
+        if [ -x "$MARKET_CHECK" ] && "$MARKET_CHECK"; then log "⚠️  MARKET OPEN — skipping ws_collector restart during rollback"; else sudo systemctl restart ws-collector; fi
         echo "{\"time\":\"$(date -Iseconds)\",\"commit\":\"$NEW_COMMIT\",\"status\":\"failed\",\"trigger\":\"github\",\"detail\":\"smoke_import\"}" >> "$HISTORY_FILE"
         echo "{\"time\":\"$(date -Iseconds)\",\"commit\":\"$CURRENT_COMMIT\",\"status\":\"rolled_back\",\"trigger\":\"auto\",\"detail\":\"smoke_import\"}" >> "$HISTORY_FILE"
     fi
@@ -63,8 +64,17 @@ log "All smoke tests passed"
 
 # ── ⑤ Restart production services ───────────────────────────────────
 log "Restarting ws-collector..."
-sudo systemctl restart ws-collector || fail "systemctl restart failed"
-sleep 3
+
+# Market-hour guard: skip ws_collector restart during trading hours.
+# Manual restart (sudo systemctl restart ws-collector) still works
+# but requires explicit operator approval per deployment policy.
+if [ -x "$MARKET_CHECK" ] && "$MARKET_CHECK"; then
+    log "⚠️  MARKET OPEN — skipping ws_collector restart to protect live data"
+    log "If restart is urgently needed, request operator approval."
+else
+    sudo systemctl restart ws-collector || fail "systemctl restart failed"
+    sleep 3
+fi
 
 # ── ⑥ Post-deploy verification ──────────────────────────────────────
 log "Verifying service status..."
@@ -77,7 +87,7 @@ if [ "$SERVICE_STATUS" != "active" ]; then
         log "Rolling back to $CURRENT_COMMIT..."
         cd "$PROD_ROOT" && sudo -u quant git checkout "$CURRENT_COMMIT"
         "$VENV_PIP" install -r requirements.txt --quiet
-        sudo systemctl restart ws-collector
+        if [ -x "$MARKET_CHECK" ] && "$MARKET_CHECK"; then log "⚠️  MARKET OPEN — skipping ws_collector restart during rollback"; else sudo systemctl restart ws-collector; fi
         echo "{\"time\":\"$(date -Iseconds)\",\"commit\":\"$NEW_COMMIT\",\"status\":\"failed\",\"trigger\":\"github\",\"detail\":\"service_inactive\"}" >> "$HISTORY_FILE"
         echo "{\"time\":\"$(date -Iseconds)\",\"commit\":\"$CURRENT_COMMIT\",\"status\":\"rolled_back\",\"trigger\":\"auto\",\"detail\":\"service_inactive\"}" >> "$HISTORY_FILE"
     fi

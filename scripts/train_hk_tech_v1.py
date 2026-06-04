@@ -1,11 +1,10 @@
-"""Train hk_tech v1 — explicit 39 tech factors, Optuna 20 trials, ModelRegistry.
+"""Train hk_tech v1 — direct from BQ factor_values, Optuna 20 trials.
 
-Loads OHLCV from bars table, computes factors on-the-fly via TechFactorBuilder
-(same approach as us_tech_v1_explicit), because hk factor_values only has 2 days
-of pre-computed data.
+Much faster than computing factors on-the-fly from bars,
+since factor_values already has 270 HK symbols × 39 tech factors pre-computed.
 """
 import logging, sys, os
-sys.path.insert(0, "/opt/quant-dev")
+sys.path.insert(0, "/opt/quant-prod")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 logger = logging.getLogger("train_hk_tech")
 
@@ -20,84 +19,69 @@ MODEL_NAME = "hk_tech"
 LABEL = "fwd_ret_5d"
 N_TRIALS = 20
 PROJECT = "deductive-notch-495015-c2"
-BARS_TABLE = f"{PROJECT}.quant.hk_bars_1d"
 
 
 def load_hk_data():
-    """Load HK bars, compute all 39 tech factors + labels on-the-fly."""
-    from factors.tech_builder import TechFactorBuilder
-
+    """Load tech factors from factor_values (wide pivot) + labels from bars."""
     bq = bigquery.Client(project=PROJECT)
 
-    # ── Step 1: Get all HK symbols from bars ──
-    syms_df = bq.query(
-        f"SELECT DISTINCT symbol FROM `{BARS_TABLE}` ORDER BY symbol"
+    # ── Step 1: Get all tech factor_ids for HK ──
+    fids_df = bq.query(
+        f"SELECT DISTINCT factor_id FROM `{PROJECT}.quant.factor_values` "
+        "WHERE source_builder='tech' AND STARTS_WITH(symbol, 'HK.') "
+        "ORDER BY factor_id"
     ).result().to_dataframe()
-    raw_symbols = syms_df["symbol"].tolist()
-    logger.info("Raw HK symbols from bars: %d", len(raw_symbols))
+    all_factor_ids = fids_df["factor_id"].tolist()
+    logger.info("Factor IDs: %d", len(all_factor_ids))
 
-    # Normalize: strip HK. prefix, strip leading zeros
-    normalized = []
-    for s in raw_symbols:
-        s_norm = s.replace("HK.", "").lstrip("0")
-        if s_norm not in normalized:
-            normalized.append(s_norm)
-    logger.info("Unique normalized HK symbols: %d", len(normalized))
+    # ── Step 2: Load factor values, pivot to wide ──
+    logger.info("Loading factor_values for HK tech...")
+    fv_df = bq.query(
+        f"SELECT symbol, date, factor_id, value "
+        f"FROM `{PROJECT}.quant.factor_values` "
+        "WHERE source_builder='tech' AND STARTS_WITH(symbol, 'HK.') "
+        "ORDER BY symbol, date, factor_id"
+    ).result().to_dataframe()
+    logger.info("Factor values loaded: %d rows", len(fv_df))
 
-    # ── Step 2: Load all OHLCV data ──
-    # Query with all raw symbol variants to catch everything
-    logger.info("Loading OHLCV for %d symbols...", len(raw_symbols))
-    query = f"""
-        SELECT symbol, timestamp AS date, open, high, low, close, volume
-        FROM `{BARS_TABLE}`
-        WHERE symbol IN UNNEST(@symbols)
-        ORDER BY symbol, timestamp
-    """
-    job_config = bigquery.QueryJobConfig(
-        query_parameters=[
-            bigquery.ArrayQueryParameter("symbols", "STRING", raw_symbols),
-        ]
-    )
-    ohlcv = bq.query(query, job_config=job_config).to_dataframe()
-    ohlcv["date"] = pd.to_datetime(ohlcv["date"]).dt.tz_localize(None)
-    # Normalize symbol
-    ohlcv["symbol"] = ohlcv["symbol"].str.replace(r"^HK\.", "", regex=True).str.lstrip("0")
-    # Deduplicate: bars has both "0005" and "HK.00005" rows for same symbol+date
-    n_before = len(ohlcv)
-    ohlcv = ohlcv.drop_duplicates(subset=["symbol", "date"])
-    logger.info("OHLCV: %d rows (deduped from %d), %d unique symbols",
-                len(ohlcv), n_before, ohlcv["symbol"].nunique())
+    # Pivot: symbol + date as index, factor_id as columns
+    factors_wide = fv_df.pivot_table(
+        index=["symbol", "date"], columns="factor_id", values="value"
+    ).reset_index()
+    # Rename columns: hk_ret_5d → ret_5d
+    factors_wide.columns = [
+        c.replace("hk_", "", 1) if isinstance(c, str) else c
+        for c in factors_wide.columns
+    ]
+    logger.info("Wide factors: %d rows × %d cols", len(factors_wide), len(factors_wide.columns))
 
-    # ── Step 3: Compute factors per symbol ──
-    fb = TechFactorBuilder()
-    all_frames = []
-    for sym, group in ohlcv.groupby("symbol"):
-        stock_df = group.rename(columns={})  # keep columns as-is
-        stock_df = stock_df.sort_values("date").reset_index(drop=True)
-        try:
-            # compute_factors returns all 39 factors + 2 labels
-            factors = fb.compute_factors(stock_df)
-            if factors is not None and not factors.empty:
-                factors["symbol"] = sym
-                n = len(factors)
-                factors["date"] = stock_df["date"].values[:n]
-                all_frames.append(factors)
-        except Exception as e:
-            logger.debug("Factor computation failed for %s: %s", sym, e)
+    # ── Step 3: Compute labels from bars ──
+    logger.info("Loading close prices for labels...")
+    bars_df = bq.query(
+        f"SELECT symbol, timestamp AS date, close "
+        f"FROM `{PROJECT}.quant.hk_bars_1d` "
+        "WHERE STARTS_WITH(symbol, 'HK.') "
+        "ORDER BY symbol, timestamp"
+    ).result().to_dataframe()
+    bars_df["date"] = pd.to_datetime(bars_df["date"]).dt.date
+    bars_df = bars_df.drop_duplicates(subset=["symbol", "date"])
+    logger.info("Bars: %d rows, %d symbols", len(bars_df), bars_df["symbol"].nunique())
 
-    if not all_frames:
-        logger.error("No factor data computed")
-        return pd.DataFrame()
+    # Compute fwd_ret_5d per symbol
+    labels = []
+    for sym, g in bars_df.groupby("symbol"):
+        g = g.sort_values("date").reset_index(drop=True)
+        g["fwd_close"] = g["close"].shift(-5)
+        g["fwd_ret_5d"] = (g["fwd_close"] - g["close"]) / g["close"]
+        g = g.dropna(subset=["fwd_ret_5d"])
+        labels.append(g[["symbol", "date", "fwd_ret_5d"]])
+    labels_df = pd.concat(labels, ignore_index=True)
+    logger.info("Labels: %d rows", len(labels_df))
 
-    result = pd.concat(all_frames, ignore_index=True)
-    logger.info("Factor dataset: %d rows × %d cols, %d stocks",
+    # ── Step 4: Merge ──
+    result = factors_wide.merge(labels_df, on=["symbol", "date"], how="inner")
+    logger.info("Merged: %d rows × %d cols, %d symbols",
                 len(result), len(result.columns), result["symbol"].nunique())
-
-    # Drop rows where label is NaN
-    n_before = len(result)
-    result = result.dropna(subset=[LABEL])
-    logger.info("After dropna(label): %d rows (dropped %d)",
-                len(result), n_before - len(result))
 
     return result
 
@@ -126,10 +110,8 @@ def main():
     # Feature columns (exclude metadata + labels)
     exclude = {"symbol", "date", "fwd_ret_5d", "fwd_ret_20d"}
     feature_cols = [c for c in df.columns if c not in exclude]
-    logger.info("Features: %d, Train: %d rows (%s → %s), Val: %d rows (%s → %s)",
-                len(feature_cols),
-                len(train_df), train_df["date"].min().date(), train_df["date"].max().date(),
-                len(val_df), val_df["date"].min().date(), val_df["date"].max().date())
+    logger.info("Features: %d, Train: %d rows, Val: %d rows",
+                len(feature_cols), len(train_df), len(val_df))
 
     X_train = safe_to_numpy(train_df, feature_cols)
     y_train = safe_to_numpy(train_df, [LABEL]).ravel()
@@ -176,7 +158,7 @@ def main():
     study.optimize(objective, n_trials=N_TRIALS, show_progress_bar=True)
 
     best = study.best_trial
-    logger.info("🏆 Best trial #%d: RMSE=%.6f  IC=%.4f",
+    logger.info("Best trial #%d: RMSE=%.6f  IC=%.4f",
                 best.number, best.value, best.user_attrs["ic"])
     logger.info("Best params: %s", best.params)
 
@@ -214,13 +196,12 @@ def main():
         "model": {"type": "lightgbm", "name": MODEL_NAME},
         "factors": {
             "source": "tech",
-            "mode": "explicit",
+            "mode": "bq_factor_values",
             "n_factors": len(feature_cols),
         },
         "data": {
             "label": LABEL,
             "market": "hk",
-            "date_range": f"{train_df['date'].min().date()}_{val_df['date'].max().date()}",
             "n_symbols": df["symbol"].nunique(),
         },
         "training": {
