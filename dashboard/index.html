@@ -662,6 +662,34 @@ body {
         </tbody>
       </table>
     </div>
+    <!-- ═══════ DEBUG TAB ═══════ -->
+    <div v-if="activeTab === 'debug'">
+      <div style="margin-bottom:16px;display:flex;gap:10px;align-items:center;">
+        <select v-model="selectedDebugExp" @change="loadDebugExperiment"
+                style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;">
+          <option value="">— Select Debug Experiment —</option>
+          <option v-for="e in debugExperiments" :value="e.exp_id">
+            {{ e.exp_id }} <template v-if="e.status">[{{ e.status }}]</template>
+          </option>
+        </select>
+        <select v-if="selectedDebugExp" v-model="selectedRun" @change="loadDebugExperiment"
+                style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;">
+          <option value="">— Latest Run —</option>
+          <option v-for="r in currentRuns" :value="r.run_id">
+            {{ r.run_id }} [{{ r.status }}]
+          </option>
+        </select>
+      </div>
+      <div v-if="selectedDebugExp" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+        <div class="metric-card"><div class="metric-label">Bar</div><div class="metric-value">{{ latestPoint?.bar }}</div></div>
+        <div class="metric-card"><div class="metric-label">Equity</div><div class="metric-value">{{ fmtUSD(latestPoint?.equity) }}</div></div>
+        <div class="metric-card"><div class="metric-label">Day PnL</div><div :class="['metric-value', (latestPoint?.daily_pnl||0) >= 0 ? 'green' : 'red']">{{ fmtUSD(latestPoint?.daily_pnl) }}</div></div>
+        <div class="metric-card"><div class="metric-label">Drawdown</div><div class="metric-value red">{{ fmtPct(latestPoint?.drawdown) }}</div></div>
+      </div>
+      <div v-if="selectedDebugExp" ref="equityChartRef" class="plotly" style="width:100%;height:380px"></div>
+      <div v-if="selectedDebugExp" ref="drawdownChartRef" class="plotly" style="width:100%;height:200px"></div>
+      <p v-if="selectedDebugExp" style="color:var(--text-muted);font-size:12px;margin-top:8px;">Debug experiments are for development only.</p>
+    </div>
     <!-- ═══════ PIPELINE TAB ═══════ -->
     <div v-if="activeTab === 'pipeline'">
       <div v-if="loading.pipeline" class="empty-state">
@@ -880,9 +908,11 @@ const app = createApp({
     const liveExperiments = ref([]);
     const paperExperiments = ref([]);
     const prodExperiments = ref([]);
+    const debugExperiments = ref([]);
     const selectedLiveExp = ref('');
     const selectedPaperExp = ref('');
     const selectedProdExp = ref('');
+    const selectedDebugExp = ref('');
     const selectedRun = ref('');
     const currentRuns = ref([]);
     const posPage = ref(1);
@@ -907,6 +937,7 @@ const app = createApp({
       { id: 'live', label: 'Live' },
       { id: 'paper', label: 'Paper Run' },
       { id: 'prod', label: 'Prod' },
+      { id: 'debug', label: 'Debug' },
       { id: 'pipeline', label: 'Pipeline' },
       { id: 'alerts', label: 'Alerts' },
     ];
@@ -1155,6 +1186,7 @@ const app = createApp({
       liveExperiments.value = meta.filter(m => m.exp_id.startsWith('live_')).map(enrich);
       paperExperiments.value = meta.filter(m => m.exp_id.startsWith('paper_')).map(enrich);
       prodExperiments.value = meta.filter(m => m.exp_id.startsWith('prod_')).map(enrich);
+      debugExperiments.value = meta.filter(m => m.exp_id.startsWith('debug_')).map(enrich);
     }
 
     async function loadLiveExperiment() {
@@ -1176,6 +1208,18 @@ const app = createApp({
       trades.value = await fetchJSON(`/api/trades/${selectedProdExp.value}${runParam}`) || [];
       positions.value = await fetchJSON(`/api/experiments/${selectedProdExp.value}/positions`) || [];
       currentRuns.value = await fetchJSON(`/api/experiments/${selectedProdExp.value}/runs`) || [];
+      await nextTick();
+      renderEquityChart();
+      renderDrawdownChart();
+    }
+
+    async function loadDebugExperiment() {
+      if (!selectedDebugExp.value) return;
+      const runParam = selectedRun.value ? '?run_id=' + selectedRun.value : '';
+      equityData.value = await fetchJSON('/api/equity/' + selectedDebugExp.value + runParam) || [];
+      trades.value = await fetchJSON('/api/trades/' + selectedDebugExp.value + runParam) || [];
+      positions.value = await fetchJSON('/api/experiments/' + selectedDebugExp.value + '/positions') || [];
+      currentRuns.value = await fetchJSON('/api/experiments/' + selectedDebugExp.value + '/runs') || [];
       await nextTick();
       renderEquityChart();
       renderDrawdownChart();
@@ -1382,9 +1426,9 @@ const app = createApp({
       refreshAll,
       // ── Typed Experiments ──
       liveExperiments, paperExperiments, prodExperiments,
-      selectedLiveExp, selectedPaperExp, selectedProdExp,
+      selectedLiveExp, selectedPaperExp, selectedProdExp, selectedDebugExp, debugExperiments,
       selectedRun, currentRuns,
-      loadTypedExperiments, loadLiveExperiment, loadProdExperiment, refresh,
+      loadTypedExperiments, loadLiveExperiment, loadProdExperiment, loadDebugExperiment, refresh,
       // ── Paper Run ──
       paperRuns, selectedPaperRun, paperRun,
       loadPaperRuns, loadPaperRun, renderPaperEquityChart,

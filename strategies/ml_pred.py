@@ -127,8 +127,8 @@ class MLPredStrategy(Strategy):
             self._all_scores_history[bar] = scores
 
             signals = []
-            for sym, _score in ranked:
-                signals.append(Signal.buy(sym, weight=1.0 / self.top_k))
+            for i, (sym, _score) in enumerate(ranked):
+                signals.append(Signal.buy(sym, weight=1.0 / self.top_k, score=float(_score), rank=i+1))
             return signals
         except Exception:
             logger.warning("ML prediction failed at bar %d", bar, exc_info=True)

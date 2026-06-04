@@ -12,10 +12,12 @@ class Signal:
     order_type: str = "market"
     limit_price: float | None = None
     signal_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    score: float = 0.0
+    rank: int = 0
 
     @classmethod
-    def buy(cls, symbol: str, weight: float = 1.0) -> "Signal":
-        return cls(symbol=symbol, side="buy", weight=weight)
+    def buy(cls, symbol: str, weight: float = 1.0, score: float = 0.0, rank: int = 0) -> "Signal":
+        return cls(symbol=symbol, side="buy", weight=weight, score=score, rank=rank)
 
     @classmethod
     def sell(cls, symbol: str, weight: float | None = None) -> "Signal":

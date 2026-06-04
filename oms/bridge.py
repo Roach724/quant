@@ -40,6 +40,8 @@ def convert_signal(signal: Signal, portfolio, price_est: float = 100.0) -> dict:
         "order_type": signal.order_type,
         "limit_price": signal.limit_price,
         "signal_id": signal.signal_id,
+        "score": getattr(signal, "score", 0.0),
+        "rank": getattr(signal, "rank", 0),
     }
 
 
