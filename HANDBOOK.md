@@ -48,9 +48,10 @@
 ```
 
 **环境分离：**
-- **开发**: `/opt/quant-dev/` — 代码开发、测试、PR
-- **生产**: `/opt/quant-prod/` — 实盘数据采集、Live 实验
+- **主工作目录**: `/opt/quant-dev/` — **所有开发必须在此完成**（代码开发、测试、PR）
+- **生产**: `/opt/quant-prod/` — 只做数据采集、入库、实盘交易
 - **流程**: dev → git commit → PR → CI → merge stable → CD → prod
+- **禁止在 prod 直接开发**, 禁止在 prod 执行训练/回测/因子计算等开发操作
 
 **关键路径：**
 - 数据流: Futu OpenD → ws_collector → BQ → LiveRunner → Dashboard
