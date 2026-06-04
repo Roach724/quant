@@ -118,7 +118,8 @@ class PaperRunRunner:
             return result
 
         # 3. Load equity curve from observer output
-        output_dir = Path(self.config.get("live", {}).get("output_dir", "output/live/"))
+        # LiveRunner sets config["_output_dir"] to the timestamped subdirectory
+        output_dir = Path(self.config.get("_output_dir", self.config.get("live", {}).get("output_dir", "output/live/")))
         equity_path = output_dir / "equity_curve.csv"
         if not equity_path.exists():
             logger.error("No equity curve found at %s", equity_path)
