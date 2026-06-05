@@ -63,6 +63,10 @@ fi
 log "All smoke tests passed"
 
 # ── ⑤ Restart production services ───────────────────────────────────
+log "Restarting quant-admin..."
+sudo systemctl restart quant-admin || log "WARNING: quant-admin restart failed (non-fatal)"
+sleep 2
+
 log "Restarting ws-collector..."
 
 # Market-hour guard: skip ws_collector restart during trading hours.
