@@ -353,7 +353,7 @@ def admin_experiment_delete(exp_id: str):
             except Exception as e:
                 results["state_shared"] = str(e)[:80]
 
-    # 3. Delete output/live directories
+    # 3. Delete output/live directories (including experiments meta)
     output_base = Path("/opt/quant-prod/output/live")
     if output_base.exists():
         for d in output_base.iterdir():
@@ -363,6 +363,14 @@ def admin_experiment_delete(exp_id: str):
                     results[f"output_{d.name}"] = "deleted"
                 except Exception as e:
                     results[f"output_{d.name}"] = str(e)[:80]
+        # Also clean experiment meta directory
+        exp_meta = output_base / "experiments" / exp_id
+        if exp_meta.exists():
+            try:
+                shutil.rmtree(exp_meta)
+                results["output_experiments_meta"] = "deleted"
+            except Exception as e:
+                results["output_experiments_meta"] = str(e)[:80]
 
     # 4. Delete experiment logs
     for log_root in LOG_ROOTS:
