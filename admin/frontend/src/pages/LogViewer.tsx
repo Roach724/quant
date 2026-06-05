@@ -53,6 +53,8 @@ const LogViewer: React.FC = () => {
   const [search, setSearch] = useState<string>('');
   const [lines, setLines] = useState<LogLine[]>([]);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [fileList, setFileList] = useState<string[]>([]);
+  const [selectedFile, setSelectedFile] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [live, setLive] = useState(false);
   const [timeRange, setTimeRange] = useState<[string, string] | null>(null);
@@ -70,7 +72,7 @@ const LogViewer: React.FC = () => {
     }
   }, []);
 
-  const fetchLogs = useCallback(async (mod: string, lvl: string, s: string, tr: [string, string] | null) => {
+  const fetchLogs = useCallback(async (mod: string, lvl: string, s: string, tr: [string, string] | null, f: string = '') => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ module: mod, lines: '100' });
@@ -78,10 +80,12 @@ const LogViewer: React.FC = () => {
       if (s) params.set('search', s);
       if (tr && tr[0]) params.set('start', tr[0]);
       if (tr && tr[1]) params.set('end', tr[1]);
+      if (f) params.set('file', f);
       const data = await api.get(`/api/admin/logs?${params.toString()}`);
       if (!data.error) {
         setLines(data.lines || []);
         setFileName(data.file || null);
+        if (data.files) setFileList(data.files);
       }
     } catch (err: any) {
       console.error('Failed to fetch logs:', err);
@@ -183,14 +187,28 @@ const LogViewer: React.FC = () => {
           value={module}
           onChange={(val) => {
             setModule(val);
+            setSelectedFile('');
             fetchLogs(val, level, search, timeRange);
           }}
-          style={{ width: 120 }}
+          style={{ width: 140 }}
           options={modules.map((m) => ({
             value: m.name,
             label: `${m.name} (${m.file_count})`,
           }))}
         />
+        {fileList.length > 1 && (
+          <Select
+            value={selectedFile}
+            onChange={(val) => {
+              setSelectedFile(val);
+              fetchLogs(module, level, search, timeRange, val);
+            }}
+            allowClear
+            placeholder="选择文件"
+            style={{ width: 200 }}
+            options={fileList.map((f) => ({ value: f, label: f }))}
+          />
+        )}
         <Select
           value={level}
           onChange={(val) => {
