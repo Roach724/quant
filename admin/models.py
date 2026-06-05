@@ -25,6 +25,41 @@ class Task(Base):
     finished_at = Column(DateTime, nullable=True)
 
 
+class MlDataset(Base):
+    __tablename__ = "ml_datasets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), unique=True, nullable=False)
+    market = Column(String(10), nullable=False)
+    label = Column(String(50), nullable=False)
+    factor_ids = Column(Text, nullable=False)
+    train_start = Column(String(20), nullable=False)
+    train_end = Column(String(20), nullable=False)
+    val_start = Column(String(20), nullable=False)
+    val_end = Column(String(20), nullable=False)
+    test_start = Column(String(20), nullable=False)
+    test_end = Column(String(20), nullable=False)
+    bq_table = Column(String(200), nullable=True)
+    status = Column(String(20), default="registered")
+    row_count = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class MlConfig(Base):
+    __tablename__ = "ml_configs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), unique=True, nullable=False)
+    description = Column(String(500), nullable=True)
+    config_path = Column(String(500), nullable=False)
+    dataset_name = Column(String(200), nullable=True)
+    registry_model_name = Column(String(200), nullable=True)
+    status = Column(String(20), default="draft")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 def init_db():
     Base.metadata.create_all(engine)
 

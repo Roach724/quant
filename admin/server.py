@@ -1,6 +1,7 @@
 """Quant Admin Platform — FastAPI server."""
 
 import subprocess, json as _json, os, glob, logging
+from pathlib import Path
 import requests
 import pandas as pd
 from contextlib import asynccontextmanager
@@ -1239,6 +1240,333 @@ def admin_factor_compute(source: str = "tech", market: str = "us",
            f"--source {source} --market {market} --start {start} --end {end}")
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id}
+
+
+# ── ML Subsystem ──────────────────────────────────────────────────────────────
+
+import yaml as _yaml
+from admin.models import MlDataset as _MlDataset, MlConfig as _MlConfig
+from google.cloud import bigquery as _bq
+
+_ML_CONFIG_DIR = Path(__file__).resolve().parent.parent / "ml" / "configs"
+
+# ── Datasets ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/ml/datasets")
+def admin_ml_datasets():
+    session = get_session()
+    rows = session.query(_MlDataset).order_by(_MlDataset.created_at.desc()).all()
+    return [{
+        "id": r.id, "name": r.name, "market": r.market, "label": r.label,
+        "factor_ids": _json.loads(r.factor_ids) if r.factor_ids else [],
+        "train_range": f"{r.train_start},{r.train_end}",
+        "val_range": f"{r.val_start},{r.val_end}",
+        "test_range": f"{r.test_start},{r.test_end}",
+        "bq_table": r.bq_table, "status": r.status, "row_count": r.row_count,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    } for r in rows]
+
+
+@app.get("/api/admin/ml/datasets/{market}/factors")
+def admin_ml_dataset_factors(market: str):
+    """Return available factor columns from BQ factor_values for a given market."""
+    client = _bq.Client(project="deductive-notch-495015-c2")
+    query = """
+        SELECT DISTINCT factor_id, source_builder
+        FROM quant.factor_values
+        WHERE factor_id LIKE @prefix
+        ORDER BY factor_id
+    """
+    prefix = f"{market}_%"
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("prefix", "STRING", prefix)]
+    )
+    try:
+        rows = client.query(query, job_config=job_config).result()
+        return [{
+            "factor_id": r.factor_id,
+            "source": r.source_builder or "unknown",
+            "label": r.factor_id.replace(f"{market}_", "", 1),
+        } for r in rows]
+    except Exception:
+        return []
+
+
+@app.post("/api/admin/ml/datasets")
+def admin_ml_dataset_create(body: dict = Body(...)):
+    session = get_session()
+    name = body.get("name", "")
+    if not name:
+        raise HTTPException(400, detail="Missing 'name'")
+    if session.query(_MlDataset).filter(_MlDataset.name == name).first():
+        raise HTTPException(409, detail=f"Dataset '{name}' already exists")
+    ds = _MlDataset(
+        name=name, market=body.get("market", "us"), label=body.get("label", "fwd_ret_5d"),
+        factor_ids=_json.dumps(body.get("factor_ids", [])),
+        train_start=body.get("train_start", ""), train_end=body.get("train_end", ""),
+        val_start=body.get("val_start", ""), val_end=body.get("val_end", ""),
+        test_start=body.get("test_start", ""), test_end=body.get("test_end", ""),
+    )
+    session.add(ds)
+    session.commit()
+    return {"id": ds.id, "name": ds.name, "status": ds.status}
+
+
+@app.post("/api/admin/ml/datasets/{ds_id}/generate")
+def admin_ml_dataset_generate(ds_id: int):
+    """Build/replace BQ table for a dataset."""
+    from datetime import datetime as _dt
+    session = get_session()
+    ds = session.query(_MlDataset).filter(_MlDataset.id == ds_id).first()
+    if not ds:
+        raise HTTPException(404, detail=f"Dataset {ds_id} not found")
+
+    factor_ids = _json.loads(ds.factor_ids)
+    if not factor_ids:
+        raise HTTPException(400, detail="No factors selected")
+
+    client = _bq.Client(project="deductive-notch-495015-c2")
+    table_name = f"ml_dataset_{ds.name}"
+    full_table = f"deductive-notch-495015-c2.quant.{table_name}"
+    prefix = f"{'US' if ds.market == 'us' else 'HK'}."
+    label_col = ds.label
+
+    # Build pivot query: one row per (symbol, date) with columns = factor_ids + label
+    factor_cols = ", ".join(
+        f"MAX(IF(factor_id='{f}', value, NULL)) AS `{f.replace(f'{ds.market}_', '', 1)}`"
+        for f in factor_ids
+    )
+    splits = [
+        ("train", ds.train_start, ds.train_end),
+        ("val", ds.val_start, ds.val_end),
+        ("test", ds.test_start, ds.test_end),
+    ]
+
+    union_parts = []
+    for split_name, s_start, s_end in splits:
+        union_parts.append(f"""
+            SELECT symbol, date, '{split_name}' AS split, {factor_cols}, {label_col} AS label
+            FROM (
+                SELECT symbol, DATE(timestamp) AS date, factor_id, value
+                FROM quant.factor_values
+                WHERE factor_id IN UNNEST(@factor_ids)
+                  AND timestamp BETWEEN '{s_start}' AND '{s_end}'
+            )
+            PIVOT(MAX(value) FOR factor_id IN ({','.join(repr(f) for f in factor_ids)}))
+        """)
+
+    try:
+        client.query(f"DROP TABLE IF EXISTS {full_table}").result()
+        # Simplified approach: query factor_values with pivot, create table
+        create_sql = f"""
+            CREATE OR REPLACE TABLE {full_table} AS
+            SELECT symbol, date, split,
+                   {', '.join(f"`{f.replace(f'{ds.market}_', '', 1)}`" for f in factor_ids)},
+                   {label_col} AS label
+            FROM quant.factor_values
+            PIVOT(MAX(value) FOR factor_id IN ({','.join(repr(f) for f in factor_ids)}))
+            WHERE factor_id IN UNNEST(@factor_ids)
+              AND (
+                (timestamp BETWEEN '{ds.train_start}' AND '{ds.train_end}' AND '{ds.train_start}' != '')
+                OR (timestamp BETWEEN '{ds.val_start}' AND '{ds.val_end}' AND '{ds.val_start}' != '')
+                OR (timestamp BETWEEN '{ds.test_start}' AND '{ds.test_end}' AND '{ds.test_start}' != '')
+              )
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ArrayQueryParameter("factor_ids", "STRING", factor_ids)]
+        )
+        client.query(create_sql, job_config=job_config).result()
+
+        # Add split labels
+        update_sqls = [
+            f"UPDATE {full_table} SET split='train' WHERE date BETWEEN '{ds.train_start}' AND '{ds.train_end}'",
+            f"UPDATE {full_table} SET split='val' WHERE date BETWEEN '{ds.val_start}' AND '{ds.val_end}'",
+            f"UPDATE {full_table} SET split='test' WHERE date BETWEEN '{ds.test_start}' AND '{ds.test_end}'",
+        ]
+        for s in update_sqls:
+            try:
+                client.query(s).result()
+            except Exception:
+                pass
+
+        cnt = list(client.query(f"SELECT COUNT(*) AS n FROM {full_table}").result())[0].n
+        ds.bq_table = full_table
+        ds.status = "ready"
+        ds.row_count = cnt
+        ds.updated_at = _dt.now(timezone.utc)
+        session.commit()
+        return {"status": "ok", "table": full_table, "row_count": cnt}
+    except Exception as e:
+        ds.status = "failed"
+        session.commit()
+        raise HTTPException(500, detail=str(e))
+
+
+@app.delete("/api/admin/ml/datasets/{ds_id}")
+def admin_ml_dataset_delete(ds_id: int):
+    session = get_session()
+    ds = session.query(_MlDataset).filter(_MlDataset.id == ds_id).first()
+    if not ds:
+        raise HTTPException(404, detail=f"Dataset {ds_id} not found")
+    if ds.bq_table:
+        try:
+            _bq.Client(project="deductive-notch-495015-c2").query(f"DROP TABLE IF EXISTS {ds.bq_table}").result()
+        except Exception:
+            pass
+    session.delete(ds)
+    session.commit()
+    return {"status": "ok"}
+
+
+# ── ML Configs ────────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/ml/configs")
+def admin_ml_configs():
+    session = get_session()
+    rows = session.query(_MlConfig).order_by(_MlConfig.created_at.desc()).all()
+    return [{
+        "id": r.id, "name": r.name, "description": r.description,
+        "config_path": r.config_path, "dataset_name": r.dataset_name,
+        "registry_model_name": r.registry_model_name, "status": r.status,
+    } for r in rows]
+
+
+@app.get("/api/admin/ml/configs/{name}")
+def admin_ml_config_get(name: str):
+    path = _ML_CONFIG_DIR / name if name.endswith(".yaml") else _ML_CONFIG_DIR / f"{name}.yaml"
+    if not path.exists():
+        raise HTTPException(404, detail=f"Config '{name}' not found")
+    return {"name": name, "content": path.read_text()}
+
+
+@app.put("/api/admin/ml/configs/{name}")
+def admin_ml_config_put(name: str, body: dict = Body(...)):
+    import shutil
+    content = body.get("content", "")
+    if not content:
+        raise HTTPException(400, detail="Missing 'content'")
+    _ML_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    fname = name if name.endswith(".yaml") else f"{name}.yaml"
+    path = _ML_CONFIG_DIR / fname
+    if path.exists():
+        shutil.copy2(path, path.with_suffix(".yaml.bak"))
+    path.write_text(content)
+    # Parse YAML to extract dataset_name and registry_model_name
+    try:
+        cfg = _yaml.safe_load(content)
+        dataset_name = cfg.get("data", {}).get("dataset", "")
+        registry_name = cfg.get("registry", {}).get("model_name", "")
+    except Exception:
+        dataset_name = ""
+        registry_name = ""
+    # Upsert to DB
+    session = get_session()
+    existing = session.query(_MlConfig).filter(_MlConfig.name == fname).first()
+    if existing:
+        existing.config_path = str(path)
+        existing.dataset_name = dataset_name
+        existing.registry_model_name = registry_name
+    else:
+        session.add(_MlConfig(
+            name=fname, config_path=str(path),
+            dataset_name=dataset_name, registry_model_name=registry_name,
+            description=body.get("description", ""),
+        ))
+    session.commit()
+    return {"status": "ok", "name": fname}
+
+
+@app.delete("/api/admin/ml/configs/{name}")
+def admin_ml_config_delete(name: str):
+    session = get_session()
+    fname = name if name.endswith(".yaml") else f"{name}.yaml"
+    cfg = session.query(_MlConfig).filter(_MlConfig.name == fname).first()
+    if not cfg:
+        raise HTTPException(404, detail=f"Config '{fname}' not found")
+    # Check MLflow for registered models
+    if cfg.registry_model_name:
+        try:
+            r = requests.get(
+                f"{MLFLOW_API}/model-versions/search",
+                params={"name": cfg.registry_model_name}, timeout=5,
+            )
+            versions = r.json().get("model_versions", [])
+            if versions:
+                raise HTTPException(409, detail=f"模型 '{cfg.registry_model_name}' 下有 {len(versions)} 个版本，请先在 MLflow 删除所有版本")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+    path = _ML_CONFIG_DIR / fname
+    if path.exists():
+        import shutil
+        shutil.move(str(path), str(path.with_suffix(".yaml.del")))
+    session.delete(cfg)
+    session.commit()
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/ml/configs/{name}/register")
+def admin_ml_config_register(name: str):
+    """Register config to model center."""
+    session = get_session()
+    fname = name if name.endswith(".yaml") else f"{name}.yaml"
+    cfg = session.query(_MlConfig).filter(_MlConfig.name == fname).first()
+    if not cfg:
+        raise HTTPException(404, detail=f"Config '{fname}' not found")
+    cfg.status = "registered"
+    session.commit()
+    return {"status": "ok", "name": fname}
+
+
+# ── Model Center ──────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/ml/center")
+def admin_ml_center():
+    """Model center list: registered configs + MLflow model info."""
+    session = get_session()
+    configs = session.query(_MlConfig).filter(_MlConfig.status == "registered").all()
+    result = []
+    seen = set()
+    for cfg in configs:
+        model_name = cfg.registry_model_name or cfg.name.replace(".yaml", "")
+        if model_name in seen:
+            continue
+        seen.add(model_name)
+        mlflow_versions = []
+        try:
+            r = requests.get(f"{MLFLOW_API}/model-versions/search", params={"name": model_name}, timeout=5)
+            mlflow_versions = r.json().get("model_versions", [])
+        except Exception:
+            pass
+        result.append({
+            "model_name": model_name,
+            "dataset_name": cfg.dataset_name or "",
+            "config_name": cfg.name,
+            "versions": mlflow_versions,
+        })
+    return result
+
+
+@app.post("/api/admin/ml/train")
+def admin_ml_train(body: dict = Body(...)):
+    """Submit training task for a config."""
+    config_name = body.get("config_name", "")
+    skip_tuning = body.get("skip_tuning", False)
+    if not config_name:
+        raise HTTPException(400, detail="Missing 'config_name'")
+    fname = config_name if config_name.endswith(".yaml") else f"{config_name}.yaml"
+    path = _ML_CONFIG_DIR / fname
+    if not path.exists():
+        raise HTTPException(404, detail=f"Config '{config_name}' not found")
+    cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+           f".venv/bin/python3 -c \"from ml.pipeline import TrainPipeline; "
+           f"p = TrainPipeline('{path}'); p.run(skip_tuning={str(skip_tuning).lower()})\"")
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd, "config": config_name}, status="pending")
     session.add(task)
     session.commit()
     return {"task_id": task.id}

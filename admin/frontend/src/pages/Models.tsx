@@ -1,655 +1,315 @@
+import { useState, useEffect } from 'react';
 import {
-  ExperimentOutlined,
-  CodeOutlined,
-  CloudOutlined,
+  PlusOutlined, DeleteOutlined, EyeOutlined, SettingOutlined,
+  ThunderboltOutlined, ExperimentOutlined, CheckCircleOutlined,
 } from '@ant-design/icons';
-import ProTable from '@ant-design/pro-table';
-import type { ProColumns } from '@ant-design/pro-table';
 import {
-  Tag,
-  Button,
-  Tabs,
-  Drawer,
-  message,
-  Spin,
-  List,
-  Empty,
-  Input,
-  Table,
-  Modal,
-  Checkbox,
-  Space,
+  Tabs, Table, Button, Space, Modal, Select, Input, DatePicker,
+  Tag, Popconfirm, message, Checkbox, Typography, Drawer, Descriptions,
 } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { useState, useCallback } from 'react';
 import { api } from '../api';
 
-// ── Types ───────────────────────────────────────────────────────────────────
-
-interface ModelVersion {
-  version: string;
-  stage: string;
-  run_id: string;
-}
-
-interface ModelItem {
-  name: string;
-  versions: ModelVersion[];
-  version_count?: number;
-  latest_version?: string;
-  stage?: string;
-}
-
-interface VersionDetail {
-  version: string;
-  stage: string;
-  run_id: string;
-  rmse: number | null;
-  ic: number | null;
-  n_features: number;
-  dataset: string;
-  training_time: number | null;
-}
-
-interface TrainingHistory {
-  version: string;
-  run_id: string;
-  rmse: number | null;
-  ic: number | null;
-  dataset: string;
-  n_features: number;
-  n_trials: number;
-}
-
-interface CompareVersion extends VersionDetail {
-  modelName: string;
-}
-
-interface StrategyItem {
-  name: string;
-  path: string;
-}
-
+const { Text } = Typography;
+const { RangePicker } = DatePicker;
 const { TextArea } = Input;
 
-// ── Models Tab ──────────────────────────────────────────────────────────────
+// ── ModelsPage ───────────────────────────────────────────────────────────────
 
-const ModelsTab: React.FC = () => {
-  const [versionData, setVersionData] = useState<Record<string, VersionDetail[]>>({});
-  const [versionLoading, setVersionLoading] = useState<Record<string, boolean>>({});
-  const [versionError, setVersionError] = useState<Record<string, string>>({});
-  const [trainingHistory, setTrainingHistory] = useState<Record<string, TrainingHistory[]>>({});
-  const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
-  const [selectedCompare, setSelectedCompare] = useState<CompareVersion[]>([]);
-  const [compareOpen, setCompareOpen] = useState(false);
-  const [stageLoading, setStageLoading] = useState<string | null>(null);
-
-  const handleTrain = useCallback(async (modelName: string) => {
-    try {
-      const market = modelName.startsWith('hk') ? 'hk' : 'us';
-      await api.post(`/api/admin/models/train?model_name=${modelName}&market=${market}`);
-      message.success(`Training queued for ${modelName}`);
-    } catch (err: any) {
-      message.error(`Failed to queue training: ${err.message}`);
-    }
-  }, []);
-
-  const fetchVersions = useCallback(async (modelName: string) => {
-    setVersionLoading((prev) => ({ ...prev, [modelName]: true }));
-    setVersionError((prev) => {
-      const next = { ...prev };
-      delete next[modelName];
-      return next;
-    });
-    try {
-      const data = await api.get(`/api/admin/models/${modelName}/versions`);
-      if (!Array.isArray(data)) {
-        const errDetail = data && typeof data === 'object' ? (data as any).error : 'Invalid response';
-        throw new Error(errDetail || 'Invalid response');
-      }
-      setVersionData((prev) => ({ ...prev, [modelName]: data as VersionDetail[] }));
-    } catch (err: any) {
-      const msg = err?.message || String(err);
-      setVersionError((prev) => ({ ...prev, [modelName]: msg }));
-      message.error(`Failed to load versions for ${modelName}: ${msg}`);
-    } finally {
-      setVersionLoading((prev) => ({ ...prev, [modelName]: false }));
-    }
-  }, []);
-
-  const fetchTrainingHistory = useCallback(async (modelName: string) => {
-    setHistoryLoading((prev) => ({ ...prev, [modelName]: true }));
-    try {
-      const data = await api.get(`/api/admin/models/${modelName}/history`);
-      setTrainingHistory((prev) => ({ ...prev, [modelName]: data as TrainingHistory[] }));
-    } catch (err: any) {
-      message.error(`Failed to load history for ${modelName}: ${err.message}`);
-    } finally {
-      setHistoryLoading((prev) => ({ ...prev, [modelName]: false }));
-    }
-  }, []);
-
-  const handleExpand = useCallback(
-    (expanded: boolean, record: ModelItem) => {
-      if (expanded) {
-        if (!versionData[record.name] && !versionLoading[record.name]) {
-          fetchVersions(record.name);
-        }
-        if (!trainingHistory[record.name] && !historyLoading[record.name]) {
-          fetchTrainingHistory(record.name);
-        }
-      }
-    },
-    [versionData, versionLoading, fetchVersions, trainingHistory, historyLoading, fetchTrainingHistory],
+const ModelsPage: React.FC = () => {
+  const [tab, setTab] = useState('center');
+  return (
+    <Tabs activeKey={tab} onChange={setTab} items={[
+      { key: 'datasets', label: '数据集', children: <DatasetsTab /> },
+      { key: 'configs', label: 'ML 配置', children: <MlConfigsTab /> },
+      { key: 'center', label: '模型中心', children: <ModelCenterTab /> },
+    ]} />
   );
+};
 
-  const handleCompareToggle = useCallback(
-    (version: CompareVersion, checked: boolean) => {
-      setSelectedCompare((prev) => {
-        if (checked) {
-          if (prev.length >= 2) {
-            message.warning('最多只能选择2个版本进行对比');
-            return prev;
-          }
-          return [...prev, version];
-        }
-        return prev.filter(
-          (v) => !(v.modelName === version.modelName && v.version === version.version),
-        );
-      });
-    },
-    [],
-  );
+// ═══════════════════════════════════════════════════════════════════════════════
+// DatasetsTab
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  const handleStageChange = useCallback(
-    async (modelName: string, version: string, stage: string, stageLabel: string) => {
-      const loadingKey = `${modelName}::${version}::${stage}`;
-      setStageLoading(loadingKey);
-      try {
-        await api.post(
-          `/api/admin/models/${modelName}/stage?version=${version}&stage=${stage}`,
-        );
-        message.success(`Version ${version} → ${stageLabel}`);
-        // Refresh version data
-        fetchVersions(modelName);
-        // Clear compare selection for this model
-        setSelectedCompare((prev) =>
-          prev.filter((v) => !(v.modelName === modelName && v.version === version)),
-        );
-      } catch (err: any) {
-        message.error(`Stage change failed: ${err.message}`);
-      } finally {
-        setStageLoading(null);
-      }
-    },
-    [fetchVersions],
-  );
+interface FactorItem { factor_id: string; source: string; label: string; }
+interface DatasetItem {
+  id: number; name: string; market: string; label: string;
+  factor_ids: string[]; train_range: string; val_range: string; test_range: string;
+  bq_table: string | null; status: string; row_count: number;
+}
 
-  // ── Version detail table columns ────────────────────────────────────────
+const DatasetsTab: React.FC = () => {
+  const [datasets, setDatasets] = useState<DatasetItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
-  const versionColumns = (modelName: string): ColumnsType<VersionDetail> => [
-    {
-      title: '选择',
-      width: 50,
-      render: (_, r) => {
-        const isChecked = selectedCompare.some(
-          (v) => v.modelName === modelName && v.version === r.version,
-        );
-        return (
-          <Checkbox
-            checked={isChecked}
-            onChange={(e) =>
-              handleCompareToggle({ ...r, modelName }, e.target.checked)
-            }
-          />
-        );
-      },
-    },
-    {
-      title: '版本',
-      dataIndex: 'version',
-      width: 60,
-      key: 'version',
-    },
-    {
-      title: 'Stage',
-      dataIndex: 'stage',
-      width: 100,
-      key: 'stage',
-      render: (s: string) => {
-        const color =
-          s === 'Production' ? 'green' : s === 'Archived' ? 'red' : 'default';
-        return <Tag color={color}>{s || '-'}</Tag>;
-      },
-    },
-    {
-      title: 'RMSE',
-      dataIndex: 'rmse',
-      width: 90,
-      key: 'rmse',
-      render: (v: number | null) => (v != null ? v.toFixed(4) : '-'),
-    },
-    {
-      title: 'IC',
-      dataIndex: 'ic',
-      width: 90,
-      key: 'ic',
-      render: (v: number | null) => (v != null ? v.toFixed(4) : '-'),
-    },
-    {
-      title: '特征数',
-      dataIndex: 'n_features',
-      width: 70,
-      key: 'n_features',
-    },
-    {
-      title: '训练时长',
-      dataIndex: 'training_time',
-      width: 90,
-      key: 'training_time',
-      render: (v: number | null) => (v != null ? `${v}s` : '-'),
-    },
-    {
-      title: '操作',
-      key: 'actions',
-      width: 160,
-      render: (_, r) => {
-        const lkPromote = `${modelName}::${r.version}::Production`;
-        const lkArchive = `${modelName}::${r.version}::Archived`;
-        return (
-          <Space size="small">
-            {r.stage !== 'Production' && (
-              <Button
-                size="small"
-                loading={stageLoading === lkPromote}
-                onClick={() => handleStageChange(modelName, r.version, 'Production', '生产')}
-              >
-                晋升生产
-              </Button>
-            )}
-            {r.stage !== 'Archived' && (
-              <Button
-                size="small"
-                danger
-                loading={stageLoading === lkArchive}
-                onClick={() => handleStageChange(modelName, r.version, 'Archived', '已归档')}
-              >
-                归档
-              </Button>
-            )}
-          </Space>
-        );
-      },
-    },
-  ];
+  // Create form
+  const [cName, setCName] = useState('');
+  const [cMarket, setCMarket] = useState('us');
+  const [cLabel, setCLabel] = useState('fwd_ret_5d');
+  const [cFactors, setCFactors] = useState<FactorItem[]>([]);
+  const [cSelectedFactors, setCSelectedFactors] = useState<string[]>([]);
+  const [cTrainRange, setCTrainRange] = useState<[string, string] | null>(null);
+  const [cValRange, setCValRange] = useState<[string, string] | null>(null);
+  const [cTestRange, setCTestRange] = useState<[string, string] | null>(null);
 
-  // ── Expanded row render ─────────────────────────────────────────────────
-
-  const expandedRowRender = (record: ModelItem) => {
-    const versions = versionData[record.name];
-    const loading = versionLoading[record.name];
-    const err = versionError[record.name];
-    const history = trainingHistory[record.name];
-    const histLoading = historyLoading[record.name];
-
-    if (err) {
-      return <div style={{ padding: 16, color: '#ff4d4f' }}>加载失败: {err}</div>;
-    }
-
-    return (
-      <div style={{ padding: '0 24px 16px' }}>
-        <div style={{ marginBottom: 8 }}>
-          <Button
-            type="primary"
-            size="small"
-            disabled={selectedCompare.length !== 2}
-            onClick={() => setCompareOpen(true)}
-          >
-            对比选中版本 ({selectedCompare.length}/2)
-          </Button>
-        </div>
-        <Table
-          dataSource={versions || []}
-          loading={loading}
-          rowKey="version"
-          columns={versionColumns(record.name)}
-          pagination={false}
-          size="small"
-          locale={{ emptyText: '暂无版本数据' }}
-        />
-
-        <h4 style={{ margin: '12px 0 8px', fontSize: 14 }}>Training History</h4>
-        <Table<TrainingHistory>
-          dataSource={history || []}
-          loading={histLoading}
-          rowKey="run_id"
-          size="small"
-          pagination={false}
-          locale={{ emptyText: '暂无训练记录' }}
-          columns={[
-            { title: '版本', dataIndex: 'version', width: 60, key: 'version' },
-            {
-              title: 'RMSE',
-              dataIndex: 'rmse',
-              width: 90,
-              key: 'rmse',
-              render: (v: number | null) => (v != null ? v.toFixed(4) : '-'),
-            },
-            {
-              title: 'IC',
-              dataIndex: 'ic',
-              width: 90,
-              key: 'ic',
-              render: (v: number | null) => (v != null ? v.toFixed(4) : '-'),
-            },
-            { title: 'Trials', dataIndex: 'n_trials', width: 70, key: 'n_trials' },
-            { title: 'Features', dataIndex: 'n_features', width: 70, key: 'n_features' },
-            { title: 'Dataset', dataIndex: 'dataset', key: 'dataset', ellipsis: true },
-          ]}
-        />
-      </div>
-    );
+  const loadDatasets = async () => {
+    setLoading(true);
+    try { setDatasets(await api.get('/api/admin/ml/datasets')); } catch { }
+    finally { setLoading(false); }
   };
 
-  // ── Model table columns ─────────────────────────────────────────────────
+  useEffect(() => { loadDatasets(); }, []);
 
-  const columns: ProColumns<ModelItem>[] = [
-    {
-      title: '名称',
-      dataIndex: 'name',
-      width: 150,
-      key: 'name',
-    },
-    {
-      title: '版本数',
-      dataIndex: 'version_count',
-      width: 70,
-      key: 'version_count',
-      align: 'center',
-    },
-    {
-      title: '最新',
-      dataIndex: 'latest_version',
-      width: 70,
-      key: 'latest_version',
-      align: 'center',
-    },
-    {
-      title: '状态',
-      dataIndex: 'stage',
-      width: 100,
-      key: 'stage',
-      render: (_, r) => {
-        const color = r.stage === 'Production' ? 'green' : 'default';
-        return <Tag color={color}>{r.stage || '-'}</Tag>;
-      },
-    },
-    {
-      title: '操作',
-      key: 'actions',
-      width: 100,
-      render: (_, r) => (
-        <Button
-          type="primary"
-          size="small"
-          icon={<ExperimentOutlined />}
-          onClick={() => handleTrain(r.name)}
-        >
-          训练
-        </Button>
-      ),
-    },
-  ];
+  const openCreate = async () => {
+    setCreateOpen(true);
+    try { setCFactors(await api.get(`/api/admin/ml/datasets/${cMarket}/factors`)); } catch { }
+  };
 
-  // ── Compare Modal ───────────────────────────────────────────────────────
+  const doCreate = async () => {
+    if (!cName || cSelectedFactors.length === 0) return;
+    try {
+      await api.post('/api/admin/ml/datasets', {
+        name: cName, market: cMarket, label: cLabel,
+        factor_ids: cSelectedFactors,
+        train_start: cTrainRange?.[0] || '', train_end: cTrainRange?.[1] || '',
+        val_start: cValRange?.[0] || '', val_end: cValRange?.[1] || '',
+        test_start: cTestRange?.[0] || '', test_end: cTestRange?.[1] || '',
+      });
+      message.success('Dataset registered');
+      setCreateOpen(false); loadDatasets();
+    } catch (e: any) { message.error(`Create failed: ${e.message}`); }
+  };
 
-  const renderCompareModal = () => {
-    if (selectedCompare.length !== 2) return null;
+  const doGenerate = async (id: number) => {
+    try {
+      const r = await api.post(`/api/admin/ml/datasets/${id}/generate`);
+      message.success(`Generated: ${r.table} (${r.row_count} rows)`);
+      loadDatasets();
+    } catch (e: any) { message.error(`Generate failed: ${e.message}`); }
+  };
 
-    const [a, b] = selectedCompare;
-    const metrics: { label: string; key: string; format: (_v: any) => string }[] = [
-      { label: 'RMSE', key: 'rmse', format: (v: number | null) => (v != null ? v.toFixed(4) : '-') },
-      { label: 'IC', key: 'ic', format: (v: number | null) => (v != null ? v.toFixed(4) : '-') },
-      { label: '特征数', key: 'n_features', format: (v: number) => String(v) },
-      { label: '训练时长', key: 'training_time', format: (v: number | null) => (v != null ? `${v}s` : '-') },
-      { label: '数据集', key: 'dataset', format: (v: string) => v || '-' },
-    ];
-
-    return (
-      <Modal
-        title="版本对比"
-        open={compareOpen}
-        onCancel={() => setCompareOpen(false)}
-        footer={null}
-        width={600}
-      >
-        <Table
-          dataSource={metrics.map((m, i) => ({
-            key: i,
-            metric: m.label,
-            left: m.format((a as any)[m.key]),
-            right: m.format((b as any)[m.key]),
-          }))}
-          pagination={false}
-          size="small"
-          columns={[
-            { title: '指标', dataIndex: 'metric', width: 100, key: 'metric' },
-            {
-              title: `${a.modelName} v${a.version}${a.stage ? ` (${a.stage})` : ''}`,
-              dataIndex: 'left',
-              key: 'left',
-            },
-            {
-              title: `${b.modelName} v${b.version}${b.stage ? ` (${b.stage})` : ''}`,
-              dataIndex: 'right',
-              key: 'right',
-            },
-          ]}
-        />
-      </Modal>
-    );
+  const doDelete = async (id: number) => {
+    try { await api.del(`/api/admin/ml/datasets/${id}`); message.success('Deleted'); loadDatasets(); }
+    catch (e: any) { message.error(`Delete failed: ${e.message}`); }
   };
 
   return (
     <>
-      <ProTable<ModelItem>
-        headerTitle="注册模型"
-        rowKey="name"
-        search={false}
-        columns={columns}
-        expandable={{
-          expandedRowRender,
-          onExpand: handleExpand,
-        }}
-        request={async () => {
-          try {
-            const data: any = await api.get('/api/admin/models');
-            if (!Array.isArray(data)) {
-              const errMsg = data?.error || 'Unknown error';
-              message.error(`MLflow: ${errMsg}`);
-              return { data: [], success: false, total: 0 };
-            }
-            const enriched = (data as ModelItem[]).map((m: ModelItem) => ({
-              ...m,
-              version_count: m.versions?.length ?? 0,
-              latest_version: m.versions?.[m.versions.length - 1]?.version ?? '-',
-              stage: m.versions?.[m.versions.length - 1]?.stage ?? '-',
-            }));
-            return { data: enriched, success: true, total: enriched.length };
-          } catch (err: any) {
-            message.error(`Failed to load models: ${err?.message || err}`);
-            return { data: [], success: false, total: 0 };
-          }
-        }}
-        pagination={false}
-      />
-      {renderCompareModal()}
+      <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} style={{ marginBottom: 16 }}>新建数据集</Button>
+      <Table dataSource={datasets} rowKey="id" loading={loading} size="small"
+        columns={[
+          { title: '名称', dataIndex: 'name', width: 160 },
+          { title: '市场', dataIndex: 'market', width: 60, render: (v: string) => <Tag>{v.toUpperCase()}</Tag> },
+          { title: '因子数', width: 70, render: (_, r) => r.factor_ids.length },
+          { title: 'Label', dataIndex: 'label', width: 120 },
+          { title: 'BQ表', dataIndex: 'bq_table', width: 200, ellipsis: true,
+            render: (v: string | null) => v ? <Text code style={{ fontSize: 11 }}>{v}</Text> : <Text type="secondary">—</Text> },
+          { title: '行数', dataIndex: 'row_count', width: 80, render: (v: number) => v?.toLocaleString() || '—' },
+          { title: '操作', width: 160, render: (_, r) => (
+              <Space>
+                <Popconfirm title={r.bq_table ? '覆盖已有的 BQ 表？' : '生成 BQ 表？'} onConfirm={() => doGenerate(r.id)}>
+                  <Button size="small" type="primary" icon={<ThunderboltOutlined />}>生成</Button>
+                </Popconfirm>
+                <Popconfirm title="删除数据集及 BQ 表？" onConfirm={() => doDelete(r.id)} okButtonProps={{ danger: true }}>
+                  <Button size="small" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]} />
+
+      <Modal title="新建数据集" open={createOpen} onCancel={() => setCreateOpen(false)} onOk={doCreate}
+        okText="创建" width={800} okButtonProps={{ disabled: !cName || cSelectedFactors.length === 0 }}>
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Space>
+            <Text strong>名称:</Text><Input value={cName} onChange={e => setCName(e.target.value)} style={{ width: 200 }} />
+            <Text strong>市场:</Text><Select value={cMarket} onChange={(v) => { setCMarket(v); setCSelectedFactors([]); }} style={{ width: 80 }}
+              options={['us', 'hk'].map(m => ({ value: m, label: m.toUpperCase() }))} />
+            <Text strong>Label:</Text><Select value={cLabel} onChange={setCLabel} style={{ width: 140 }}
+              options={['fwd_ret_5d', 'fwd_ret_20d'].map(l => ({ value: l, label: l }))} />
+          </Space>
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Text strong>因子:</Text>
+            <Checkbox.Group style={{ maxHeight: 300, overflow: 'auto', display: 'flex', flexDirection: 'column' }}
+              value={cSelectedFactors} onChange={(v) => setCSelectedFactors(v as string[])}
+              options={cFactors.map(f => ({ label: `${f.factor_id} (${f.source})`, value: f.factor_id }))} />
+          </Space>
+          <Space>
+            <Text strong>训练集:</Text><RangePicker onChange={(d) => d && d[0] && d[1] ? setCTrainRange([d[0].format('YYYY-MM-DD'), d[1].format('YYYY-MM-DD')]) : setCTrainRange(null)} />
+          </Space>
+          <Space>
+            <Text strong>验证集:</Text><RangePicker onChange={(d) => d && d[0] && d[1] ? setCValRange([d[0].format('YYYY-MM-DD'), d[1].format('YYYY-MM-DD')]) : setCValRange(null)} />
+          </Space>
+          <Space>
+            <Text strong>测试集:</Text><RangePicker onChange={(d) => d && d[0] && d[1] ? setCTestRange([d[0].format('YYYY-MM-DD'), d[1].format('YYYY-MM-DD')]) : setCTestRange(null)} />
+          </Space>
+        </Space>
+      </Modal>
     </>
   );
 };
 
-// ── Strategies Tab ──────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// MlConfigsTab
+// ═══════════════════════════════════════════════════════════════════════════════
 
-const StrategiesTab: React.FC = () => {
-  const [strategies, setStrategies] = useState<StrategyItem[]>([]);
+interface ConfigItem {
+  id: number; name: string; description: string;
+  config_path: string; dataset_name: string;
+  registry_model_name: string | null; status: string;
+}
+
+const MlConfigsTab: React.FC = () => {
+  const [configs, setConfigs] = useState<ConfigItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editingName, setEditingName] = useState('');
-  const [sourceCode, setSourceCode] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorName, setEditorName] = useState('');
+  const [editorContent, setEditorContent] = useState('');
+  const [editorDesc, setEditorDesc] = useState('');
 
-  const loadStrategies = useCallback(async () => {
+  const loadConfigs = async () => {
     setLoading(true);
-    try {
-      const data: StrategyItem[] = await api.get('/api/admin/strategies');
-      setStrategies(data || []);
-    } catch (err: any) {
-      message.error(`Failed to load strategies: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    try { setConfigs(await api.get('/api/admin/ml/configs')); } catch { }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { loadConfigs(); }, []);
 
-  const openStrategy = useCallback(async (name: string) => {
-    setEditingName(name);
-    setSourceCode('');
+  const openEditor = async (name: string) => {
     try {
-      const data = await api.get(`/api/admin/strategies/${name}`);
-      if (data.error) {
-        message.error(data.error);
-        return;
-      }
-      setSourceCode(data.source || '');
-      setDrawerOpen(true);
-    } catch (err: any) {
-      message.error(`Failed to read strategy: ${err.message}`);
-    }
-  }, []);
+      const d = await api.get(`/api/admin/ml/configs/${name}`);
+      setEditorName(name); setEditorContent(d.content || ''); setEditorOpen(true);
+    } catch { message.error('Failed to load config'); }
+  };
 
-  const saveStrategy = useCallback(async () => {
-    setSaving(true);
+  const saveEditor = async () => {
     try {
-      await api.put(`/api/admin/strategies/${editingName}`, { source: sourceCode });
-      message.success(`Saved ${editingName}`);
-      setDrawerOpen(false);
-    } catch (err: any) {
-      message.error(`Failed to save: ${err.message}`);
-    } finally {
-      setSaving(false);
-    }
-  }, [editingName, sourceCode]);
+      await api.put(`/api/admin/ml/configs/${editorName}`, { content: editorContent, description: editorDesc });
+      message.success('Saved'); setEditorOpen(false); loadConfigs();
+    } catch (e: any) { message.error(`Save failed: ${e.message}`); }
+  };
+
+  const doRegister = async (name: string) => {
+    try { await api.post(`/api/admin/ml/configs/${name}/register`); message.success('Registered'); loadConfigs(); }
+    catch (e: any) { message.error(`Register failed: ${e.message}`); }
+  };
+
+  const doDelete = async (name: string) => {
+    try { await api.del(`/api/admin/ml/configs/${name}`); message.success('Deleted'); loadConfigs(); }
+    catch (e: any) { message.error(e.message); }
+  };
 
   return (
-    <div>
-      <div style={{ marginBottom: 16 }}>
-        <Button
-          type="primary"
-          icon={<CodeOutlined />}
-          onClick={loadStrategies}
-          loading={loading}
-        >
-          加载策略列表
-        </Button>
-      </div>
-      {loading ? (
-        <Spin />
-      ) : strategies.length === 0 ? (
-        <Empty description="点击上方按钮加载策略列表" />
-      ) : (
-        <List
-          bordered
-          dataSource={strategies}
-          renderItem={(item) => (
-            <List.Item
-              style={{ cursor: 'pointer' }}
-              onClick={() => openStrategy(item.name)}
-            >
-              <List.Item.Meta
-                avatar={<CodeOutlined style={{ fontSize: 18 }} />}
-                title={item.name}
-                description={item.path}
-              />
-            </List.Item>
-          )}
-        />
-      )}
-      <Drawer
-        title={`编辑策略: ${editingName}`}
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        width={700}
-        footer={
-          <div style={{ textAlign: 'right' }}>
-            <Button onClick={() => setDrawerOpen(false)} style={{ marginRight: 8 }}>
-              取消
-            </Button>
-            <Button type="primary" loading={saving} onClick={saveStrategy}>
-              保存
-            </Button>
-          </div>
-        }
-      >
-        <TextArea
-          value={sourceCode}
-          onChange={(e) => setSourceCode(e.target.value)}
-          style={{
-            fontFamily: '"Fira Code", "Consolas", "Monaco", monospace',
-            fontSize: 13,
-            background: '#1e1e1e',
-            color: '#d4d4d4',
-            minHeight: 500,
-            borderColor: '#333',
-          }}
-        />
+    <>
+      <Space style={{ marginBottom: 16 }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditorName(''); setEditorContent(''); setEditorDesc(''); setEditorOpen(true); }}>新建配置</Button>
+      </Space>
+      <Table dataSource={configs} rowKey="id" loading={loading} size="small"
+        columns={[
+          { title: '配置名', dataIndex: 'name', width: 180 },
+          { title: '数据集', dataIndex: 'dataset_name', width: 140 },
+          { title: '模型名', dataIndex: 'registry_model_name', width: 140 },
+          { title: '状态', dataIndex: 'status', width: 100, render: (v: string) => v === 'registered' ? <Tag color="green">已注册</Tag> : <Tag>草稿</Tag> },
+          { title: '操作', width: 200, render: (_, r) => (
+              <Space>
+                <Button size="small" icon={<SettingOutlined />} onClick={() => openEditor(r.name)}>编辑</Button>
+                {r.status !== 'registered' && (
+                  <Popconfirm title="注册到模型中心？" onConfirm={() => doRegister(r.name)}>
+                    <Button size="small" type="primary" icon={<CheckCircleOutlined />}>注册</Button>
+                  </Popconfirm>
+                )}
+                <Popconfirm title="删除配置？如有已注册模型将先检查" onConfirm={() => doDelete(r.name)} okButtonProps={{ danger: true }}>
+                  <Button size="small" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]} />
+
+      <Drawer title={editorName ? `编辑: ${editorName}` : '新建配置'} open={editorOpen}
+        onClose={() => setEditorOpen(false)} width={700}
+        extra={<Button type="primary" onClick={saveEditor}>保存</Button>}>
+        <Space direction="vertical" style={{ width: '100%' }}>
+          {!editorName && <Input placeholder="配置名 (e.g. lgb_us_v1.yaml)" value={editorDesc} onChange={e => { setEditorDesc(e.target.value); setEditorName(e.target.value + '.yaml'); }} />}
+          <TextArea value={editorContent} onChange={e => setEditorContent(e.target.value)}
+            rows={30} style={{ fontFamily: 'monospace', fontSize: 12 }}
+            placeholder={`data:\n  dataset: us_tech_v1\n  label: fwd_ret_5d\n\nmodel:\n  type: lightgbm\n  params:\n    ...\n\nregistry:\n  model_name: us_tech`} />
+        </Space>
       </Drawer>
-    </div>
+    </>
   );
 };
 
-// ── MLflow Tab ──────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// ModelCenterTab
+// ═══════════════════════════════════════════════════════════════════════════════
 
-const MLflowTab: React.FC = () => (
-  <iframe
-    src="http://localhost:5000"
-    title="MLflow UI"
-    style={{ width: '100%', height: 'calc(100vh - 200px)', border: 'none' }}
-  />
-);
+interface CenterItem {
+  model_name: string; dataset_name: string; config_name: string;
+  versions: any[];
+}
 
-// ── Models Page ─────────────────────────────────────────────────────────────
+const ModelCenterTab: React.FC = () => {
+  const [items, setItems] = useState<CenterItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailItem, setDetailItem] = useState<CenterItem | null>(null);
 
-const Models: React.FC = () => {
-  const tabItems = [
-    {
-      key: 'models',
-      label: (
-        <span>
-          <ExperimentOutlined /> 模型
-        </span>
-      ),
-      children: <ModelsTab />,
-    },
-    {
-      key: 'strategies',
-      label: (
-        <span>
-          <CodeOutlined /> 策略
-        </span>
-      ),
-      children: <StrategiesTab />,
-    },
-    {
-      key: 'mlflow',
-      label: (
-        <span>
-          <CloudOutlined /> MLflow
-        </span>
-      ),
-      children: <MLflowTab />,
-    },
-  ];
+  const load = async () => {
+    setLoading(true);
+    try { setItems(await api.get('/api/admin/ml/center')); } catch { }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
 
-  return <Tabs defaultActiveKey="models" items={tabItems} />;
+  const doTrain = async (configName: string, skipTuning: boolean) => {
+    try {
+      const r = await api.post('/api/admin/ml/train', { config_name: configName, skip_tuning: skipTuning });
+      message.success(`Training task #${r.task_id} submitted`);
+    } catch (e: any) { message.error(`Train failed: ${e.message}`); }
+  };
+
+  const openDetail = (item: CenterItem) => { setDetailItem(item); setDetailOpen(true); };
+
+  return (
+    <>
+      <Table dataSource={items} rowKey="model_name" loading={loading} size="small"
+        columns={[
+          { title: '模型名', dataIndex: 'model_name', width: 160 },
+          { title: '数据集', dataIndex: 'dataset_name', width: 140 },
+          { title: '版本', key: 'versions', width: 200,
+            render: (_, r) => (r.versions || []).length === 0
+              ? <Text type="secondary">暂无</Text>
+              : <Space wrap>{(r.versions || []).map((v: any) => (
+                  <Tag key={v.version} color={v.current_stage === 'Production' ? 'green' : 'default'}>
+                    v{v.version} {v.current_stage}
+                  </Tag>
+                ))}</Space> },
+          { title: '操作', width: 240, render: (_, r) => (
+              <Space>
+                <Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(r)}>详情</Button>
+                <Popconfirm title="确认训练？（不含调优）" onConfirm={() => doTrain(r.config_name, true)}>
+                  <Button size="small" icon={<ThunderboltOutlined />}>快速训练</Button>
+                </Popconfirm>
+                <Popconfirm title="确认训练 + Optuna 调优？" onConfirm={() => doTrain(r.config_name, false)}>
+                  <Button size="small" type="primary" icon={<ExperimentOutlined />}>调优训练</Button>
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]} />
+
+      <Drawer title={detailItem?.model_name} open={detailOpen} onClose={() => setDetailOpen(false)} width={600}>
+        {detailItem && (
+          <Descriptions column={1} size="small" bordered>
+            <Descriptions.Item label="模型名">{detailItem.model_name}</Descriptions.Item>
+            <Descriptions.Item label="数据集">{detailItem.dataset_name || '—'}</Descriptions.Item>
+            <Descriptions.Item label="配置">{detailItem.config_name}</Descriptions.Item>
+            <Descriptions.Item label="版本数">{(detailItem.versions || []).length}</Descriptions.Item>
+          </Descriptions>
+        )}
+      </Drawer>
+    </>
+  );
 };
 
-export default Models;
+export default ModelsPage;
