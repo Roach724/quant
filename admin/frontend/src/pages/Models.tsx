@@ -71,8 +71,10 @@ const DatasetsTab: React.FC = () => {
 
   return (
     <>
-      <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} style={{ marginBottom: 16 }}>新建数据集</Button>
-      <Tooltip title="刷新"><Button icon={<ReloadOutlined />} onClick={() => { (async () => { setDatasets(await api.get('/api/admin/ml/datasets')); })(); }} style={{ marginBottom: 16, marginLeft: 8 }} /></Tooltip>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建数据集</Button>
+        <Tooltip title="刷新"><Button icon={<ReloadOutlined />} onClick={() => { (async () => { setDatasets(await api.get('/api/admin/ml/datasets')); })(); }} /></Tooltip>
+      </div>
       <Table dataSource={datasets} rowKey="id" loading={loading} size="small" columns={[
         { title: '名称', dataIndex: 'name', width: 160 },
         { title: '市场', dataIndex: 'market', width: 60, render: (v: string) => <Tag>{v.toUpperCase()}</Tag> },
@@ -145,7 +147,7 @@ const MlConfigsTab: React.FC = () => {
 
   return (
     <>
-      <Space style={{ marginBottom: 16 }}><Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditorName(''); setEditorContent(''); setEditorOpen(true); }}>新建配置</Button><Tooltip title="刷新"><Button icon={<ReloadOutlined />} onClick={() => { (async () => { setConfigs(await api.get("/api/admin/ml/configs")); })(); }} /></Tooltip></Space>
+<div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}><Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditorName(""); setEditorContent(""); setEditorOpen(true); }}>新建配置</Button><Tooltip title="刷新"><Button icon={<ReloadOutlined />} onClick={() => { (async () => { setConfigs(await api.get("/api/admin/ml/configs")); })(); }} /></Tooltip></div>
       <Table dataSource={configs} rowKey="id" loading={loading} size="small" columns={[
         { title: '配置名', dataIndex: 'name', width: 180 },
         { title: '数据集', dataIndex: 'dataset_name', width: 140 },
@@ -264,9 +266,10 @@ const ModelCenterTab: React.FC = () => {
 
   return (
     <>
-      <Space style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>从模板创建</Button>
-      </Space>
+        <Tooltip title="刷新"><Button icon={<ReloadOutlined />} onClick={load} /></Tooltip>
+      </div>
       <Table dataSource={items} rowKey="model_name" loading={loading} size="small"
       columns={columns}
       expandable={{
@@ -320,7 +323,10 @@ const StrategiesTab: React.FC = () => {
 
   return (
     <>
-      <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditorName(''); setEditorSource(''); setEditorOpen(true); }} style={{ marginBottom: 16 }}>新建策略</Button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditorName(''); setEditorSource(''); setEditorOpen(true); }}>新建策略</Button>
+        <Tooltip title="刷新"><Button icon={<ReloadOutlined />} onClick={load} /></Tooltip>
+      </div>
       <Table dataSource={strategies} rowKey="name" loading={loading} size="small"
         columns={[
           { title: '文件', dataIndex: 'name', width: 220 },

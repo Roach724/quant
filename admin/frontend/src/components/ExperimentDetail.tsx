@@ -80,7 +80,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
       {/* ── Controls ── */}
       <Row gutter={12} style={{ marginBottom: 16 }}>
         <Col>
-          <span style={{ fontSize: 11, color: '#999', display: 'block', marginBottom: 2 }}>Experiment</span>
+          <span style={{ fontWeight: 600, marginRight: 8 }}>Experiment</span>
           <Select
             value={selectedExp}
             onChange={(v) => { setSelectedExp(v); setSelectedRun(''); }}
@@ -95,7 +95,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
         </Col>
         {runs.length > 0 && (
           <Col>
-            <span style={{ fontSize: 11, color: '#999', display: 'block', marginBottom: 2 }}>Run</span>
+            <span style={{ fontWeight: 600, marginRight: 8 }}>Run</span>
             <Select
               value={selectedRun}
               onChange={setSelectedRun}
@@ -109,6 +109,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
             />
           </Col>
         )}
+          <Col flex="auto" />
         <Col>
           <Button icon={<ReloadOutlined />} onClick={() => { loadExperiments(); if (selectedExp) loadData(selectedExp, selectedRun); }} size="small">刷新</Button>
         </Col>

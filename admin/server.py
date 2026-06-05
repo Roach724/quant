@@ -1616,9 +1616,10 @@ def admin_ml_train(body: dict = Body(...)):
     path = _ML_CONFIG_DIR / fname
     if not path.exists():
         raise HTTPException(404, detail=f"Config '{config_name}' not found")
-    cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+    cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
            f".venv/bin/python3 -c \"from ml.pipeline import TrainPipeline; "
-           f"p = TrainPipeline('{path}'); p.run(skip_tuning={str(skip_tuning).lower()})\"")
+           f"p = TrainPipeline('{path}'); p.run(skip_tuning={skip_tuning})\" "
+           f"2>&1 | tee -a /var/log/quant/prod/train/{config_name}.log")
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd, "config": config_name}, status="pending")
     session.add(task)
