@@ -545,14 +545,19 @@ def admin_logs(
     start: str = Query(""),
     end: str = Query(""),
     lines: int = Query(100),
+    file: str = Query(""),
 ):
     """Read log lines from /var/log/quant/{prod,dev}/{module}/, filtered."""
     files = _module_log_files(module)
     if not files:
         if not any(os.path.isdir(os.path.join(r, module)) for r in LOG_ROOTS):
             return {"error": f"Unknown module: {module}", "lines": []}
-        return {"module": module, "lines": [], "file": None}
-    log_file = files[0]
+        return {"module": module, "lines": [], "file": None, "files": []}
+    # If file param given, find matching file; else default to most recent
+    if file:
+        log_file = file if os.path.isfile(file) else files[0]
+    else:
+        log_file = files[0]
     # Parse optional time range filter
     ts_start = None
     ts_end = None
@@ -603,7 +608,13 @@ def admin_logs(
                 continue
             result_lines.append({"ts": ts, "level": lvl, "msg": msg})
     result_lines.reverse()
-    return {"module": module, "file": os.path.basename(log_file), "lines": result_lines}
+    return {
+        "module": module,
+        "file": os.path.basename(log_file),
+        "file_path": log_file,
+        "files": [os.path.basename(f) for f in files],
+        "lines": result_lines,
+    }
 
 
 @app.websocket("/ws/logs")
