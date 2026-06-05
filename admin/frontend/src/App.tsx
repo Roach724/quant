@@ -36,7 +36,9 @@ function AppLayout() {
       logo={null}
       location={{ pathname }}
       menuDataRender={() => menuData}
-      contentStyle={{ padding: '12px 16px' }}
+      siderWidth={180}
+      contentStyle={{ padding: '8px 12px', margin: 0, maxWidth: '100%' }}
+      layout="mix"
       menuItemRender={(item, dom) => (
         <a
           onClick={() => {

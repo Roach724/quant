@@ -158,19 +158,47 @@ function MarketDot({ expId, pipeline }: { expId: string; pipeline: any }) {
 }
 
 function makeCandlestickOption(data: any[], symbol: string) {
-  const dates = data.map((d: any) => d.ts ?? d.time ?? '');
-  const ohlc = data.map((d: any) => [d.open, d.close, d.low, d.high]);
-  const volumes = data.map((d: any) => [d.volume ?? 0, d.close >= d.open ? 1 : -1]);
+  // API returns {ts, o, h, l, c, v} — map to ECharts candlestick format
+  const ohlc = data.map((d: any) => [d.o ?? d.open, d.c ?? d.close, d.l ?? d.low, d.h ?? d.high]);
+  const volumes = data.map((d: any) => [d.v ?? d.volume ?? 0, (d.c ?? d.close) >= (d.o ?? d.open) ? 1 : -1]);
+  // Format timestamps: HH:mm for axis, full for tooltip
+  const formatTime = (ts: string) => {
+    if (!ts) return '';
+    const m = ts.match(/[T ](\d{2}:\d{2})/);
+    return m ? m[1] : ts;
+  };
+  const dates = data.map((d: any) => formatTime(d.ts ?? d.time ?? ''));
+  const fullDates = data.map((d: any) => {
+    const t = d.ts ?? d.time ?? '';
+    return t.replace('T', ' ').replace(/\+00:00$/, '').slice(0, 19);
+  });
+  // Show sparse labels (every Nth point)
+  const labelInterval = Math.max(1, Math.floor(data.length / 10));
 
   return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross' },
+      formatter: (params: any) => {
+        const idx = params[0]?.dataIndex ?? 0;
+        const row = data[idx];
+        if (!row) return '';
+        const ts = fullDates[idx];
+        const o = row.o ?? row.open; const c = row.c ?? row.close;
+        const h = row.h ?? row.high; const l = row.l ?? row.low;
+        const v = row.v ?? row.volume ?? 0;
+        return `${symbol}<br/>${ts}<br/>O: ${o}  C: ${c}<br/>H: ${h}  L: ${l}<br/>Vol: ${v.toLocaleString()}`;
+      },
+    },
     grid: [
       { left: 60, right: 20, top: 20, height: '60%' },
       { left: 60, right: 20, top: '75%', height: '15%' },
     ],
     xAxis: [
       { type: 'category', data: dates, gridIndex: 0, axisLabel: { show: false } },
-      { type: 'category', data: dates, gridIndex: 1, axisLabel: { rotate: 30, fontSize: 10 } },
+      { type: 'category', data: dates, gridIndex: 1, axisLabel: {
+        interval: labelInterval, rotate: 0, fontSize: 10,
+      }},
     ],
     yAxis: [
       { type: 'value', gridIndex: 0, scale: true, axisLabel: { fontSize: 10 } },
