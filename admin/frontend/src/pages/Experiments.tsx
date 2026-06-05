@@ -6,6 +6,7 @@ import {
   PlusOutlined,
   EyeOutlined,
   DeleteOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
@@ -27,7 +28,10 @@ import {
   Alert,
   Divider,
   Popconfirm,
+  Typography,
 } from 'antd';
+
+const { Text } = Typography;
 import { api } from '../api';
 
 interface ExperimentItem {
@@ -130,6 +134,9 @@ const Experiments: React.FC = () => {
   const [equityLatest, setEquityLatest] = useState<Record<string, any> | null>(null);
   const [equityLoading, setEquityLoading] = useState(false);
   const [clearLoading, setClearLoading] = useState(false);
+  const [configDrawer, setConfigDrawer] = useState<{open: boolean; expId: string; content: string; loading: boolean}>({
+    open: false, expId: '', content: '', loading: false,
+  });
   const [selectedExpId, setSelectedExpId] = useState<string | null>(null);
 
   const openDrawer = async (exp: ExperimentItem) => {
@@ -190,6 +197,27 @@ const Experiments: React.FC = () => {
       }
     } catch (err: any) {
       message.error(`${action} ${expId} failed: ${err.message}`);
+    }
+  };
+
+  const openConfig = async (expId: string) => {
+    setConfigDrawer({ open: true, expId, content: '', loading: true });
+    try {
+      const data = await api.get(`/api/admin/experiments/${expId}/config`);
+      setConfigDrawer(c => ({ ...c, content: data.content || '', loading: false }));
+    } catch (err: any) {
+      message.error(`Failed to load config: ${err.message}`);
+      setConfigDrawer({ open: false, expId: '', content: '', loading: false });
+    }
+  };
+
+  const saveConfig = async () => {
+    try {
+      await api.put(`/api/admin/experiments/${configDrawer.expId}/config`, { content: configDrawer.content });
+      message.success('Config saved');
+      setConfigDrawer({ open: false, expId: '', content: '', loading: false });
+    } catch (err: any) {
+      message.error(`Save failed: ${err.message}`);
     }
   };
 
@@ -259,6 +287,9 @@ const Experiments: React.FC = () => {
       width: 260,
       render: (_, r) => (
         <Space>
+          <Tooltip title="Config">
+            <Button size="small" icon={<SettingOutlined />} onClick={() => openConfig(r.exp_id)} />
+          </Tooltip>
           <Tooltip title="Detail">
             <Button
               size="small"
@@ -267,31 +298,24 @@ const Experiments: React.FC = () => {
             />
           </Tooltip>
           {r.status !== 'running' && (
-            <Tooltip title="Start">
-              <Button
-                type="primary"
-                size="small"
-                icon={<PlayCircleOutlined />}
-                onClick={() => handleAction(r.exp_id, 'start')}
-              />
-            </Tooltip>
+            <Popconfirm title={`启动 ${r.exp_id}？`} onConfirm={() => handleAction(r.exp_id, 'start')}>
+              <Tooltip title="Start">
+                <Button type="primary" size="small" icon={<PlayCircleOutlined />} />
+              </Tooltip>
+            </Popconfirm>
           )}
           {r.status === 'running' && (
-            <Tooltip title="Stop">
-              <Button
-                size="small"
-                icon={<PauseCircleOutlined />}
-                onClick={() => handleAction(r.exp_id, 'stop')}
-              />
-            </Tooltip>
+            <Popconfirm title={`停止 ${r.exp_id}？`} onConfirm={() => handleAction(r.exp_id, 'stop')}>
+              <Tooltip title="Stop">
+                <Button size="small" icon={<PauseCircleOutlined />} />
+              </Tooltip>
+            </Popconfirm>
           )}
-          <Tooltip title="Restart">
-            <Button
-              size="small"
-              icon={<ReloadOutlined />}
-              onClick={() => handleAction(r.exp_id, 'restart')}
-            />
-          </Tooltip>
+          <Popconfirm title={`重启 ${r.exp_id}？`} onConfirm={() => handleAction(r.exp_id, 'restart')}>
+            <Tooltip title="Restart">
+              <Button size="small" icon={<ReloadOutlined />} />
+            </Tooltip>
+          </Popconfirm>
           <Popconfirm
             title={`永久删除 ${r.exp_id}？`}
             description="将删除所有 BQ 数据、状态、日志和输出"
@@ -526,6 +550,30 @@ const Experiments: React.FC = () => {
               </Button>
             </Popconfirm>
           </>
+        )}
+      </Drawer>
+
+      {/* ── Config Editor Drawer ──────────────────────── */}
+      <Drawer
+        title={`Config: ${configDrawer.expId}`}
+        open={configDrawer.open}
+        onClose={() => setConfigDrawer({ open: false, expId: '', content: '', loading: false })}
+        width={700}
+        extra={
+          <Popconfirm title="确认保存？旧配置将备份为 .bak" onConfirm={saveConfig} okText="保存">
+            <Button type="primary" disabled={configDrawer.loading}>Save</Button>
+          </Popconfirm>
+        }
+      >
+        {configDrawer.loading ? (
+          <Text type="secondary">Loading...</Text>
+        ) : (
+          <Input.TextArea
+            value={configDrawer.content}
+            onChange={(e) => setConfigDrawer(c => ({ ...c, content: e.target.value }))}
+            rows={30}
+            style={{ fontFamily: 'monospace', fontSize: 12 }}
+          />
         )}
       </Drawer>
     </>

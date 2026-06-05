@@ -315,6 +315,42 @@ def admin_experiment_delete(exp_id: str):
     return {"status": "ok", "details": results}
 
 
+@app.get("/api/admin/experiments/{exp_id}/config")
+def admin_experiment_config(exp_id: str):
+    """Return the experiment's YAML config file content."""
+    mgr = ExperimentManager()
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+    config_path = Path("/opt/quant-prod") / exp.config_path
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail=f"Config file not found: {config_path}")
+    return {"exp_id": exp_id, "path": str(config_path), "content": config_path.read_text()}
+
+
+@app.put("/api/admin/experiments/{exp_id}/config")
+def admin_experiment_config_update(exp_id: str, body: dict = Body(...)):
+    """Update the experiment's YAML config file. Backs up old version."""
+    import shutil
+    mgr = ExperimentManager()
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+    config_path = Path("/opt/quant-prod") / exp.config_path
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail=f"Config file not found: {config_path}")
+    content = body.get("content", "")
+    if not content:
+        raise HTTPException(status_code=400, detail="Missing 'content' in request body")
+    # Backup
+    backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+    shutil.copy2(config_path, backup_path)
+    config_path.write_text(content)
+    return {"status": "ok", "path": str(config_path), "backup": str(backup_path)}
+
+
 # ── Data Map + Collector status ──────────────────────────────────────────────
 
 @app.get("/api/admin/data/f10")
