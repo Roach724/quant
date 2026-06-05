@@ -265,6 +265,15 @@ def admin_data_f10():
 @app.get("/api/admin/data/tables")
 def admin_data_tables():
     """Return all BQ tables with row counts, schemas, last write times."""
+    # Use a simple module-level cache with long TTL to avoid repeated INFO_SCHEMA queries
+    import time as _time
+    cache_key = "_bq_tables_cache"
+    now = _time.time()
+    if hasattr(admin_data_tables, cache_key):
+        cached_data, cached_ts = getattr(admin_data_tables, cache_key)
+        if now - cached_ts < 3600:  # 1-hour TTL
+            return cached_data
+
     client = bigquery.Client(project="deductive-notch-495015-c2")
     query = """
         SELECT table_name, creation_time
@@ -296,6 +305,7 @@ def admin_data_tables():
             "table_name": name, "row_count": cnt,
             "last_write": latest_str, "schema": schema_cols,
         })
+    setattr(admin_data_tables, cache_key, (tables, now))
     return tables
 
 
@@ -686,9 +696,9 @@ def admin_models():
 @app.get("/api/admin/models/{name}/history")
 def admin_model_history(name: str):
     """Return training run history for a model with key metrics."""
-    rv = requests.post(
+    rv = requests.get(
         f"{MLFLOW_API}/model-versions/search",
-        json={"filter": f"name='{name}'"},
+        params={"name": name},
         timeout=5,
     )
     versions = rv.json().get("model_versions", []) or []
@@ -739,9 +749,9 @@ def admin_train_model(model_name: str, market: str = "us"):
 @app.get("/api/admin/models/{name}/versions")
 def admin_model_versions(name: str):
     """Get all versions of a model with metrics."""
-    rv = requests.post(
+    rv = requests.get(
         f"{MLFLOW_API}/model-versions/search",
-        json={"filter": f"name='{name}'"},
+        params={"name": name},
         timeout=5,
     )
     versions = rv.json().get("model_versions", [])
