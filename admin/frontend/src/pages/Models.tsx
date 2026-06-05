@@ -56,7 +56,12 @@ const DatasetsTab: React.FC = () => {
 
   useEffect(() => { (async () => { setLoading(true); try { setDatasets(await api.get('/api/admin/ml/datasets')); } catch { } finally { setLoading(false); } })(); }, []);
 
-  const openCreate = async () => { setCreateOpen(true); fetchFactors(cMarket); };
+  const openCreate = async () => {
+    setCName(''); setCMarket('us'); setCLabel('fwd_ret_5d');
+    setCSelectedFactors([]); setCSourceFilter('all');
+    setCTrainRange(null); setCValRange(null); setCTestRange(null);
+    setCreateOpen(true); fetchFactors('us');
+  };
   const fetchFactors = async (market: string) => {
     try { setCFactors(await api.get(`/api/admin/ml/datasets/${market}/factors`)); } catch { }
   };
@@ -91,7 +96,23 @@ const DatasetsTab: React.FC = () => {
                 { value: 'all', label: '全部' },
                 ...Array.from(new Set(cFactors.map(f => f.source))).map(s => ({ value: s, label: s })),
               ]} />
-              <Text type="secondary">{cSelectedFactors.length} / {cFactors.length} 已选择</Text>
+              <Text type="secondary">{cSelectedFactors.length} / {cFactors.filter(f => cSourceFilter === 'all' || f.source === cSourceFilter).length} 已选择</Text>
+            </Space>
+            <Space style={{ marginBottom: 4 }}>
+              <Checkbox
+                checked={cSelectedFactors.length === cFactors.filter(f => cSourceFilter === 'all' || f.source === cSourceFilter).length && cFactors.filter(f => cSourceFilter === 'all' || f.source === cSourceFilter).length > 0}
+                indeterminate={cSelectedFactors.length > 0 && cSelectedFactors.length < cFactors.filter(f => cSourceFilter === 'all' || f.source === cSourceFilter).length}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    const filtered = cFactors.filter(f => cSourceFilter === 'all' || f.source === cSourceFilter).map(f => f.factor_id);
+                    setCSelectedFactors([...new Set([...cSelectedFactors, ...filtered])]);
+                  } else {
+                    const filteredIds = cFactors.filter(f => cSourceFilter === 'all' || f.source === cSourceFilter).map(f => f.factor_id);
+                    setCSelectedFactors(cSelectedFactors.filter(f => !filteredIds.includes(f)));
+                  }
+                }}>
+                全选当前筛选
+              </Checkbox>
             </Space>
             <Checkbox.Group style={{ maxHeight: 300, overflow: 'auto', display: 'flex', flexDirection: 'column' }}
               value={cSelectedFactors} onChange={(v) => setCSelectedFactors(v as string[])}

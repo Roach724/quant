@@ -1339,7 +1339,7 @@ def admin_ml_dataset_create(body: dict = Body(...)):
 
 @app.post("/api/admin/ml/datasets/{ds_id}/generate")
 def admin_ml_dataset_generate(ds_id: int):
-    """Build/replace BQ table for a dataset."""
+    """Build/replace BQ table for a dataset in ml_dataset.{name}."""
     from datetime import datetime as _dt
     session = get_session()
     ds = session.query(_MlDataset).filter(_MlDataset.id == ds_id).first()
@@ -1351,70 +1351,47 @@ def admin_ml_dataset_generate(ds_id: int):
         raise HTTPException(400, detail="No factors selected")
 
     client = _bq.Client(project="deductive-notch-495015-c2")
-    table_name = f"ml_dataset_{ds.name}"
-    full_table = f"deductive-notch-495015-c2.quant.{table_name}"
-    prefix = f"{'US' if ds.market == 'us' else 'HK'}."
+    table_name = ds.name
+    full_table = f"deductive-notch-495015-c2.ml_dataset.{table_name}"
     label_col = ds.label
 
-    # Build pivot query: one row per (symbol, date) with columns = factor_ids + label
-    factor_cols = ", ".join(
-        f"MAX(IF(factor_id='{f}', value, NULL)) AS `{f.replace(f'{ds.market}_', '', 1)}`"
+    # Build pivot using MAX(CASE WHEN) — simpler and more reliable than PIVOT
+    pivot_cols = ",\n                   ".join(
+        f"MAX(CASE WHEN factor_id = '{f}' THEN value END) AS `{f.replace(f'{ds.market}_', '', 1)}`"
         for f in factor_ids
     )
-    splits = [
-        ("train", ds.train_start, ds.train_end),
-        ("val", ds.val_start, ds.val_end),
-        ("test", ds.test_start, ds.test_end),
-    ]
-
-    union_parts = []
-    for split_name, s_start, s_end in splits:
-        union_parts.append(f"""
-            SELECT symbol, date, '{split_name}' AS split, {factor_cols}, {label_col} AS label
-            FROM (
-                SELECT symbol, DATE(timestamp) AS date, factor_id, value
-                FROM quant.factor_values
-                WHERE factor_id IN UNNEST(@factor_ids)
-                  AND timestamp BETWEEN '{s_start}' AND '{s_end}'
-            )
-            PIVOT(MAX(value) FOR factor_id IN ({','.join(repr(f) for f in factor_ids)}))
-        """)
 
     try:
-        client.query(f"DROP TABLE IF EXISTS {full_table}").result()
-        # Simplified approach: query factor_values with pivot, create table
+        # Drop existing if any
+        client.query(f"DROP TABLE IF EXISTS `{full_table}`").result()
+
+        # Create table with 3 splits unioned
         create_sql = f"""
-            CREATE OR REPLACE TABLE {full_table} AS
+            CREATE TABLE `{full_table}` AS
+            WITH raw AS (
+                SELECT symbol, DATE(timestamp) AS date, factor_id, value,
+                       CASE
+                           WHEN timestamp BETWEEN '{ds.train_start}' AND '{ds.train_end}' THEN 'train'
+                           WHEN timestamp BETWEEN '{ds.val_start}' AND '{ds.val_end}' THEN 'val'
+                           WHEN timestamp BETWEEN '{ds.test_start}' AND '{ds.test_end}' THEN 'test'
+                       END AS split
+                FROM `deductive-notch-495015-c2.quant.factor_values`
+                WHERE factor_id IN UNNEST(@factor_ids)
+                  AND timestamp BETWEEN '{ds.train_start}' AND '{ds.test_end}'
+            )
             SELECT symbol, date, split,
-                   {', '.join(f"`{f.replace(f'{ds.market}_', '', 1)}`" for f in factor_ids)},
-                   {label_col} AS label
-            FROM quant.factor_values
-            PIVOT(MAX(value) FOR factor_id IN ({','.join(repr(f) for f in factor_ids)}))
-            WHERE factor_id IN UNNEST(@factor_ids)
-              AND (
-                (timestamp BETWEEN '{ds.train_start}' AND '{ds.train_end}' AND '{ds.train_start}' != '')
-                OR (timestamp BETWEEN '{ds.val_start}' AND '{ds.val_end}' AND '{ds.val_start}' != '')
-                OR (timestamp BETWEEN '{ds.test_start}' AND '{ds.test_end}' AND '{ds.test_start}' != '')
-              )
+                   {pivot_cols},
+                   MAX(CASE WHEN factor_id = '{label_col}' THEN value END) AS label
+            FROM raw
+            WHERE split IS NOT NULL
+            GROUP BY symbol, date, split
         """
         job_config = bigquery.QueryJobConfig(
             query_parameters=[bigquery.ArrayQueryParameter("factor_ids", "STRING", factor_ids)]
         )
         client.query(create_sql, job_config=job_config).result()
 
-        # Add split labels
-        update_sqls = [
-            f"UPDATE {full_table} SET split='train' WHERE date BETWEEN '{ds.train_start}' AND '{ds.train_end}'",
-            f"UPDATE {full_table} SET split='val' WHERE date BETWEEN '{ds.val_start}' AND '{ds.val_end}'",
-            f"UPDATE {full_table} SET split='test' WHERE date BETWEEN '{ds.test_start}' AND '{ds.test_end}'",
-        ]
-        for s in update_sqls:
-            try:
-                client.query(s).result()
-            except Exception:
-                pass
-
-        cnt = list(client.query(f"SELECT COUNT(*) AS n FROM {full_table}").result())[0].n
+        cnt = list(client.query(f"SELECT COUNT(*) AS n FROM `{full_table}`").result())[0].n
         ds.bq_table = full_table
         ds.status = "ready"
         ds.row_count = cnt

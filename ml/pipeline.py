@@ -155,7 +155,7 @@ class TrainPipeline:
                     return r.bq_table
         except Exception:
             pass
-        return f"deductive-notch-495015-c2.quant.ml_dataset_{name}"
+        return f"deductive-notch-495015-c2.ml_dataset.{name}"
 
     def _load_dataset(self, client, table: str) -> pd.DataFrame:
         """Load dataset from BQ table."""
