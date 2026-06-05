@@ -238,26 +238,9 @@ class ExperimentManager:
         version: int,
         config_path: str,
         name: str = "",
+        exp_id: str = "",
     ) -> str:
-        """Register a new experiment and return its canonical id.
-
-        Parameters
-        ----------
-        exp_type : {'live', 'paper', 'prod'}
-        market : {'us', 'hk', 'crypto'}
-        strategy : short strategy name, e.g. 'ml', 'mom'
-        version : positive integer
-        config_path : relative path to the YAML config
-        name : optional human-readable label
-
-        Returns
-        -------
-        str : canonical experiment id, e.g. 'live_us_ml_v2'
-
-        Raises
-        ------
-        ValueError : invalid type/market/version or duplicate id
-        """
+        """Register a new experiment. If exp_id is given, use it; otherwise build from type/market/strategy/version."""
         if exp_type not in VALID_TYPES:
             raise ValueError(
                 f"Invalid type '{exp_type}' — must be one of {sorted(VALID_TYPES)}"
@@ -269,7 +252,7 @@ class ExperimentManager:
         if not isinstance(version, int) or version < 1:
             raise ValueError(f"version must be a positive int, got {version!r}")
 
-        exp_id = _build_id(exp_type, market, strategy, version)
+        exp_id = exp_id or _build_id(exp_type, market, strategy, version)
 
         if exp_id in self._data:
             raise ValueError(f"Experiment '{exp_id}' is already registered")

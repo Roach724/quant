@@ -28,17 +28,19 @@ def run_one(task: Task) -> None:
         session.commit()
 
         command = (t.params or {}).get("cmd") or (t.params or {}).get("command", "echo no command")
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             command,
             shell=True,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=300,
             cwd=PROJECT_ROOT,
+            start_new_session=True,
         )
+        stdout, stderr = proc.communicate(timeout=7200)
 
         t.status = "completed" if proc.returncode == 0 else "failed"
-        t.result = proc.stdout.strip() or proc.stderr.strip()
+        t.result = stdout.strip() or stderr.strip()
         t.finished_at = datetime.utcnow()
         session.commit()
 

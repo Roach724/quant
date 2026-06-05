@@ -128,6 +128,13 @@ class LiveRunner:
 
         self._init_components()
 
+        # Record experiment metadata early (before main loop) so Dashboard sees it
+        try:
+            from live.config import record_experiment
+            record_experiment(self.config, self._output_dir)
+        except Exception:
+            pass
+
         try:
             if self._mode == "paper":
                 self._run_paper_loop()
