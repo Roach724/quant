@@ -1526,28 +1526,53 @@ def admin_ml_config_register(name: str):
 
 @app.get("/api/admin/ml/center")
 def admin_ml_center():
-    """Model center list: registered configs + MLflow model info."""
+    """Model center list: MLflow models + config info."""
     session = get_session()
-    configs = session.query(_MlConfig).filter(_MlConfig.status == "registered").all()
+    # Load configs for dataset_name lookup
+    config_map: dict[str, dict] = {}
+    for cfg in session.query(_MlConfig).all():
+        key = cfg.registry_model_name or cfg.name.replace(".yaml", "")
+        config_map[key] = {"dataset_name": cfg.dataset_name or "", "config_name": cfg.name}
+
     result = []
+    # Fetch ALL MLflow registered models
+    try:
+        r = requests.get(f"{MLFLOW_API}/registered-models/search", timeout=5)
+        mlflow_models = r.json().get("registered_models", [])
+    except Exception:
+        mlflow_models = []
+
     seen = set()
-    for cfg in configs:
-        model_name = cfg.registry_model_name or cfg.name.replace(".yaml", "")
-        if model_name in seen:
+    for m in mlflow_models:
+        model_name = m.get("name", "")
+        if not model_name or model_name in seen:
             continue
         seen.add(model_name)
+        cfg = config_map.get(model_name, {})
         mlflow_versions = []
         try:
-            r = requests.get(f"{MLFLOW_API}/model-versions/search", params={"name": model_name}, timeout=5)
-            mlflow_versions = r.json().get("model_versions", [])
+            rv = requests.get(f"{MLFLOW_API}/model-versions/search", params={"name": model_name}, timeout=5)
+            mlflow_versions = rv.json().get("model_versions", [])
         except Exception:
             pass
         result.append({
             "model_name": model_name,
-            "dataset_name": cfg.dataset_name or "",
-            "config_name": cfg.name,
+            "dataset_name": cfg.get("dataset_name", "—"),
+            "config_name": cfg.get("config_name", "—"),
             "versions": mlflow_versions,
         })
+
+    # Also include registered configs that don't have MLflow models yet
+    for cfg in session.query(_MlConfig).filter(_MlConfig.status == "registered").all():
+        model_name = cfg.registry_model_name or cfg.name.replace(".yaml", "")
+        if model_name not in seen:
+            seen.add(model_name)
+            result.append({
+                "model_name": model_name,
+                "dataset_name": cfg.dataset_name or "",
+                "config_name": cfg.name,
+                "versions": [],
+            })
     return result
 
 

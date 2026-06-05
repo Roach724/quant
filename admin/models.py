@@ -2,7 +2,7 @@
 
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
 from sqlalchemy.orm import DeclarativeBase, Session
-from datetime import datetime
+from datetime import datetime, timezone
 
 DB_PATH = "/var/quant/admin.db"
 engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
