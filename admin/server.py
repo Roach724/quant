@@ -390,7 +390,7 @@ def admin_data_tables():
     now = _time.time()
     if hasattr(admin_data_tables, cache_key):
         cached_data, cached_ts = getattr(admin_data_tables, cache_key)
-        if now - cached_ts < 3600:  # 1-hour TTL
+        if now - cached_ts < 86400:  # 24-hour TTL
             return cached_data
 
     client = bigquery.Client(project="deductive-notch-495015-c2")
