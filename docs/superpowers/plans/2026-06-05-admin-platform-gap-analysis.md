@@ -42,6 +42,7 @@
 |------|:---:|:---:|------|
 | 任务列表 | ✅ | ✅ | — |
 | 立即触发 | ✅ | ✅ | — |
+| **任务名称/描述** | — | ❌ | 🐛 缺：列表只显示 raw 命令，没有任务名称或注释描述，用户不知道每个任务是干什么的 |
 | **启停开关** | ✅ | ❌ | 缺：Switch 组件切换 enabled/disabled（注释/取消注释 crontab 行） |
 | **执行历史** | ✅ | ❌ | 缺：cron log 解析显示历史执行结果 |
 | **新建/编辑** | ✅ | ❌ | 缺：crontab 表达式编辑器 + 命令行输入表单 |
@@ -53,8 +54,8 @@
 |------|:---:|:---:|------|
 | 模型列表 | ✅ | ✅ | — |
 | 训练触发 | ✅ | ✅ | — |
-| 策略列表 + 编辑 | ✅ | ✅ | — |
-| MLflow iframe | ✅ | ✅ | — |
+| 策略列表 + 编辑 | ✅ | ❌ | 🐛 **页面损坏**：策略编辑页加载失败，保存报错 |
+| MLflow iframe / API | ✅ | ❌ | 🐛 **页面损坏**：MLflow 页和 iframe 不显示数据，API 代理返回空 |
 | **版本对比** | ✅ | ❌ | 缺：选中两个版本 → 对比 RMSE/IC/特征数/训练时间 |
 | **Stage 管理** | ✅ | ❌ | 缺：Promote to Production / Archive 按钮 |
 | **训练历史** | ✅ | ❌ | 缺：训练记录列表（版本 ← 参数对应关系） |
@@ -63,7 +64,7 @@
 
 | 功能 | Spec | 实现 | 差距 |
 |------|:---:|:---:|------|
-| 因子列表 + 市场 | ✅ | ✅ | — |
+| 因子列表 + 市场 | ✅ | ❌ | 🐛 **市场判断错误**：全部显示 `crypto`。根因：`factor_values` 中 US 标的无 `US.` 前缀（存的是裸代码如 `AAPL`、`AZO`），SQL `STARTS_WITH(symbol, 'US.')` 匹配不到 → 全部落入 ELSE → `crypto`。需改为：大写字母=US、`HK.`=港股、纯数字=港股 |
 | 因子详情 + 覆盖 | ✅ | ✅ | — |
 | 批量计算 | ✅ | ✅ | — |
 | **注册/注销** | ✅ | ❌ | 缺：激活/停用因子按钮（调 FactorRegistry.deactivate/activate） |
@@ -114,7 +115,13 @@
 - LogViewer 加 DatePicker 范围选择器
 - API 加 `start/end` 参数 → 过滤日志行 ts 字段
 
-### Task D: Cron 管理补全
+### Task D: Cron 管理补全（含 Bug）
+
+**D0. 任务名称/描述** 🐛
+- cron 列表加 `name`/`description` 列
+- 从 crontab 中的注释行解析任务名称（注释行紧邻 cron 行的即为描述）
+- 如果注释行格式为 `# 任务名: 描述`，则提取
+- 如果没有注释，显示 command 的前 50 字符作为名称
 
 **D1. 启停开关**
 - 每行加 Switch，切换 enabled/disabled
@@ -132,7 +139,19 @@
 - 查询 cron log 或系统日志中该命令的最近执行记录
 - `GET /api/admin/cron/{index}/history`
 
-### Task E: 模型 & 策略补全
+### Task E: 模型 & 策略补全（含 Bug）
+
+**E0. 修复 MLflow 页面** 🐛
+- 排查 MLflow API 代理返回空数据的问题
+- 检查 `admin_models()` 中 `requests.get(f"{MLFLOW_API}/registered-models/list")` 是否正确访问 MLflow API
+- MLflow server 在 localhost:5000，需确认 admin server 能访问
+- 修复后验证模型列表正常显示
+
+**E0b. 修复策略编辑页** 🐛
+- 排查策略列表加载失败和保存报错
+- 检查 `admin_strategies()` 读取 `/opt/quant-prod/strategies/*.py` 路径是否存在
+- 检查前端 API 调用格式（GET/PUT 参数传递）
+- 修复后验证策略列表加载 + 编辑保存
 
 **E1. 版本对比**
 - 模型列表每行展开或 "对比" 按钮
@@ -147,7 +166,22 @@
 - 模型详情 Drawer → 训练记录列表
 - 显示每次训练的 run_id / 参数 / metrics / 时间
 
-### Task F: 因子管理补全
+### Task F: 因子管理补全（含 Bug）
+
+**F0. 修复市场判断** 🐛
+- 根因：`factor_values` 中 US 标的无 `US.` 前缀（裸代码如 `AAPL`），SQL `STARTS_WITH(symbol, 'US.')` 永远匹配不到
+- 修复 SQL：
+  ```sql
+  CASE
+    WHEN STARTS_WITH(symbol, 'HK.') THEN 'hk'
+    WHEN REGEXP_CONTAINS(symbol, r'^[A-Z]{1,5}(-[A-Z])?$') THEN 'us'
+    WHEN REGEXP_CONTAINS(symbol, r'^[0-9]+$') THEN 'hk'
+    ELSE 'crypto'
+  END
+  ```
+- 大写字母（1-5 位，可选 `-X` 后缀如 `BRK-B`）= US
+- `HK.` 前缀 = 港股
+- 纯数字裸代码 = 港股
 
 **F1. 注册/注销因子**
 - 每行加 Switch 或按钮：激活 / 停用
@@ -165,20 +199,24 @@
 
 | ID | 模块 | 任务 | 优先级 |
 |----|------|------|:---:|
+| **E0** | **模型** | 🐛 **修复 MLflow 页面** | **P0** |
+| **E0b** | **模型** | 🐛 **修复策略编辑页** | **P0** |
+| **F0** | **因子** | 🐛 **修复市场判断（全部显示 crypto）** | **P0** |
 | A1 | 实验 | 注册实验表单 | P0 |
 | A2 | 实验 | 实验详情页 | P0 |
+| **D0** | **Cron** | 🐛 **任务名称/描述缺失** | **P0** |
 | A3 | 实验 | 清空实验 | P1 |
-| A4 | 实验 | PID 列 | P2 |
 | B1 | 数据 | 回填触发 | P1 |
-| B2 | 数据 | F10 采集监控 | P2 |
-| C1 | 日志 | 时间范围过滤 | P2 |
 | D1 | Cron | 启停开关 | P1 |
 | D2 | Cron | 新建/编辑 | P1 |
-| D3 | Cron | 执行历史 | P2 |
 | E1 | 模型 | 版本对比 | P1 |
 | E2 | 模型 | Stage 管理 | P1 |
-| E3 | 模型 | 训练历史 | P2 |
 | F1 | 因子 | 注册/注销 | P1 |
+| A4 | 实验 | PID 列 | P2 |
+| B2 | 数据 | F10 采集监控 | P2 |
+| C1 | 日志 | 时间范围过滤 | P2 |
+| D3 | Cron | 执行历史 | P2 |
+| E3 | 模型 | 训练历史 | P2 |
 | F2 | 因子 | 因子评估触发 | P2 |
 
-**总计：16 个补全任务。P0: 2, P1: 8, P2: 6**
+**总计：19 个任务（16 补全 + 3 Bug）。P0: 5, P1: 8, P2: 6**
