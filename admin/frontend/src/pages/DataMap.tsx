@@ -4,11 +4,10 @@ import {
   PauseCircleOutlined,
   ReloadOutlined,
   HistoryOutlined,
-  DatabaseOutlined,
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
-import { Tag, Button, Space, message, Tooltip, Card, Drawer, Table, Typography, Select, DatePicker } from 'antd';
+import { Tag, Button, Space, message, Tooltip, Card, Drawer, Table, Typography, Select, DatePicker, Popconfirm, Checkbox } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { api } from '../api';
@@ -34,10 +33,16 @@ interface DataTableItem {
   schema: TableSchema[];
 }
 
-interface F10Collector {
-  name: string;
-  description: string;
-  running: boolean;
+interface BackfillCategory {
+  key: string;
+  label: string;
+  tables: BackfillTable[];
+}
+
+interface BackfillTable {
+  key: string;
+  label: string;
+  market: string;
 }
 
 // ── Poll helper ──────────────────────────────────────────────────────────────
@@ -74,24 +79,28 @@ const DataMap: React.FC = () => {
   }>({ open: false, tableName: '', columns: [] });
 
   // ── Backfill state ──
-  const [backfillMarket, setBackfillMarket] = useState('us');
+  const [backfillCategories, setBackfillCategories] = useState<BackfillCategory[]>([]);
+  const [backfillCategory, setBackfillCategory] = useState('kline');
+  const [backfillTables, setBackfillTables] = useState<string[]>([]);
   const [backfillDates, setBackfillDates] = useState<[string, string] | null>(null);
   const [backfilling, setBackfilling] = useState(false);
 
+  const currentCategory = backfillCategories.find((c) => c.key === backfillCategory);
+  const availableTables = currentCategory?.tables || [];
+  const filteredTables = availableTables.filter((t) => backfillTables.includes(t.key));
+
   const handleBackfill = async () => {
-    if (!backfillDates) {
-      message.warning('请选择日期范围');
-      return;
-    }
+    if (!backfillDates || backfillTables.length === 0) return;
     setBackfilling(true);
     try {
       const params = new URLSearchParams({
-        market: backfillMarket,
+        tables: backfillTables.join(','),
         start: backfillDates[0],
         end: backfillDates[1],
       });
       const data = await api.post(`/api/admin/data/backfill?${params.toString()}`);
-      message.success(`回填任务已创建 #${data.task_id}`);
+      message.success(`${data.count || 0} 个回填任务已创建`);
+      actionRef.current?.reload();
     } catch (err: any) {
       message.error(`回填失败: ${err.message}`);
     } finally {
@@ -99,19 +108,19 @@ const DataMap: React.FC = () => {
     }
   };
 
-  const [f10Collectors, setF10Collectors] = useState<F10Collector[]>([]);
-
-  const loadF10 = () => {
-    api.get('/api/admin/data/f10').then(setF10Collectors).catch(() => {});
-  };
-
   const loadCollector = () => {
     api.get('/api/admin/data/collectors').then(setCollector).catch(() => {});
   };
 
+  const loadBackfillOptions = () => {
+    api.get('/api/admin/data/backfill/options').then((data) => {
+      if (data?.categories) setBackfillCategories(data.categories);
+    }).catch(() => {});
+  };
+
   useEffect(() => {
     loadCollector();
-    loadF10();
+    loadBackfillOptions();
   }, []);
 
   const handleCollectorAction = async (action: string) => {
@@ -262,84 +271,54 @@ const DataMap: React.FC = () => {
         }
         style={{ marginBottom: 16 }}
       >
-        <Space wrap>
-          <Space>
-            <Text strong>市场:</Text>
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Space wrap>
+            <Text strong>数据类别:</Text>
             <Select
-              value={backfillMarket}
-              onChange={setBackfillMarket}
-              style={{ width: 100 }}
-              options={[
-                { value: 'us', label: 'US' },
-                { value: 'hk', label: 'HK' },
-              ]}
+              value={backfillCategory}
+              onChange={(v) => { setBackfillCategory(v); setBackfillTables([]); }}
+              style={{ width: 160 }}
+              options={backfillCategories.map((c) => ({ value: c.key, label: c.label }))}
             />
-          </Space>
-          <Space>
-            <Text strong>日期范围:</Text>
+            <Text strong>日期:</Text>
             <DatePicker.RangePicker
               onChange={(dates) => {
                 if (dates && dates[0] && dates[1]) {
-                  setBackfillDates([
-                    dates[0].format('YYYY-MM-DD'),
-                    dates[1].format('YYYY-MM-DD'),
-                  ]);
+                  setBackfillDates([dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]);
                 } else {
                   setBackfillDates(null);
                 }
               }}
             />
+            <Popconfirm
+              title={`确认回填 ${filteredTables.length} 个表？`}
+              description={backfillDates ? `${backfillDates[0]} ~ ${backfillDates[1]}` : ''}
+              onConfirm={handleBackfill}
+              okText="确认"
+              cancelText="取消"
+              disabled={backfillTables.length === 0 || !backfillDates}
+            >
+              <Button
+                type="primary"
+                icon={<HistoryOutlined />}
+                loading={backfilling}
+                disabled={backfillTables.length === 0 || !backfillDates}
+              >
+                开始回填
+              </Button>
+            </Popconfirm>
           </Space>
-          <Button
-            type="primary"
-            icon={<HistoryOutlined />}
-            onClick={handleBackfill}
-            loading={backfilling}
-          >
-            开始回填
-          </Button>
+          {availableTables.length > 0 && (
+            <Checkbox.Group
+              options={availableTables.map((t) => ({ label: t.label, value: t.key }))}
+              value={backfillTables}
+              onChange={(v) => setBackfillTables(v as string[])}
+            />
+          )}
         </Space>
       </Card>
 
-      {/* ── F10 Collector Card ────────────────────────────────────────────── */}
-      <Card
-        title={
-          <Space>
-            <DatabaseOutlined />
-            <span>F10 采集器</span>
-          </Space>
-        }
-        style={{ marginBottom: 16 }}
-      >
-        {f10Collectors.length === 0 ? (
-          <Text type="secondary">加载中...</Text>
-        ) : (
-          <Table
-            dataSource={f10Collectors}
-            rowKey="name"
-            pagination={false}
-            size="small"
-            columns={[
-              { title: '名称', dataIndex: 'name', key: 'name', width: 160 },
-              { title: '描述', dataIndex: 'description', key: 'description' },
-              {
-                title: '状态',
-                dataIndex: 'running',
-                key: 'running',
-                width: 100,
-                render: (running: boolean) =>
-                  running ? (
-                    <Tag color="green">Running</Tag>
-                  ) : (
-                    <Tag color="default">Stopped</Tag>
-                  ),
-              },
-            ]}
-          />
-        )}
-      </Card>
-
-      {/* ── Data Map Table ─────────────────────────────────────────────────── */}
+      {/* ── Data Map Table ────────────────────────────────────────────────── */}
       <ProTable<DataTableItem>
         headerTitle="BQ Tables"
         actionRef={actionRef}
@@ -353,7 +332,7 @@ const DataMap: React.FC = () => {
         pagination={{ pageSize: 20 }}
       />
 
-      {/* ── Schema Drawer ──────────────────────────────────────────────────── */}
+      {/* ── Schema Drawer ─────────────────────────────────────────────────── */}
       <Drawer
         title={`Schema: ${schemaDrawer.tableName}`}
         open={schemaDrawer.open}

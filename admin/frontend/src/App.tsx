@@ -4,7 +4,6 @@ import {
   FileTextOutlined,
   ClockCircleOutlined,
   DashboardOutlined,
-  FunctionOutlined,
 } from '@ant-design/icons';
 import ProLayout from '@ant-design/pro-layout';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
@@ -16,7 +15,6 @@ import DataMap from './pages/DataMap';
 import LogViewer from './pages/LogViewer';
 import CronJobs from './pages/CronJobs';
 import Models from './pages/Models';
-import Factors from './pages/Factors';
 
 const menuData = [
   { path: '/dashboard', name: 'Dashboard', icon: <DashboardOutlined /> },
@@ -25,7 +23,6 @@ const menuData = [
   { path: '/logs', name: '日志浏览', icon: <FileTextOutlined /> },
   { path: '/cron', name: 'Cron 任务', icon: <ClockCircleOutlined /> },
   { path: '/models', name: '模型 & 策略', icon: <DashboardOutlined /> },
-  { path: '/factors', name: '因子管理', icon: <FunctionOutlined /> },
 ];
 
 function AppLayout() {
@@ -57,7 +54,6 @@ function AppLayout() {
         <Route path="/logs" element={<LogViewer />} />
         <Route path="/cron" element={<CronJobs />} />
         <Route path="/models" element={<Models />} />
-        <Route path="/factors" element={<Factors />} />
         <Route path="/" element={<Dashboard />} />
       </Routes>
     </ProLayout>

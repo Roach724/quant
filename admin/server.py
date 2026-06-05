@@ -334,16 +334,56 @@ def admin_data_collectors():
 
 
 @app.post("/api/admin/data/backfill")
-def admin_data_backfill(market: str = "us", start: str = "2020-01-01", end: str = "2026-06-03"):
-    """Trigger data backfill via worker."""
-    cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
-           f".venv/bin/python3 collectors/backfill.py "
-           f"--market {market} --start {start} --end {end}")
-    session = get_session()
-    task = Task(type="shell", params={"cmd": cmd}, status="pending")
-    session.add(task)
-    session.commit()
-    return {"task_id": task.id}
+def admin_data_backfill(
+    market: str = "us",
+    tables: str = Query("", description="Comma-separated table keys to backfill"),
+    start: str = "2020-01-01",
+    end: str = "2026-06-03",
+):
+    """Trigger data backfill via worker. Supports multiple tables, serial execution."""
+    # Resolve table keys to (market, frequency) pairs
+    selected = [t.strip() for t in tables.split(",") if t.strip()] if tables else []
+    if not selected:
+        # Legacy: single market backfill
+        selected = [f"{market}_bars_5m"]
+
+    task_ids = []
+    for key in selected:
+        # Parse key like "us_bars_5m" -> market=us, freq=5m
+        parts = key.split("_bars_")
+        if len(parts) != 2:
+            continue
+        mkt, freq = parts
+        if mkt not in ("us", "hk"):
+            continue
+        cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+               f".venv/bin/python3 collectors/backfill.py "
+               f"--market {mkt} --frequency {freq} --start {start} --end {end}")
+        session = get_session()
+        task = Task(type="shell", params={"cmd": cmd}, status="pending")
+        session.add(task)
+        session.commit()
+        task_ids.append(task.id)
+    return {"task_ids": task_ids, "count": len(task_ids)}
+
+
+@app.get("/api/admin/data/backfill/options")
+def admin_data_backfill_options():
+    """Return available backfill categories and tables."""
+    return {
+        "categories": [
+            {
+                "key": "kline",
+                "label": "K线数据",
+                "tables": [
+                    {"key": "us_bars_5m", "label": "US 5分钟K线", "market": "us"},
+                    {"key": "us_bars_1d", "label": "US 日线", "market": "us"},
+                    {"key": "hk_bars_5m", "label": "HK 5分钟K线", "market": "hk"},
+                    {"key": "hk_bars_1d", "label": "HK 日线", "market": "hk"},
+                ],
+            },
+        ],
+    }
 
 
 @app.post("/api/admin/data/collector/{action}")
