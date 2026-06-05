@@ -154,6 +154,92 @@ def admin_experiment_register(data: dict):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/api/admin/experiments/create-from-config")
+def admin_experiment_create_from_config(body: dict = Body(...)):
+    """Create a new experiment by copying a config template."""
+    import shutil, yaml as _yaml
+    template = body.get("template", "")
+    new_id = body.get("exp_id", "")
+    if not template or not new_id:
+        raise HTTPException(status_code=400, detail="Missing 'template' or 'exp_id'")
+    config_dir = Path("/opt/quant-prod/live/configs")
+    template_path = config_dir / template
+    if not template_path.exists():
+        raise HTTPException(status_code=404, detail=f"Template '{template}' not found")
+    new_path = config_dir / f"{new_id}.yaml"
+    if new_path.exists():
+        raise HTTPException(status_code=409, detail=f"Config '{new_id}.yaml' already exists")
+    # Copy template and update experiment.id in the copy
+    shutil.copy2(template_path, new_path)
+    mgr = ExperimentManager()
+    try:
+        exp_id = mgr.register(
+            exp_type=body.get("type", "live"),
+            market=body.get("market", "us"),
+            strategy=body.get("strategy", "ml"),
+            version=int(body.get("version", 1)),
+            config_path=str(new_path),
+            name=body.get("name", new_id),
+        )
+        return {"exp_id": exp_id, "config_path": str(new_path)}
+    except ValueError as e:
+        new_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/admin/experiments/configs")
+def admin_experiment_configs():
+    """List all experiment config templates (YAML files)."""
+    config_dir = Path("/opt/quant-prod/live/configs")
+    if not config_dir.exists():
+        return []
+    configs = []
+    for f in sorted(config_dir.glob("*.yaml")):
+        configs.append({
+            "name": f.name,
+            "path": str(f),
+            "size": f.stat().st_size,
+        })
+    return configs
+
+
+@app.delete("/api/admin/experiments/configs/{name}")
+def admin_experiment_config_delete(name: str):
+    """Delete a config template file."""
+    import shutil
+    path = Path("/opt/quant-prod/live/configs") / name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    backup = path.with_suffix(path.suffix + ".del")
+    shutil.move(str(path), str(backup))
+    return {"status": "ok", "backup": str(backup)}
+
+
+@app.get("/api/admin/experiments/configs/{name}")
+def admin_experiment_config_get(name: str):
+    """Read a single config template file."""
+    path = Path("/opt/quant-prod/live/configs") / name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    return {"name": name, "content": path.read_text()}
+
+
+@app.put("/api/admin/experiments/configs/{name}")
+def admin_experiment_config_put(name: str, body: dict = Body(...)):
+    """Create or update a config template file. Backs up existing."""
+    import shutil
+    content = body.get("content", "")
+    if not content:
+        raise HTTPException(status_code=400, detail="Missing 'content'")
+    path = Path("/opt/quant-prod/live/configs") / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        backup = path.with_suffix(path.suffix + ".bak")
+        shutil.copy2(path, backup)
+    path.write_text(content)
+    return {"status": "ok", "name": name}
+
+
 @app.post("/api/admin/experiments/{exp_id}/{action}")
 def admin_experiment_action(exp_id: str, action: str):
     """start / stop / restart an experiment via task queue."""
@@ -177,8 +263,6 @@ def admin_experiment_clear(exp_id: str):
     from google.cloud import bigquery as _bq
 
     mgr = ExperimentManager()
-
-    # Make sure experiment exists
     try:
         exp = mgr.get(exp_id)
     except KeyError:
@@ -190,31 +274,23 @@ def admin_experiment_clear(exp_id: str):
     client = _bq.Client(project="deductive-notch-495015-c2")
     for table in ["experiment_equity", "experiment_trades", "experiment_runs"]:
         try:
-            client.query(
-                f"DELETE FROM quant.{table} WHERE exp_id='{exp_id}'"
-            ).result()
+            client.query(f"DELETE FROM quant.{table} WHERE exp_id='{exp_id}'").result()
             results[table] = "cleared"
         except Exception as e:
             results[table] = str(e)[:80]
 
     # 2. Clear state files
     strategy = exp.strategy
-    state_dirs = [
-        f"/var/quant/state/{strategy}/",
-        f"/var/quant/state/{strategy}_hk/",
-    ]
+    state_dirs = [f"/var/quant/state/{strategy}/", f"/var/quant/state/{strategy}_hk/"]
     shared_state_file = f"/var/quant/state/{strategy}.json"
     for d in state_dirs:
-        if not os.path.isdir(d):
-            continue
+        if not os.path.isdir(d): continue
         for f in glob.glob(os.path.join(d, "*.json")):
             try:
                 os.remove(f)
                 results[f"state_{os.path.basename(f)}"] = "deleted"
             except Exception as e:
                 results[f"state_{os.path.basename(f)}"] = str(e)[:80]
-
-    # Also remove shared state file if it exists
     if os.path.isfile(shared_state_file):
         try:
             os.remove(shared_state_file)
@@ -225,11 +301,140 @@ def admin_experiment_clear(exp_id: str):
     # 3. Reset registry runs
     mgr._data[exp_id]["runs"] = []
     mgr._data[exp_id]["current_run"] = None
-    mgr._data[exp_id]["status"] = "pending"
+    mgr._data[exp_id]["status"] = "paused"
     mgr._save()
-    results["registry"] = "reset to pending"
+    results["registry"] = "reset to paused"
 
     return {"status": "ok", "details": results}
+
+
+# ── Experiment state machine ─────────────────────────────────────────────────
+#  registered → paused ⇄ running → stopped → archived
+#  - start:    paused/registered → running
+#  - stop:     running → stopped
+#  - restart:  stop old → start new
+#  - archive:  stopped → archived (read-only)
+#  - clear:    wipe data, reset to paused
+#  - delete:   wipe everything + unregister
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@app.post("/api/admin/experiments/{exp_id}/delete")
+def admin_experiment_delete(exp_id: str):
+    """Delete experiment: BQ + state + output + logs + unregister."""
+    from google.cloud import bigquery as _bq
+    import shutil, signal, time
+
+    mgr = ExperimentManager()
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+    # Kill process if running
+    pid = mgr.get_pid(exp_id)
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(1)
+            try: os.kill(pid, signal.SIGKILL)
+            except OSError: pass
+        except OSError: pass
+
+    results: dict[str, str] = {}
+
+    # 1. Delete BQ data
+    client = _bq.Client(project="deductive-notch-495015-c2")
+    for table in ["experiment_equity", "experiment_trades", "experiment_runs"]:
+        try:
+            client.query(f"DELETE FROM quant.{table} WHERE exp_id='{exp_id}'").result()
+            results[table] = "deleted"
+        except Exception as e:
+            results[table] = str(e)[:80]
+
+    # 2. Delete state directories
+    strategy = exp.strategy
+    for d in [f"/var/quant/state/{strategy}/", f"/var/quant/state/{strategy}_hk/"]:
+        if os.path.isdir(d):
+            try:
+                shutil.rmtree(d)
+                results[f"state_{os.path.basename(d.rstrip('/'))}"] = "deleted"
+            except Exception as e:
+                results[f"state_{os.path.basename(d.rstrip('/'))}"] = str(e)[:80]
+    for f in [f"/var/quant/state/{strategy}.json"]:
+        if os.path.isfile(f):
+            try:
+                os.remove(f)
+                results["state_shared"] = "deleted"
+            except Exception as e:
+                results["state_shared"] = str(e)[:80]
+
+    # 3. Delete output/live directories
+    output_base = Path("/opt/quant-prod/output/live")
+    if output_base.exists():
+        for d in output_base.iterdir():
+            if d.is_dir() and exp_id in d.name:
+                try:
+                    shutil.rmtree(d)
+                    results[f"output_{d.name}"] = "deleted"
+                except Exception as e:
+                    results[f"output_{d.name}"] = str(e)[:80]
+
+    # 4. Delete experiment logs
+    for log_root in LOG_ROOTS:
+        log_dir = Path(log_root) / "live"
+        if log_dir.exists():
+            for f in log_dir.glob(f"*{exp_id}*.log*"):
+                try:
+                    f.unlink()
+                    results[f"log_{f.name}"] = "deleted"
+                except Exception as e:
+                    results[f"log_{f.name}"] = str(e)[:80]
+
+    # 5. Unregister
+    try:
+        mgr.delete(exp_id)
+        results["registry"] = "unregistered"
+    except Exception as e:
+        results["registry"] = str(e)[:80]
+
+    return {"status": "ok", "details": results}
+
+
+@app.get("/api/admin/experiments/{exp_id}/config")
+def admin_experiment_config(exp_id: str):
+    """Return the experiment's YAML config file content."""
+    mgr = ExperimentManager()
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+    config_path = Path("/opt/quant-prod") / exp.config_path
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail=f"Config file not found: {config_path}")
+    return {"exp_id": exp_id, "path": str(config_path), "content": config_path.read_text()}
+
+
+@app.put("/api/admin/experiments/{exp_id}/config")
+def admin_experiment_config_update(exp_id: str, body: dict = Body(...)):
+    """Update the experiment's YAML config file. Backs up old version."""
+    import shutil
+    mgr = ExperimentManager()
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+    config_path = Path("/opt/quant-prod") / exp.config_path
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail=f"Config file not found: {config_path}")
+    content = body.get("content", "")
+    if not content:
+        raise HTTPException(status_code=400, detail="Missing 'content' in request body")
+    # Backup
+    backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+    shutil.copy2(config_path, backup_path)
+    config_path.write_text(content)
+    return {"status": "ok", "path": str(config_path), "backup": str(backup_path)}
 
 
 # ── Data Map + Collector status ──────────────────────────────────────────────
@@ -265,6 +470,15 @@ def admin_data_f10():
 @app.get("/api/admin/data/tables")
 def admin_data_tables():
     """Return all BQ tables with row counts, schemas, last write times."""
+    # Use a simple module-level cache with long TTL to avoid repeated INFO_SCHEMA queries
+    import time as _time
+    cache_key = "_bq_tables_cache"
+    now = _time.time()
+    if hasattr(admin_data_tables, cache_key):
+        cached_data, cached_ts = getattr(admin_data_tables, cache_key)
+        if now - cached_ts < 86400:  # 24-hour TTL
+            return cached_data
+
     client = bigquery.Client(project="deductive-notch-495015-c2")
     query = """
         SELECT table_name, creation_time
@@ -296,6 +510,7 @@ def admin_data_tables():
             "table_name": name, "row_count": cnt,
             "last_write": latest_str, "schema": schema_cols,
         })
+    setattr(admin_data_tables, cache_key, (tables, now))
     return tables
 
 
@@ -324,16 +539,56 @@ def admin_data_collectors():
 
 
 @app.post("/api/admin/data/backfill")
-def admin_data_backfill(market: str = "us", start: str = "2020-01-01", end: str = "2026-06-03"):
-    """Trigger data backfill via worker."""
-    cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
-           f".venv/bin/python3 collectors/backfill.py "
-           f"--market {market} --start {start} --end {end}")
-    session = get_session()
-    task = Task(type="shell", params={"cmd": cmd}, status="pending")
-    session.add(task)
-    session.commit()
-    return {"task_id": task.id}
+def admin_data_backfill(
+    market: str = "us",
+    tables: str = Query("", description="Comma-separated table keys to backfill"),
+    start: str = "2020-01-01",
+    end: str = "2026-06-03",
+):
+    """Trigger data backfill via worker. Supports multiple tables, serial execution."""
+    # Resolve table keys to (market, frequency) pairs
+    selected = [t.strip() for t in tables.split(",") if t.strip()] if tables else []
+    if not selected:
+        # Legacy: single market backfill
+        selected = [f"{market}_bars_5m"]
+
+    task_ids = []
+    for key in selected:
+        # Parse key like "us_bars_5m" -> market=us, freq=5m
+        parts = key.split("_bars_")
+        if len(parts) != 2:
+            continue
+        mkt, freq = parts
+        if mkt not in ("us", "hk"):
+            continue
+        cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+               f".venv/bin/python3 collectors/backfill.py "
+               f"--market {mkt} --frequency {freq} --start {start} --end {end}")
+        session = get_session()
+        task = Task(type="shell", params={"cmd": cmd}, status="pending")
+        session.add(task)
+        session.commit()
+        task_ids.append(task.id)
+    return {"task_ids": task_ids, "count": len(task_ids)}
+
+
+@app.get("/api/admin/data/backfill/options")
+def admin_data_backfill_options():
+    """Return available backfill categories and tables."""
+    return {
+        "categories": [
+            {
+                "key": "kline",
+                "label": "K线数据",
+                "tables": [
+                    {"key": "us_bars_5m", "label": "US 5分钟K线", "market": "us"},
+                    {"key": "us_bars_1d", "label": "US 日线", "market": "us"},
+                    {"key": "hk_bars_5m", "label": "HK 5分钟K线", "market": "hk"},
+                    {"key": "hk_bars_1d", "label": "HK 日线", "market": "hk"},
+                ],
+            },
+        ],
+    }
 
 
 @app.post("/api/admin/data/collector/{action}")
@@ -686,9 +941,9 @@ def admin_models():
 @app.get("/api/admin/models/{name}/history")
 def admin_model_history(name: str):
     """Return training run history for a model with key metrics."""
-    rv = requests.post(
+    rv = requests.get(
         f"{MLFLOW_API}/model-versions/search",
-        json={"filter": f"name='{name}'"},
+        params={"name": name},
         timeout=5,
     )
     versions = rv.json().get("model_versions", []) or []
@@ -739,9 +994,9 @@ def admin_train_model(model_name: str, market: str = "us"):
 @app.get("/api/admin/models/{name}/versions")
 def admin_model_versions(name: str):
     """Get all versions of a model with metrics."""
-    rv = requests.post(
+    rv = requests.get(
         f"{MLFLOW_API}/model-versions/search",
-        json={"filter": f"name='{name}'"},
+        params={"name": name},
         timeout=5,
     )
     versions = rv.json().get("model_versions", [])

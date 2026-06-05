@@ -174,6 +174,13 @@ class ExperimentManager:
         d["pid"] = pid
         self._save()
 
+    def delete(self, exp_id: str) -> None:
+        """Remove experiment from registry entirely."""
+        if exp_id not in self._data:
+            raise KeyError(f"Experiment '{exp_id}' not found")
+        del self._data[exp_id]
+        self._save()
+
     def _get_exp(self, exp_id: str) -> dict[str, Any]:
         """Look up an experiment dict, raising KeyError if missing."""
         if exp_id not in self._data:
