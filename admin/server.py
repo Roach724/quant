@@ -377,7 +377,6 @@ def admin_cron_list():
     r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
     raw = r.stdout.strip()
     if not raw:
-        # Fallback to registry-only if no crontab
         return list(registry_jobs.values()) if registry_jobs else []
 
     lines = raw.split("\n")
@@ -389,8 +388,12 @@ def admin_cron_list():
         parts = line.split(None, 5)
         if len(parts) >= 6:
             cmd = parts[5].strip()
-            # Look up registry metadata by command
-            meta = registry_jobs.get(cmd, {})
+            # Match by prefix (crontab may add >> redirect that registry lacks)
+            meta = {}
+            for reg_cmd, reg_job in registry_jobs.items():
+                if cmd.startswith(reg_cmd) or reg_cmd.startswith(cmd.split(">>")[0].strip()):
+                    meta = reg_job
+                    break
             jobs.append({
                 "index": i,
                 "raw": line,
