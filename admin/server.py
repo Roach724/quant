@@ -964,7 +964,9 @@ async def dash_experiments(type: str = ""):
 @app.get("/api/admin/dashboard/experiments/meta")
 async def dash_experiments_meta():
     from pathlib import Path
-    exp_dir = Path("/opt/quant-dev/output/live/experiments")
+    import os as _os
+    _quant_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    exp_dir = Path(_quant_root) / "output/live/experiments"
     if not exp_dir.exists():
         return []
     result = []
