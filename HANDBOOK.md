@@ -52,6 +52,7 @@
 - **生产**: `/opt/quant-prod/` — 只做数据采集、入库、实盘交易
 - **流程**: dev → git commit → PR → CI → merge stable → CD → prod
 - **禁止在 prod 直接开发**, 禁止在 prod 执行训练/回测/因子计算等开发操作
+- **无论多紧急，不准跳过 dev 直接改 prod**
 
 **关键路径：**
 - 数据流: Futu OpenD → ws_collector → BQ → LiveRunner → Dashboard
