@@ -1347,7 +1347,9 @@ async def dash_pipeline():
 async def dash_market_symbols(market: str):
     import yaml
     from pathlib import Path
-    config_path = Path("/opt/quant-dev/config/symbols.yaml")
+    import os as _os
+    _quant_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    config_path = Path(_quant_root) / "config/symbols.yaml"
     cfg = yaml.safe_load(config_path.read_text())
     syms = cfg.get("markets", {}).get(market, {}).get("symbols", [])
     prefix = f"{'US' if market == 'us' else 'HK'}."
