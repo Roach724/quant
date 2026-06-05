@@ -8,6 +8,9 @@ export default function DashboardOverview() {
   const [activeOnly, setActiveOnly] = useState(true);
   const [loading, setLoading] = useState(true);
 
+    // Pipeline / market state
+  const [pipeline, setPipeline] = useState<any>({});
+
   // K-line states
   const [usSymbols, setUsSymbols] = useState<string[]>([]);
   const [hkSymbols, setHkSymbols] = useState<string[]>([]);
@@ -23,14 +26,20 @@ export default function DashboardOverview() {
 
   const loadData = async () => {
     try {
-      const [bqData, meta] = await Promise.all([
+      const [bqData, meta, pipeData] = await Promise.all([
         api.get('/api/admin/dashboard/experiments'),
         api.get('/api/admin/dashboard/experiments/meta'),
+        api.get('/api/admin/dashboard/pipeline'),
       ]);
+      if (pipeData) setPipeline(pipeData);
       const bqMap: Record<string, any> = {};
       if (Array.isArray(bqData)) bqData.forEach((e: any) => { bqMap[e.exp_id] = e; });
       if (Array.isArray(meta)) {
-        setExperiments(meta.map((m: any) => ({ ...m, ...(bqMap[m.exp_id] || { sleeping: true }) })));
+        setExperiments(meta.map((m: any) => ({
+          ...m,
+          ...bqMap[m.exp_id],
+          sleeping: m.status !== 'running',
+        })));
       }
     } catch (e) {
       console.error('load experiments failed', e);
@@ -80,8 +89,16 @@ export default function DashboardOverview() {
           <Row gutter={[12, 12]}>
             {filtered.map((exp: any) => (
               <Col key={exp.exp_id} xs={24} sm={12} md={8} lg={6}>
-                <Card size="small" title={<span style={{ fontSize: 13 }}>{exp.exp_id}</span>}>
-                  <p>Status: <Tag color={exp.equity != null ? 'green' : 'default'}>{exp.status || (exp.sleeping ? 'idle' : '?')}</Tag></p>
+                <Card
+                  size="small"
+                  title={
+                    <span style={{ fontSize: 13 }}>
+                      {exp.exp_id}
+                      <MarketDot expId={exp.exp_id} pipeline={pipeline} />
+                    </span>
+                  }
+                >
+                  <p>Status: <Tag color={exp.status === 'running' ? 'green' : 'default'}>{exp.status || '?'}</Tag></p>
                   <p>Bar: {exp.bar ?? '—'}</p>
                   <p>Equity: {exp.equity != null ? `$${Math.round(exp.equity).toLocaleString()}` : '—'}</p>
                   <p style={{ marginBottom: 0, fontSize: 12, color: (exp.daily_pnl ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }}>
@@ -144,6 +161,26 @@ export default function DashboardOverview() {
         </Row>
       </div>
     </div>
+  );
+}
+
+/* ── Market open dot ── */
+function MarketDot({ expId, pipeline }: { expId: string; pipeline: any }) {
+  const isHk = expId.includes('_hk_') || expId.endsWith('_hk');
+  const isOpen = isHk ? pipeline?.hk_open : pipeline?.us_open;
+  if (isOpen === undefined || isOpen === null) return null;
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        width: 8,
+        height: 8,
+        borderRadius: '50%',
+        marginLeft: 6,
+        backgroundColor: isOpen ? '#52c41a' : '#d9d9d9',
+      }}
+      title={isOpen ? 'Market Open' : 'Market Closed'}
+    />
   );
 }
 
