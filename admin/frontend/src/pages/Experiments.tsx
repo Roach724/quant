@@ -152,7 +152,7 @@ const Experiments: React.FC = () => {
     setEquityLoading(true);
     setEquityLatest(null);
     try {
-      const eqData = await api.get(`/api/equity/${exp.exp_id}`);
+      const eqData = await api.get(`/api/admin/dashboard/equity/${exp.exp_id}`);
       if (Array.isArray(eqData) && eqData.length > 0) {
         setEquityLatest(eqData[eqData.length - 1]);
       } else if (eqData && typeof eqData === 'object') {
