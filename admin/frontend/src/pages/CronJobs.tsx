@@ -1,8 +1,20 @@
-import { ThunderboltOutlined } from '@ant-design/icons';
+import {
+  ThunderboltOutlined,
+  PlusOutlined,
+  EditOutlined,
+} from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
-import { Tag, Button, Space, message, Switch } from 'antd';
-import { useRef } from 'react';
+import {
+  Button,
+  Space,
+  message,
+  Switch,
+  Modal,
+  Form,
+  Input,
+} from 'antd';
+import { useRef, useState } from 'react';
 import { api } from '../api';
 
 interface CronJob {
@@ -12,12 +24,17 @@ interface CronJob {
   schedule: string;
   command: string;
   comment?: string;
-  name?: string;
-  description?: string;
+  name: string;
+  description: string;
 }
 
 const CronJobs: React.FC = () => {
   const actionRef = useRef<ActionType | undefined>(undefined);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [form] = Form.useForm();
+
+  // ── Run ────────────────────────────────────────────────────────────────────
 
   const handleRun = async (command: string) => {
     try {
@@ -30,35 +47,67 @@ const CronJobs: React.FC = () => {
     }
   };
 
-  const handleToggle = async (job: CronJob, checked: boolean) => {
+  // ── Toggle enabled ─────────────────────────────────────────────────────────
+
+  const handleToggle = async (index: number, enabled: boolean) => {
     try {
-      const updated = {
-        ...job,
-        enabled: checked,
-        // If enabling from a comment line, set raw to empty so we use schedule+command
-        raw: checked ? '' : job.raw,
-      };
-      // Reload current list, update this job, save
-      const allJobs: CronJob[] = await api.get('/api/admin/cron');
-      const idx = allJobs.findIndex((j) => j.index === job.index);
-      if (idx >= 0) {
-        allJobs[idx] = updated;
-      } else {
-        allJobs.push(updated);
-      }
-      await api.post('/api/admin/cron', allJobs);
-      message.success(checked ? 'Job enabled' : 'Job disabled');
+      await api.put(`/api/admin/cron/${index}`, { enabled });
+      message.success(enabled ? 'Job enabled' : 'Job disabled');
       actionRef.current?.reload();
     } catch (err: any) {
       message.error(`Failed: ${err.message}`);
     }
   };
 
+  // ── Open create / edit modal ───────────────────────────────────────────────
+
+  const openCreate = () => {
+    setEditingIndex(null);
+    form.resetFields();
+    form.setFieldsValue({ enabled: true });
+    setModalOpen(true);
+  };
+
+  const openEdit = (index: number, job: CronJob) => {
+    setEditingIndex(index);
+    form.setFieldsValue({
+      name: job.name || '',
+      description: job.description || '',
+      schedule: job.schedule || '',
+      command: job.command || '',
+      enabled: job.enabled,
+    });
+    setModalOpen(true);
+  };
+
+  // ── Submit modal ───────────────────────────────────────────────────────────
+
+  const handleModalOk = async () => {
+    try {
+      const values = await form.validateFields();
+      if (editingIndex !== null) {
+        await api.put(`/api/admin/cron/${editingIndex}`, values);
+        message.success('Job updated');
+      } else {
+        await api.post('/api/admin/cron/add', values);
+        message.success('Job created');
+      }
+      setModalOpen(false);
+      form.resetFields();
+      actionRef.current?.reload();
+    } catch (err: any) {
+      if (err?.errorFields) return; // validation error, ignore
+      message.error(`Failed: ${err.message}`);
+    }
+  };
+
+  // ── Columns ────────────────────────────────────────────────────────────────
+
   const columns: ProColumns<CronJob>[] = [
     {
       title: 'Name',
       dataIndex: 'name',
-      width: 180,
+      width: 200,
       key: 'name',
       ellipsis: true,
       render: (_, r) => (
@@ -82,7 +131,7 @@ const CronJobs: React.FC = () => {
     {
       title: 'Schedule',
       dataIndex: 'schedule',
-      width: 130,
+      width: 140,
       key: 'schedule',
       ellipsis: true,
       render: (_, r) => (
@@ -95,7 +144,7 @@ const CronJobs: React.FC = () => {
       title: 'Command',
       dataIndex: 'command',
       key: 'command',
-      width: 260,
+      width: 280,
       ellipsis: true,
       render: (_, r) => {
         const text = r.command || '—';
@@ -112,66 +161,120 @@ const CronJobs: React.FC = () => {
     {
       title: 'Enabled',
       dataIndex: 'enabled',
-      width: 90,
-      key: 'enabled',
-      render: (_, r) =>
-        r.enabled ? (
-          <Tag color="green">Enabled</Tag>
-        ) : (
-          <Tag color="red">Disabled</Tag>
-        ),
-    },
-    {
-      title: 'Toggle',
-      dataIndex: 'enabled',
       width: 80,
-      key: 'toggle',
-      render: (_, r) =>
-        r.schedule && r.command ? (
-          <Switch
-            size="small"
-            checked={r.enabled}
-            onChange={(checked) => handleToggle(r, checked)}
-          />
-        ) : null,
+      key: 'enabled',
+      render: (_, r) => (
+        <Switch
+          size="small"
+          checked={r.enabled}
+          onChange={(checked) => handleToggle(r.index!, checked)}
+        />
+      ),
     },
     {
       title: 'Actions',
       key: 'actions',
-      width: 120,
-      render: (_, r) =>
-        r.enabled ? (
-          <Space>
+      width: 160,
+      render: (_, r) => (
+        <Space>
+          {r.command && (
             <Button
               type="primary"
               size="small"
               icon={<ThunderboltOutlined />}
               onClick={() => handleRun(r.command)}
             >
-              立即执行
+              执行
             </Button>
-          </Space>
-        ) : null,
+          )}
+          {r.index !== undefined && r.name && (
+            <Button
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => openEdit(r.index!, r)}
+            >
+              编辑
+            </Button>
+          )}
+        </Space>
+      ),
     },
   ];
 
+  // ── Render ─────────────────────────────────────────────────────────────────
+
   return (
-    <ProTable<CronJob>
-      headerTitle="Cron Jobs"
-      actionRef={actionRef}
-      rowKey="index"
-      search={false}
-      columns={columns}
-      request={async () => {
-        const allJobs: CronJob[] = await api.get('/api/admin/cron');
-        // Show enabled jobs, or jobs with names (registry entries), or comment lines
-        const filtered = allJobs.filter(
-          (j) => j.enabled || j.name || (j.comment && !j.schedule && !j.command)
-        );
-        return { data: filtered, success: true, total: filtered.length };
-      }}
-      pagination={{ pageSize: 20 }}
-    />
+    <>
+      <ProTable<CronJob>
+        headerTitle="Cron Jobs"
+        actionRef={actionRef}
+        rowKey="index"
+        search={false}
+        columns={columns}
+        toolBarRender={() => [
+          <Button
+            key="create"
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={openCreate}
+          >
+            新建任务
+          </Button>,
+        ]}
+        request={async () => {
+          const allJobs: CronJob[] = await api.get('/api/admin/cron');
+          // Assign stable row indices from registry order
+          const indexed = allJobs.map((j, i) => ({
+            ...j,
+            index: j.index ?? i,
+          }));
+          return { data: indexed, success: true, total: indexed.length };
+        }}
+        pagination={{ pageSize: 20 }}
+      />
+
+      <Modal
+        title={editingIndex !== null ? '编辑任务' : '新建任务'}
+        open={modalOpen}
+        onOk={handleModalOk}
+        onCancel={() => {
+          setModalOpen(false);
+          form.resetFields();
+        }}
+        destroyOnClose
+      >
+        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item
+            name="name"
+            label="Name"
+            rules={[{ required: true, message: '请输入任务名称' }]}
+          >
+            <Input placeholder="e.g. collect-us-rating-summary" />
+          </Form.Item>
+          <Form.Item name="description" label="Description">
+            <Input placeholder="任务描述" />
+          </Form.Item>
+          <Form.Item
+            name="schedule"
+            label="Schedule"
+            rules={[{ required: true, message: '请输入 cron 表达式' }]}
+            extra="分 时 日 月 周（e.g. 0 6 * * 1-5）"
+          >
+            <Input placeholder="0 6 * * 1-5" />
+          </Form.Item>
+          <Form.Item
+            name="command"
+            label="Command"
+            rules={[{ required: true, message: '请输入执行命令' }]}
+          >
+            <Input placeholder="python scripts/compute_factors_batch.py --incremental" />
+          </Form.Item>
+          <Form.Item name="enabled" label="Enabled" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </>
   );
 };
 

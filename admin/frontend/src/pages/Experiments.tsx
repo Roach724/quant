@@ -24,6 +24,8 @@ import {
   Descriptions,
   Table,
   Alert,
+  Divider,
+  Popconfirm,
 } from 'antd';
 import { api } from '../api';
 
@@ -126,9 +128,12 @@ const Experiments: React.FC = () => {
   const [runsLoading, setRunsLoading] = useState(false);
   const [equityLatest, setEquityLatest] = useState<Record<string, any> | null>(null);
   const [equityLoading, setEquityLoading] = useState(false);
+  const [clearLoading, setClearLoading] = useState(false);
+  const [selectedExpId, setSelectedExpId] = useState<string | null>(null);
 
   const openDrawer = async (exp: ExperimentItem) => {
     setDrawerExp(exp);
+    setSelectedExpId(exp.exp_id);
     setDrawerOpen(true);
 
     // Load runs
@@ -481,6 +486,32 @@ const Experiments: React.FC = () => {
                 showIcon
               />
             )}
+
+            <Divider />
+            <Popconfirm
+              title="确定清空此实验的所有数据？"
+              description="包括 BQ equity/trades、state 文件、run 历史。此操作不可恢复。"
+              onConfirm={async () => {
+                setClearLoading(true);
+                try {
+                  await api.post(`/api/admin/experiments/${selectedExpId}/clear`);
+                  message.success('已清空');
+                  actionRef.current?.reload();
+                  closeDrawer();
+                } catch (err: any) {
+                  message.error(err?.response?.data?.detail || '清空失败');
+                } finally {
+                  setClearLoading(false);
+                }
+              }}
+              okText="确认清空"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+            >
+              <Button danger type="primary" loading={clearLoading}>
+                清空所有数据
+              </Button>
+            </Popconfirm>
           </>
         )}
       </Drawer>
