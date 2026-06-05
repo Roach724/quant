@@ -255,9 +255,6 @@ def admin_experiment_action(exp_id: str, action: str):
     session.add(task)
     session.commit()
     return {"task_id": task.id, "status": "pending"}
-
-
-@app.post("/api/admin/experiments/{exp_id}/clear")
 def admin_experiment_clear(exp_id: str):
     """Clear all experiment data: BQ + state files + registry runs."""
     from google.cloud import bigquery as _bq
@@ -399,6 +396,23 @@ def admin_experiment_delete(exp_id: str):
         results["registry"] = str(e)[:80]
 
     return {"status": "ok", "details": results}
+
+
+@app.post("/api/admin/experiments/{exp_id}/{action}")
+def admin_experiment_action(exp_id: str, action: str):
+    """start / stop / restart an experiment via task queue."""
+    cmd_map = {
+        "start": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py start {exp_id}",
+        "stop": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py stop {exp_id}",
+        "restart": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py restart {exp_id}",
+    }
+    if action not in cmd_map:
+        return {"error": f"Unknown action: {action}"}, 400
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd_map[action]}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id, "status": "pending"}
 
 
 @app.get("/api/admin/experiments/{exp_id}/config")
