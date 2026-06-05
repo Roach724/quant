@@ -6,7 +6,7 @@ import requests
 import pandas as pd
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect, Body
+from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_serializer
 from sqlalchemy.orm import Session
@@ -1623,6 +1623,31 @@ def admin_ml_train(body: dict = Body(...)):
     session.add(task)
     session.commit()
     return {"task_id": task.id}
+
+
+# ── MLflow Proxy ─────────────────────────────────────────────────────────
+# MLflow runs on :5000 but cloudflared only tunnels :8091.
+# Proxy requests so the embedded iframe works through the tunnel.
+
+import httpx
+from fastapi.responses import StreamingResponse
+
+_MLFLOW_BASE = "http://127.0.0.1:5000"
+
+
+@app.api_route("/mlflow/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def mlflow_proxy(path: str, request: Request):
+    """Reverse proxy to MLflow server."""
+    url = f"{_MLFLOW_BASE}/{path}"
+    async with httpx.AsyncClient(timeout=30) as client:
+        body = await request.body()
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length")}
+        r = await client.request(request.method, url, content=body, headers=headers, params=request.query_params)
+        return StreamingResponse(
+            iter([r.content]),
+            status_code=r.status_code,
+            headers={k: v for k, v in r.headers.items() if k.lower() not in ("content-encoding", "transfer-encoding", "content-length")},
+        )
 
 
 # ── Dashboard APIs (migrated from dashboard/server.py) ─────────────────────────

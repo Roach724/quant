@@ -207,7 +207,7 @@ const ModelCenterTab: React.FC = () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const MlflowTab: React.FC = () => {
-  const mlflowUrl = `${window.location.protocol}//${window.location.hostname}:5000`;
+  const mlflowUrl = '/mlflow';
   return (
     <div>
       <Space style={{ marginBottom: 12 }}>
