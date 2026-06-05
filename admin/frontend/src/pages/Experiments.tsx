@@ -9,7 +9,7 @@ import type { ProColumns, ActionType } from '@ant-design/pro-table';
 import type { ColumnsType } from 'antd/es/table';
 import {
   Tag, Button, Space, message, Tooltip, Modal,
-  Select, Input, InputNumber, Drawer, Descriptions, Table,
+  Select, Input, Drawer, Descriptions, Table,
   Alert, Divider, Popconfirm, Typography, Tabs,
 } from 'antd';
 import { api } from '../api';
@@ -236,10 +236,6 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   const [templates, setTemplates] = useState<ConfigItem[]>([]);
   const [createTemplate, setCreateTemplate] = useState('');
   const [createExpId, setCreateExpId] = useState('');
-  const [createType, setCreateType] = useState('live');
-  const [createMarket, setCreateMarket] = useState('us');
-  const [createStrategy, setCreateStrategy] = useState('ml');
-  const [createVersion, setCreateVersion] = useState(1);
 
   const loadTemplates = async () => {
     const data = await api.get('/api/admin/experiments/configs');
@@ -296,10 +292,12 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
 
   const doCreate = async () => {
     if (!createTemplate || !createExpId) return;
+    const parts = createExpId.split('_');
     try {
       await api.post('/api/admin/experiments/create-from-config', {
         template: createTemplate, exp_id: createExpId,
-        type: createType, market: createMarket, strategy: createStrategy, version: createVersion,
+        type: parts[0] || 'live', market: parts[1] || 'us',
+        strategy: parts[2] || 'ml', version: parseInt(parts[3]?.replace('v','') || '1'),
       });
       message.success(`Created ${createExpId}`);
       setCreateOpen(false); actionRef.current?.reload();
@@ -383,15 +381,6 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
           </Space>
           <Space><Text strong>exp_id:</Text>
             <Input value={createExpId} onChange={(e) => setCreateExpId(e.target.value)} placeholder="e.g. live_us_ml_v3" style={{ width: 220 }} />
-          </Space>
-          <Space>
-            <Select value={createType} onChange={setCreateType} style={{ width: 100 }}
-              options={['live','paper','debug'].map(v => ({ value: v, label: v }))} />
-            <Select value={createMarket} onChange={setCreateMarket} style={{ width: 80 }}
-              options={['us','hk'].map(v => ({ value: v, label: v.toUpperCase() }))} />
-            <Select value={createStrategy} onChange={setCreateStrategy} style={{ width: 80 }}
-              options={['ml','mom'].map(v => ({ value: v, label: v }))} />
-            <InputNumber value={createVersion} onChange={(v) => setCreateVersion(v || 1)} min={1} style={{ width: 60 }} />
           </Space>
         </Space>
       </Modal>
