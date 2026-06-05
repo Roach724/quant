@@ -1,10 +1,53 @@
 # Quant 项目 — 状态备忘
 
-> 更新日期: 2026-06-01 15:12 UTC · 当前分支: `main` (dev) + `stable` (prod) · VM: e2-standard-4
+> 更新日期: 2026-06-05 03:19 UTC · 当前分支: `main` (dev) + `stable` (prod) · VM: e2-standard-4
 >
-> 🔥 最新: Live Loop + ML Platform 上线 — 实盘模拟 + MLflow 模型管理 + BQ 实时轮询
+> 🔥 最新: 管理平台上线 + 实验管理规范 + Dashboard 完善 — 实盘模拟 + MLflow 模型管理 + BQ 实时轮询
 
 ---
+
+
+## 🆕 管理平台 + 实验管理 + Dashboard 完善 (2026-06-04 ~ 06-05)
+
+### 管理平台
+- React 18 + Ant Design Pro + FastAPI (:8091)，6 大模块
+- 39 个 cron 任务已迁至系统 crontab（`quant` 用户）
+- 任务队列: SQLite Task 表 + worker 进程异步执行
+- 详见 HANDBOOK.md §16
+
+### 实验管理规范
+- 统一 ID 格式: `{type}_{market}_{strategy}_v{version}`
+- ExperimentManager: 注册 / 生命周期 / run_id 隔离 / BQ 日志
+- CLI: `live/exp_cli.py` — register / start / pause / resume / stop / archive / restart
+- Run 隔离: 每次启动新 run_id，BQ 按 run 区分，Dashboard 默认展示最新 run
+
+### Dashboard 完善
+- 时区修正: HK -8h, US America/New_York (DST 自动)
+- 图表 X 轴改为时间戳 (原 bar 编号)
+- HK 符号补前导零 (1186→01186)
+- Positions 表 Mkt Value 列 + Total 汇总行
+- Day PnL vs Total PnL 标签区分
+- Live / Paper Run / Prod / Debug Tab 类型隔离
+- 均默认展示最新 run (不再多条线叠加)
+
+### ws_collector 防冻
+- BQ 写入 30s timeout (ThreadPoolExecutor)
+- 主循环看门狗: >1h 无心跳 → 强制重连
+- `import` 修复: `live.calendar` → `live.market_calendar`
+
+### 模型重训
+- us_tech v2: RMSE 0.1565 (20 trials)
+- hk_tech v3: RMSE 0.0707, BQ factor_values 直读 (270 symbols)
+
+### HK 因子回填
+- 270 只 × 39 因子, 995 万条写入, 2020-01-01 ~ 2026-06-03
+
+### 🐛 修复
+- HK BarHandler 去重 (OHLC 展开重复)
+- BQDataSource 种子 bug (跳过昨天 bar)
+- ML 预测 score 写死 0 → 透传真实值
+- Infinity 值过滤 (compute_factors_batch.py)
+
 
 ## 🆕 Live Loop & ML Platform (2026-05-31 ~ 06-01)
 
