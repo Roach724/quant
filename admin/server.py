@@ -514,18 +514,26 @@ def admin_cron_history(index: int):
 
 # ── Log Browser ───────────────────────────────────────────────────────────────
 
-LOG_ROOT = "/var/log/quant/prod"
+LOG_ROOTS = ["/var/log/quant/prod", "/var/log/quant/dev"]
 LOG_MODULES = ["collector", "live", "factor", "cron", "train", "loader", "backfill", "quality", "adhoc"]
+
+
+def _module_log_files(module: str) -> list[str]:
+    """Collect all *.log files for a module across all LOG_ROOTS."""
+    files: list[str] = []
+    for root in LOG_ROOTS:
+        path = os.path.join(root, module)
+        if os.path.isdir(path):
+            files.extend(glob.glob(os.path.join(path, "*.log")))
+    return sorted(files, reverse=True)
 
 
 @app.get("/api/admin/logs/modules")
 def admin_log_modules():
     modules = []
     for mod in LOG_MODULES:
-        path = os.path.join(LOG_ROOT, mod)
-        if os.path.isdir(path):
-            files = glob.glob(os.path.join(path, "*.log"))
-            modules.append({"name": mod, "file_count": len(files)})
+        files = _module_log_files(mod)
+        modules.append({"name": mod, "file_count": len(files)})
     return modules
 
 
@@ -538,12 +546,11 @@ def admin_logs(
     end: str = Query(""),
     lines: int = Query(100),
 ):
-    """Read log lines from /var/log/quant/prod/{module}/, filtered."""
-    log_dir = os.path.join(LOG_ROOT, module)
-    if not os.path.isdir(log_dir):
-        return {"error": f"Unknown module: {module}", "lines": []}
-    files = sorted(glob.glob(os.path.join(log_dir, "*.log")), reverse=True)
+    """Read log lines from /var/log/quant/{prod,dev}/{module}/, filtered."""
+    files = _module_log_files(module)
     if not files:
+        if not any(os.path.isdir(os.path.join(r, module)) for r in LOG_ROOTS):
+            return {"error": f"Unknown module: {module}", "lines": []}
         return {"module": module, "lines": [], "file": None}
     log_file = files[0]
     # Parse optional time range filter
@@ -603,8 +610,7 @@ def admin_logs(
 async def ws_logs(websocket: WebSocket, module: str = "collector"):
     """Real-time log tail via WebSocket."""
     await websocket.accept()
-    log_dir = os.path.join(LOG_ROOT, module)
-    files = sorted(glob.glob(os.path.join(log_dir, "*.log")), reverse=True)
+    files = _module_log_files(module)
     if not files:
         await websocket.close()
         return
