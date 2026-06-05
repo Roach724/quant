@@ -5,7 +5,7 @@ import requests
 import pandas as pd
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_serializer
 from sqlalchemy.orm import Session
@@ -432,17 +432,17 @@ MLFLOW_API = "http://localhost:5000/api/2.0/mlflow"
 def admin_models():
     """List registered models with versions from MLflow."""
     try:
-        r = requests.get(f"{MLFLOW_API}/registered-models/list", timeout=5)
-        models = r.json().get("registered_models", [])
+        r = requests.get(f"{MLFLOW_API}/registered-models/search", timeout=5)
+        models = r.json().get("registered_models", []) or []
         result = []
         for m in models:
             name = m["name"]
-            rv = requests.post(
+            rv = requests.get(
                 f"{MLFLOW_API}/model-versions/search",
-                json={"filter": f"name='{name}'"},
+                params={"name": name},
                 timeout=5,
             )
-            versions = rv.json().get("model_versions", [])
+            versions = rv.json().get("model_versions", []) or []
             result.append({
                 "name": name,
                 "versions": [{
@@ -492,13 +492,13 @@ def admin_strategy_read(name: str):
 
 
 @app.put("/api/admin/strategies/{name}")
-def admin_strategy_save(name: str, source: str = ""):
+def admin_strategy_save(name: str, body: dict = Body(...)):
     """Save a strategy source file."""
     path = f"/opt/quant-prod/strategies/{name}"
     if not name.endswith(".py"):
         return {"error": "Invalid strategy name"}, 400
     with open(path, "w") as f:
-        f.write(source)
+        f.write(body.get("source", ""))
     return {"status": "saved"}
 
 

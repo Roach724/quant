@@ -99,17 +99,12 @@ const ModelsTab: React.FC = () => {
       columns={columns}
       request={async () => {
         try {
-          const data: ModelItem[] = await api.get('/api/admin/models');
-          if (data && 'error' in (data as any)) {
-            const enriched = (data as any).error
-              ? []
-              : data.map((m: ModelItem) => ({
-                  ...m,
-                  version_count: m.versions?.length ?? 0,
-                  latest_version: m.versions?.[m.versions.length - 1]?.version ?? '-',
-                  stage: m.versions?.[m.versions.length - 1]?.stage ?? '-',
-                }));
-            return { data: enriched, success: true, total: enriched.length };
+          const data: any = await api.get('/api/admin/models');
+          // Handle error response from backend
+          if (!Array.isArray(data)) {
+            const errMsg = data?.error || 'Unknown error';
+            message.error(`MLflow: ${errMsg}`);
+            return { data: [], success: false, total: 0 };
           }
           const enriched = (data as ModelItem[]).map((m: ModelItem) => ({
             ...m,
@@ -118,8 +113,9 @@ const ModelsTab: React.FC = () => {
             stage: m.versions?.[m.versions.length - 1]?.stage ?? '-',
           }));
           return { data: enriched, success: true, total: enriched.length };
-        } catch {
-          return { data: [], success: true, total: 0 };
+        } catch (err: any) {
+          message.error(`Failed to load models: ${err?.message || err}`);
+          return { data: [], success: false, total: 0 };
         }
       }}
       pagination={false}
