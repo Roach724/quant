@@ -177,8 +177,6 @@ def admin_experiment_clear(exp_id: str):
     from google.cloud import bigquery as _bq
 
     mgr = ExperimentManager()
-
-    # Make sure experiment exists
     try:
         exp = mgr.get(exp_id)
     except KeyError:
@@ -190,31 +188,23 @@ def admin_experiment_clear(exp_id: str):
     client = _bq.Client(project="deductive-notch-495015-c2")
     for table in ["experiment_equity", "experiment_trades", "experiment_runs"]:
         try:
-            client.query(
-                f"DELETE FROM quant.{table} WHERE exp_id='{exp_id}'"
-            ).result()
+            client.query(f"DELETE FROM quant.{table} WHERE exp_id='{exp_id}'").result()
             results[table] = "cleared"
         except Exception as e:
             results[table] = str(e)[:80]
 
     # 2. Clear state files
     strategy = exp.strategy
-    state_dirs = [
-        f"/var/quant/state/{strategy}/",
-        f"/var/quant/state/{strategy}_hk/",
-    ]
+    state_dirs = [f"/var/quant/state/{strategy}/", f"/var/quant/state/{strategy}_hk/"]
     shared_state_file = f"/var/quant/state/{strategy}.json"
     for d in state_dirs:
-        if not os.path.isdir(d):
-            continue
+        if not os.path.isdir(d): continue
         for f in glob.glob(os.path.join(d, "*.json")):
             try:
                 os.remove(f)
                 results[f"state_{os.path.basename(f)}"] = "deleted"
             except Exception as e:
                 results[f"state_{os.path.basename(f)}"] = str(e)[:80]
-
-    # Also remove shared state file if it exists
     if os.path.isfile(shared_state_file):
         try:
             os.remove(shared_state_file)
@@ -225,9 +215,102 @@ def admin_experiment_clear(exp_id: str):
     # 3. Reset registry runs
     mgr._data[exp_id]["runs"] = []
     mgr._data[exp_id]["current_run"] = None
-    mgr._data[exp_id]["status"] = "pending"
+    mgr._data[exp_id]["status"] = "paused"
     mgr._save()
-    results["registry"] = "reset to pending"
+    results["registry"] = "reset to paused"
+
+    return {"status": "ok", "details": results}
+
+
+# ── Experiment state machine ─────────────────────────────────────────────────
+#  registered → paused ⇄ running → stopped → archived
+#  - start:    paused/registered → running
+#  - stop:     running → stopped
+#  - restart:  stop old → start new
+#  - archive:  stopped → archived (read-only)
+#  - clear:    wipe data, reset to paused
+#  - delete:   wipe everything + unregister
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@app.post("/api/admin/experiments/{exp_id}/delete")
+def admin_experiment_delete(exp_id: str):
+    """Delete experiment: BQ + state + output + logs + unregister."""
+    from google.cloud import bigquery as _bq
+    import shutil, signal, time
+
+    mgr = ExperimentManager()
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+    # Kill process if running
+    pid = mgr.get_pid(exp_id)
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(1)
+            try: os.kill(pid, signal.SIGKILL)
+            except OSError: pass
+        except OSError: pass
+
+    results: dict[str, str] = {}
+
+    # 1. Delete BQ data
+    client = _bq.Client(project="deductive-notch-495015-c2")
+    for table in ["experiment_equity", "experiment_trades", "experiment_runs"]:
+        try:
+            client.query(f"DELETE FROM quant.{table} WHERE exp_id='{exp_id}'").result()
+            results[table] = "deleted"
+        except Exception as e:
+            results[table] = str(e)[:80]
+
+    # 2. Delete state directories
+    strategy = exp.strategy
+    for d in [f"/var/quant/state/{strategy}/", f"/var/quant/state/{strategy}_hk/"]:
+        if os.path.isdir(d):
+            try:
+                shutil.rmtree(d)
+                results[f"state_{os.path.basename(d.rstrip('/'))}"] = "deleted"
+            except Exception as e:
+                results[f"state_{os.path.basename(d.rstrip('/'))}"] = str(e)[:80]
+    for f in [f"/var/quant/state/{strategy}.json"]:
+        if os.path.isfile(f):
+            try:
+                os.remove(f)
+                results["state_shared"] = "deleted"
+            except Exception as e:
+                results["state_shared"] = str(e)[:80]
+
+    # 3. Delete output/live directories
+    output_base = Path("/opt/quant-prod/output/live")
+    if output_base.exists():
+        for d in output_base.iterdir():
+            if d.is_dir() and exp_id in d.name:
+                try:
+                    shutil.rmtree(d)
+                    results[f"output_{d.name}"] = "deleted"
+                except Exception as e:
+                    results[f"output_{d.name}"] = str(e)[:80]
+
+    # 4. Delete experiment logs
+    for log_root in LOG_ROOTS:
+        log_dir = Path(log_root) / "live"
+        if log_dir.exists():
+            for f in log_dir.glob(f"*{exp_id}*.log*"):
+                try:
+                    f.unlink()
+                    results[f"log_{f.name}"] = "deleted"
+                except Exception as e:
+                    results[f"log_{f.name}"] = str(e)[:80]
+
+    # 5. Unregister
+    try:
+        mgr.delete(exp_id)
+        results["registry"] = "unregistered"
+    except Exception as e:
+        results["registry"] = str(e)[:80]
 
     return {"status": "ok", "details": results}
 

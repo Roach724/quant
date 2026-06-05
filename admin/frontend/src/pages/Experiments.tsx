@@ -5,6 +5,7 @@ import {
   ReloadOutlined,
   PlusOutlined,
   EyeOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
@@ -291,6 +292,18 @@ const Experiments: React.FC = () => {
               onClick={() => handleAction(r.exp_id, 'restart')}
             />
           </Tooltip>
+          <Popconfirm
+            title={`永久删除 ${r.exp_id}？`}
+            description="将删除所有 BQ 数据、状态、日志和输出"
+            onConfirm={() => handleAction(r.exp_id, 'delete')}
+            okText="确认删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+          >
+            <Tooltip title="Delete">
+              <Button size="small" danger icon={<DeleteOutlined />} />
+            </Tooltip>
+          </Popconfirm>
         </Space>
       ),
     },
