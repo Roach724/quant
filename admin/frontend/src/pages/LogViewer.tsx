@@ -20,7 +20,7 @@ interface LogFileInfo { name: string; path: string; size: number; mtime: string;
 
 const levelColors: Record<string, string> = { ERROR: 'red', WARNING: 'orange', WARN: 'orange', INFO: 'blue', DEBUG: 'default' };
 const levelOptions = ['', 'ERROR', 'WARNING', 'INFO', 'DEBUG'].map(v => ({ value: v, label: v || 'ALL' }));
-const extractTime = (ts: string): string => { if (!ts) return ''; const m = ts.match(/[T ](\d{2}:\d{2}:\d{2})/); return m ? m[1] : ts; };
+const extractTime = (ts: string): string => { if (!ts) return ''; const m = ts.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})/); return m ? `${m[1]} ${m[2]}` : ts; };
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LogBrowser — existing log viewer

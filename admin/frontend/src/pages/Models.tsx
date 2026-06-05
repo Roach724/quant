@@ -26,7 +26,7 @@ const stageColor: Record<string, string> = { Production: 'green', Staging: 'oran
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const ModelsPage: React.FC = () => {
-  const [tab, setTab] = useState('center');
+  const [tab, setTab] = useState('datasets');
   return (
     <div>
       <div style={{ fontSize: 11, color: '#bbb', marginBottom: 8 }}>v2 — 模型中心 · ML 配置 · 数据集</div>

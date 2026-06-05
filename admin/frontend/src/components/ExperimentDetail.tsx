@@ -8,7 +8,7 @@ interface Props {
   readonly?: boolean;
 }
 
-export default function ExperimentDetail({ type: _type, readonly: _readonly }: Props) {
+export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
   const [experiments, setExperiments] = useState<any[]>([]);
   const [selectedExp, setSelectedExp] = useState('');
   const [selectedRun, setSelectedRun] = useState('');
@@ -37,8 +37,10 @@ export default function ExperimentDetail({ type: _type, readonly: _readonly }: P
       if (Array.isArray(bqData)) bqData.forEach((e: any) => { bqMap[e.exp_id] = e; });
       if (Array.isArray(meta)) {
         const all = meta.map((m: any) => ({ ...m, ...(bqMap[m.exp_id] || { sleeping: true }) }));
-        setExperiments(all);
-        if (!selectedExp && all.length > 0) setSelectedExp(all[0].exp_id);
+        // Filter by type: live → only live_* experiments, etc.
+        const filtered = all.filter((e: any) => e.exp_id.startsWith(type + '_'));
+        setExperiments(filtered);
+        if (!selectedExp && filtered.length > 0) setSelectedExp(filtered[0].exp_id);
       }
     } catch (e) {
       console.error('load experiments failed', e);
