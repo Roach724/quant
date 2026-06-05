@@ -73,6 +73,7 @@ class StateManager:
             },
         }
         try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
             self.state_path.write_text(
                 json.dumps(data, indent=2, ensure_ascii=False)
             )
@@ -119,6 +120,7 @@ class StateManager:
             "last_prices": getattr(portfolio, '_last_prices', {}),
         }
         try:
+            self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
             self.checkpoint_path.write_text(
                 json.dumps(data, indent=2, ensure_ascii=False)
             )

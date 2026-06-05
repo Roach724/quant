@@ -4,7 +4,6 @@ import DashboardOverview from './DashboardOverview';
 import DashboardLive from './DashboardLive';
 import DashboardPaperRun from './DashboardPaperRun';
 import DashboardProd from './DashboardProd';
-import DashboardDebug from './DashboardDebug';
 import DashboardPipeline from './DashboardPipeline';
 
 const TAB_ITEMS = [
@@ -12,7 +11,6 @@ const TAB_ITEMS = [
   { key: 'live', label: 'Live' },
   { key: 'paper', label: 'Paper Run' },
   { key: 'prod', label: 'Prod' },
-  { key: 'debug', label: 'Debug' },
   { key: 'pipeline', label: 'Pipeline' },
   { key: 'alerts', label: 'Alerts' },
 ];
@@ -22,7 +20,6 @@ const TAB_CONTENT: Record<string, React.ReactNode> = {
   live: <DashboardLive />,
   paper: <DashboardPaperRun />,
   prod: <DashboardProd />,
-  debug: <DashboardDebug />,
   pipeline: <DashboardPipeline />,
   alerts: <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>Alerts — coming soon</div>,
 };

@@ -1,4 +1,5 @@
-import { Card, Select, Table, Spin, Empty, Row, Col, Statistic } from 'antd';
+import { Card, Select, Table, Spin, Empty, Row, Col, Statistic, Button } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { api } from '../api';
@@ -8,7 +9,7 @@ interface Props {
   readonly?: boolean;
 }
 
-export default function ExperimentDetail({ type: _type, readonly: _readonly }: Props) {
+export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
   const [experiments, setExperiments] = useState<any[]>([]);
   const [selectedExp, setSelectedExp] = useState('');
   const [selectedRun, setSelectedRun] = useState('');
@@ -37,8 +38,10 @@ export default function ExperimentDetail({ type: _type, readonly: _readonly }: P
       if (Array.isArray(bqData)) bqData.forEach((e: any) => { bqMap[e.exp_id] = e; });
       if (Array.isArray(meta)) {
         const all = meta.map((m: any) => ({ ...m, ...(bqMap[m.exp_id] || { sleeping: true }) }));
-        setExperiments(all);
-        if (!selectedExp && all.length > 0) setSelectedExp(all[0].exp_id);
+        // Filter by type: live → only live_* experiments, etc.
+        const filtered = all.filter((e: any) => e.exp_id.startsWith(type + '_'));
+        setExperiments(filtered);
+        if (!selectedExp && filtered.length > 0) setSelectedExp(filtered[0].exp_id);
       }
     } catch (e) {
       console.error('load experiments failed', e);
@@ -77,6 +80,7 @@ export default function ExperimentDetail({ type: _type, readonly: _readonly }: P
       {/* ── Controls ── */}
       <Row gutter={12} style={{ marginBottom: 16 }}>
         <Col>
+          <span style={{ fontWeight: 600, marginRight: 8 }}>Experiment</span>
           <Select
             value={selectedExp}
             onChange={(v) => { setSelectedExp(v); setSelectedRun(''); }}
@@ -91,6 +95,7 @@ export default function ExperimentDetail({ type: _type, readonly: _readonly }: P
         </Col>
         {runs.length > 0 && (
           <Col>
+            <span style={{ fontWeight: 600, marginRight: 8 }}>Run</span>
             <Select
               value={selectedRun}
               onChange={setSelectedRun}
@@ -104,6 +109,10 @@ export default function ExperimentDetail({ type: _type, readonly: _readonly }: P
             />
           </Col>
         )}
+          <Col flex="auto" />
+        <Col>
+          <Button icon={<ReloadOutlined />} onClick={() => { loadExperiments(); if (selectedExp) loadData(selectedExp, selectedRun); }} size="small">刷新</Button>
+        </Col>
       </Row>
 
       {/* ── Metric Cards ── */}

@@ -9,7 +9,7 @@ import type { ProColumns, ActionType } from '@ant-design/pro-table';
 import type { ColumnsType } from 'antd/es/table';
 import {
   Tag, Button, Space, message, Tooltip, Modal,
-  Select, Input, InputNumber, Drawer, Descriptions, Table,
+  Select, Input, Drawer, Descriptions, Table,
   Alert, Divider, Popconfirm, Typography, Tabs,
 } from 'antd';
 import { api } from '../api';
@@ -52,25 +52,50 @@ const pollTask = (taskId: number): Promise<{ status: string; result: string | nu
 // =============================================================================
 
 const ExperimentDashboard: React.FC = () => {
-  const [tab, setTab] = useState('lab');
+  const [tab, setTab] = useState('configs');
   return (
     <Tabs activeKey={tab} onChange={setTab} items={[
-      { key: 'configs', label: '实验配置', children: <ConfigsTab /> },
-      { key: 'lab', label: '实验室', children: <LabTab /> },
+      { key: 'configs', label: '实验配置', children: <ConfigsTabs /> },
+      { key: 'lab', label: '实验室', children: <LabTabs /> },
     ]} />
   );
 };
 
 // =============================================================================
+// ConfigsTabs — Configs with Live/Paper/Prod sub-tabs
+// =============================================================================
+
+const ConfigsTabs: React.FC = () => {
+  const [sub, setSub] = useState('live');
+  return (
+    <Tabs activeKey={sub} onChange={setSub} items={[
+      { key: 'live', label: 'Live', children: <ConfigsTab filterPrefix="live_" /> },
+      { key: 'paper', label: 'Paper', children: <ConfigsTab filterPrefix="paper_" /> },
+      { key: 'prod', label: 'Prod', children: <ConfigsTab filterPrefix="prod_" /> },
+    ]} />
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // ConfigsTab — manage YAML config templates
 // =============================================================================
 
-const ConfigsTab: React.FC = () => {
+const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
   const actionRef = useRef<ActionType>(undefined);
   const [createOpen, setCreateOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorName, setEditorName] = useState('');
   const [editorContent, setEditorContent] = useState('');
+  const [viewOpen, setViewOpen] = useState(false);
+  const [viewName, setViewName] = useState('');
+  const [viewContent, setViewContent] = useState('');
+
+  const openViewer = async (name: string) => {
+    try {
+      const data = await api.get(`/api/admin/experiments/configs/${name}`);
+      setViewName(name); setViewContent(data.content || ''); setViewOpen(true);
+    } catch { message.error('Failed to load config'); }
+  };
 
   const openEditor = async (name: string) => {
     try {
@@ -104,9 +129,10 @@ const ConfigsTab: React.FC = () => {
       render: (_, r) => `${(r.size / 1024).toFixed(1)} KB`,
     },
     {
-      title: 'Actions', key: 'actions', width: 120,
+      title: 'Actions', key: 'actions', width: 160,
       render: (_, r) => (
         <Space>
+          <Tooltip title="View"><Button size="small" icon={<EyeOutlined />} onClick={() => openViewer(r.name)} /></Tooltip>
           <Tooltip title="Edit"><Button size="small" icon={<SettingOutlined />} onClick={() => openEditor(r.name)} /></Tooltip>
           <Popconfirm title={`删除 ${r.name}？`} onConfirm={() => deleteConfig(r.name)} okButtonProps={{ danger: true }}>
             <Tooltip title="Delete"><Button size="small" danger icon={<DeleteOutlined />} /></Tooltip>
@@ -126,7 +152,8 @@ const ConfigsTab: React.FC = () => {
         columns={columns}
         request={async () => {
           const data = await api.get('/api/admin/experiments/configs');
-          return { data, success: true, total: (data || []).length };
+          const filtered = filterPrefix ? (data || []).filter((c: any) => c.name.startsWith(filterPrefix)) : (data || []);
+          return { data: filtered, success: true, total: filtered.length };
         }}
         toolBarRender={() => [
           <Button key="new" type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建配置</Button>,
@@ -162,15 +189,39 @@ const ConfigsTab: React.FC = () => {
         <Input.TextArea value={editorContent} onChange={(e) => setEditorContent(e.target.value)} rows={30}
           style={{ fontFamily: 'monospace', fontSize: 12 }} />
       </Drawer>
+
+      {/* View Config Drawer */}
+      <Drawer title={`查看: ${viewName}`} open={viewOpen} onClose={() => setViewOpen(false)} width={700}>
+        <pre style={{ fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#fafafa', padding: 16, borderRadius: 6, margin: 0 }}>
+          {viewContent}
+        </pre>
+      </Drawer>
     </>
   );
 };
 
 // =============================================================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// LabTabs — Lab with Live/Paper/Prod sub-tabs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const LabTabs: React.FC = () => {
+  const [sub, setSub] = useState('live');
+  return (
+    <Tabs activeKey={sub} onChange={setSub} items={[
+      { key: 'live', label: 'Live', children: <LabTab filterType="live" /> },
+      { key: 'paper', label: 'Paper', children: <LabTab filterType="paper" /> },
+      { key: 'prod', label: 'Prod', children: <LabTab filterType="prod" /> },
+    ]} />
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // LabTab — experiment instances management
+// ═══════════════════════════════════════════════════════════════════════════════
 // =============================================================================
 
-const LabTab: React.FC = () => {
+const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   const actionRef = useRef<ActionType>(undefined);
   const [detailDrawer, setDetailDrawer] = useState(false);
   const [detailExp, setDetailExp] = useState<ExperimentItem | null>(null);
@@ -178,6 +229,8 @@ const LabTab: React.FC = () => {
   const [runsLoading, setRunsLoading] = useState(false);
   const [equityLatest, setEquityLatest] = useState<Record<string, any> | null>(null);
   const [equityLoading, setEquityLoading] = useState(false);
+  const [positions, setPositions] = useState<any[]>([]);
+  const [positionsLoading, setPositionsLoading] = useState(false);
   const [configDrawer, setConfigDrawer] = useState<{ open: boolean; expId: string; content: string; loading: boolean }>({ open: false, expId: '', content: '', loading: false });
 
   // Create from template
@@ -185,10 +238,6 @@ const LabTab: React.FC = () => {
   const [templates, setTemplates] = useState<ConfigItem[]>([]);
   const [createTemplate, setCreateTemplate] = useState('');
   const [createExpId, setCreateExpId] = useState('');
-  const [createType, setCreateType] = useState('live');
-  const [createMarket, setCreateMarket] = useState('us');
-  const [createStrategy, setCreateStrategy] = useState('ml');
-  const [createVersion, setCreateVersion] = useState(1);
 
   const loadTemplates = async () => {
     const data = await api.get('/api/admin/experiments/configs');
@@ -205,15 +254,31 @@ const LabTab: React.FC = () => {
     } catch (err: any) { message.error(`${action} ${expId} failed: ${err.message}`); }
   };
 
+  const handleDelete = async (expId: string) => {
+    try {
+      const data = await api.post(`/api/admin/experiments/${expId}/delete`);
+      if (data.status === 'ok') {
+        message.success(`${expId} deleted`);
+        actionRef.current?.reload();
+      } else {
+        message.error(`Delete failed: ${JSON.stringify(data)}`);
+      }
+    } catch (err: any) { message.error(`Delete ${expId} failed: ${err.message}`); }
+  };
+
   const openDetail = async (exp: ExperimentItem) => {
     setDetailExp(exp); setDetailDrawer(true);
-    setRunsLoading(true); setEquityLoading(true);
-    setRuns([]); setEquityLatest(null);
+    setRunsLoading(true); setEquityLoading(true); setPositionsLoading(true);
+    setRuns([]); setEquityLatest(null); setPositions([]);
     try { const d = await api.get(`/api/admin/experiments/${exp.exp_id}/runs`); setRuns(d); } catch { setRuns([]); } finally { setRunsLoading(false); }
     try {
       const eq = await api.get(`/api/admin/dashboard/equity/${exp.exp_id}`);
       setEquityLatest(Array.isArray(eq) && eq.length > 0 ? eq[eq.length - 1] : eq);
     } catch { setEquityLatest(null); } finally { setEquityLoading(false); }
+    try {
+      const pos = await api.get(`/api/admin/dashboard/experiments/${exp.exp_id}/positions`);
+      setPositions(Array.isArray(pos) ? pos : []);
+    } catch { setPositions([]); } finally { setPositionsLoading(false); }
   };
 
   const openConfig = async (expId: string) => {
@@ -233,10 +298,12 @@ const LabTab: React.FC = () => {
 
   const doCreate = async () => {
     if (!createTemplate || !createExpId) return;
+    const parts = createExpId.split('_');
     try {
       await api.post('/api/admin/experiments/create-from-config', {
         template: createTemplate, exp_id: createExpId,
-        type: createType, market: createMarket, strategy: createStrategy, version: createVersion,
+        type: parts[0] || 'live', market: parts[1] || 'us',
+        strategy: parts[2] || 'ml', version: parseInt(parts[3]?.replace('v','') || '1'),
       });
       message.success(`Created ${createExpId}`);
       setCreateOpen(false); actionRef.current?.reload();
@@ -274,7 +341,7 @@ const LabTab: React.FC = () => {
           <Popconfirm title={`重启 ${r.exp_id}？`} onConfirm={() => handleAction(r.exp_id, 'restart')}>
             <Tooltip title="Restart"><Button size="small" icon={<ReloadOutlined />} /></Tooltip>
           </Popconfirm>
-          <Popconfirm title={`永久删除 ${r.exp_id}？`} description="将删除所有数据" onConfirm={() => handleAction(r.exp_id, 'delete')}
+          <Popconfirm title={`永久删除 ${r.exp_id}？`} description="将删除所有数据" onConfirm={() => handleDelete(r.exp_id)}
             okText="确认删除" okButtonProps={{ danger: true }}>
             <Tooltip title="Delete"><Button size="small" danger icon={<DeleteOutlined />} /></Tooltip>
           </Popconfirm>
@@ -300,7 +367,8 @@ const LabTab: React.FC = () => {
         columns={columns}
         request={async () => {
           const data = await api.get('/api/admin/experiments');
-          return { data, success: true, total: (data || []).length };
+          const filtered = filterType ? (data || []).filter((e: any) => e.type === filterType) : (data || []);
+          return { data: filtered, success: true, total: filtered.length };
         }}
         toolBarRender={() => [
           <Button key="create" type="primary" icon={<FileAddOutlined />}
@@ -319,15 +387,6 @@ const LabTab: React.FC = () => {
           </Space>
           <Space><Text strong>exp_id:</Text>
             <Input value={createExpId} onChange={(e) => setCreateExpId(e.target.value)} placeholder="e.g. live_us_ml_v3" style={{ width: 220 }} />
-          </Space>
-          <Space>
-            <Select value={createType} onChange={setCreateType} style={{ width: 100 }}
-              options={['live','paper','debug'].map(v => ({ value: v, label: v }))} />
-            <Select value={createMarket} onChange={setCreateMarket} style={{ width: 80 }}
-              options={['us','hk'].map(v => ({ value: v, label: v.toUpperCase() }))} />
-            <Select value={createStrategy} onChange={setCreateStrategy} style={{ width: 80 }}
-              options={['ml','mom'].map(v => ({ value: v, label: v }))} />
-            <InputNumber value={createVersion} onChange={(v) => setCreateVersion(v || 1)} min={1} style={{ width: 60 }} />
           </Space>
         </Space>
       </Modal>
@@ -354,6 +413,20 @@ const LabTab: React.FC = () => {
                   <Descriptions.Item label="PnL">${Math.round(equityLatest.daily_pnl || 0)}</Descriptions.Item>
                 </Descriptions>
               ) : <Alert message="No equity data" type="warning" />}
+
+            <Divider>Positions ({positions.length})</Divider>
+            {positionsLoading ? <Alert message="Loading..." type="info" /> :
+              positions.length === 0 ? <Alert message="No open positions" type="info" /> :
+              <Table dataSource={positions} rowKey="symbol" size="small" pagination={false}
+                columns={[
+                  { title: 'Symbol', dataIndex: 'symbol', width: 80 },
+                  { title: 'Qty', dataIndex: 'qty', width: 80, render: (v: any) => Number(v).toFixed(2) },
+                  { title: 'Avg Cost', dataIndex: 'avg_cost', width: 100, render: (v: any) => `$${Number(v).toFixed(2)}` },
+                  { title: 'Price', dataIndex: 'current_price', width: 100, render: (v: any) => `$${Number(v).toFixed(2)}` },
+                  { title: 'PnL', dataIndex: 'pnl', width: 100, render: (v: any) => ({ children: `$${Number(v).toFixed(2)}`, props: { style: { color: Number(v) >= 0 ? '#3f8600' : '#cf1322' } } }) },
+                  { title: 'PnL%', dataIndex: 'pnl_pct', width: 80, render: (v: any) => ({ children: `${Number(v).toFixed(2)}%`, props: { style: { color: Number(v) >= 0 ? '#3f8600' : '#cf1322' } } }) },
+                ]}
+              />}
 
             <Divider>Runs</Divider>
             <Table dataSource={runs} rowKey="run_id" loading={runsLoading} size="small" columns={runColumns} pagination={false} />

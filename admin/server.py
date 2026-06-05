@@ -1,11 +1,12 @@
 """Quant Admin Platform — FastAPI server."""
 
 import subprocess, json as _json, os, glob, logging
+from pathlib import Path
 import requests
 import pandas as pd
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect, Body
+from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_serializer
 from sqlalchemy.orm import Session
@@ -171,6 +172,13 @@ def admin_experiment_create_from_config(body: dict = Body(...)):
         raise HTTPException(status_code=409, detail=f"Config '{new_id}.yaml' already exists")
     # Copy template and update experiment.id in the copy
     shutil.copy2(template_path, new_path)
+    # Inject exp_id into the config YAML so run.py uses it for log file naming
+    try:
+        cfg = _yaml.safe_load(new_path.read_text()) or {}
+        cfg.setdefault("experiment", {})["id"] = new_id
+        new_path.write_text(_yaml.dump(cfg, default_flow_style=False, allow_unicode=True))
+    except Exception:
+        pass
     mgr = ExperimentManager()
     try:
         exp_id = mgr.register(
@@ -180,6 +188,7 @@ def admin_experiment_create_from_config(body: dict = Body(...)):
             version=int(body.get("version", 1)),
             config_path=str(new_path),
             name=body.get("name", new_id),
+            exp_id=new_id,
         )
         return {"exp_id": exp_id, "config_path": str(new_path)}
     except ValueError as e:
@@ -238,23 +247,6 @@ def admin_experiment_config_put(name: str, body: dict = Body(...)):
         shutil.copy2(path, backup)
     path.write_text(content)
     return {"status": "ok", "name": name}
-
-
-@app.post("/api/admin/experiments/{exp_id}/{action}")
-def admin_experiment_action(exp_id: str, action: str):
-    """start / stop / restart an experiment via task queue."""
-    cmd_map = {
-        "start": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py start {exp_id}",
-        "stop": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py stop {exp_id}",
-        "restart": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py restart {exp_id}",
-    }
-    if action not in cmd_map:
-        return {"error": f"Unknown action: {action}"}, 400
-    session = get_session()
-    task = Task(type="shell", params={"cmd": cmd_map[action]}, status="pending")
-    session.add(task)
-    session.commit()
-    return {"task_id": task.id, "status": "pending"}
 
 
 @app.post("/api/admin/experiments/{exp_id}/clear")
@@ -323,6 +315,7 @@ def admin_experiment_clear(exp_id: str):
 def admin_experiment_delete(exp_id: str):
     """Delete experiment: BQ + state + output + logs + unregister."""
     from google.cloud import bigquery as _bq
+    from pathlib import Path
     import shutil, signal, time
 
     mgr = ExperimentManager()
@@ -369,7 +362,7 @@ def admin_experiment_delete(exp_id: str):
             except Exception as e:
                 results["state_shared"] = str(e)[:80]
 
-    # 3. Delete output/live directories
+    # 3. Delete output/live directories (including experiments meta)
     output_base = Path("/opt/quant-prod/output/live")
     if output_base.exists():
         for d in output_base.iterdir():
@@ -379,6 +372,14 @@ def admin_experiment_delete(exp_id: str):
                     results[f"output_{d.name}"] = "deleted"
                 except Exception as e:
                     results[f"output_{d.name}"] = str(e)[:80]
+        # Also clean experiment meta directory
+        exp_meta = output_base / "experiments" / exp_id
+        if exp_meta.exists():
+            try:
+                shutil.rmtree(exp_meta)
+                results["output_experiments_meta"] = "deleted"
+            except Exception as e:
+                results["output_experiments_meta"] = str(e)[:80]
 
     # 4. Delete experiment logs
     for log_root in LOG_ROOTS:
@@ -391,6 +392,18 @@ def admin_experiment_delete(exp_id: str):
                 except Exception as e:
                     results[f"log_{f.name}"] = str(e)[:80]
 
+    # 4.5 Delete experiment config file
+    config_path = Path("/opt/quant-prod") / exp.config_path
+    if config_path.exists():
+        try:
+            # Backup to .del first, then remove
+            backup = config_path.with_suffix(config_path.suffix + ".del")
+            shutil.copy2(config_path, backup)
+            config_path.unlink()
+            results["config_file"] = f"deleted (backup: {backup.name})"
+        except Exception as e:
+            results["config_file"] = str(e)[:80]
+
     # 5. Unregister
     try:
         mgr.delete(exp_id)
@@ -399,6 +412,23 @@ def admin_experiment_delete(exp_id: str):
         results["registry"] = str(e)[:80]
 
     return {"status": "ok", "details": results}
+
+
+@app.post("/api/admin/experiments/{exp_id}/{action}")
+def admin_experiment_action(exp_id: str, action: str):
+    """start / stop / restart an experiment via task queue."""
+    cmd_map = {
+        "start": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py start {exp_id}",
+        "stop": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py stop {exp_id}",
+        "restart": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py restart {exp_id}",
+    }
+    if action not in cmd_map:
+        return {"error": f"Unknown action: {action}"}, 400
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd_map[action]}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id, "status": "pending"}
 
 
 @app.get("/api/admin/experiments/{exp_id}/config")
@@ -770,7 +800,7 @@ def admin_cron_history(index: int):
 # ── Log Browser ───────────────────────────────────────────────────────────────
 
 LOG_ROOTS = ["/var/log/quant/prod", "/var/log/quant/dev"]
-LOG_MODULES = ["collector", "live", "factor", "cron", "train", "loader", "backfill", "quality", "adhoc"]
+LOG_MODULES = ["collector", "live", "paper_run", "factor", "cron", "train", "loader", "backfill", "quality", "adhoc"]
 
 
 def _module_log_files(module: str) -> list[str]:
@@ -904,6 +934,48 @@ async def ws_logs(websocket: WebSocket, module: str = "collector"):
                     await asyncio.sleep(0.5)
     except (WebSocketDisconnect, Exception):
         await websocket.close()
+
+
+# ── Log File Management ───────────────────────────────────────────────────────
+
+@app.get("/api/admin/logs/files")
+def admin_log_files(module: str = Query("collector")):
+    """List all log files for a module with size and mtime."""
+    import os as _os_stat
+    files = []
+    for fpath in _module_log_files(module):
+        try:
+            st = _os_stat.stat(fpath)
+            files.append({
+                "name": _os_stat.path.basename(fpath),
+                "path": fpath,
+                "size": st.st_size,
+                "mtime": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+            })
+        except OSError:
+            pass
+    return files
+
+
+@app.delete("/api/admin/logs/files")
+def admin_log_delete(module: str = Query("collector"), file: str = Query("")):
+    """Delete a log file. Safe: running services continue writing to inode."""
+    if not file:
+        raise HTTPException(status_code=400, detail="Missing 'file' parameter")
+    # Resolve basename to full path
+    all_files = _module_log_files(module)
+    target = None
+    for f in all_files:
+        if _os.path.basename(f) == file or f == file:
+            target = f
+            break
+    if not target or not _os.path.isfile(target):
+        raise HTTPException(status_code=404, detail=f"File '{file}' not found")
+    try:
+        _os.remove(target)
+        return {"status": "ok", "deleted": file}
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Model & Strategy Management ──────────────────────────────────────────────
@@ -1040,6 +1112,15 @@ def admin_model_stage(name: str, version: str = "", stage: str = ""):
         json={"name": name, "version": version, "stage": stage},
         timeout=5,
     )
+    if r.status_code != 200:
+        # Try GET for MLflow 3.x
+        r2 = requests.get(
+            f"{MLFLOW_API}/model-versions/transition-stage",
+            params={"name": name, "version": version, "stage": stage},
+            timeout=5,
+        )
+        if r2.status_code == 200:
+            return r2.json()
     return r.json()
 
 
@@ -1069,6 +1150,19 @@ def admin_strategy_save(name: str, body: dict = Body(...)):
     with open(path, "w") as f:
         f.write(body.get("source", ""))
     return {"status": "saved"}
+
+
+@app.delete("/api/admin/strategies/{name}")
+def admin_strategy_delete(name: str):
+    """Delete a strategy file (backup to .del)."""
+    import shutil
+    path = f"/opt/quant-prod/strategies/{name}"
+    if not name.endswith(".py") or name == "__init__.py":
+        return {"error": "Cannot delete this file"}, 400
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
+    shutil.move(path, path + ".del")
+    return {"status": "ok", "backup": name + ".del"}
 
 
 # ── Factor Management ──────────────────────────────────────────────────────────
@@ -1179,6 +1273,435 @@ def admin_factor_compute(source: str = "tech", market: str = "us",
     session.add(task)
     session.commit()
     return {"task_id": task.id}
+
+
+# ── ML Subsystem ──────────────────────────────────────────────────────────────
+
+import yaml as _yaml
+from admin.models import MlDataset as _MlDataset, MlConfig as _MlConfig
+from google.cloud import bigquery as _bq
+
+_ML_CONFIG_DIR = Path(__file__).resolve().parent.parent / "ml" / "configs"
+
+# ── Datasets ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/ml/datasets")
+def admin_ml_datasets():
+    session = get_session()
+    rows = session.query(_MlDataset).order_by(_MlDataset.created_at.desc()).all()
+    return [{
+        "id": r.id, "name": r.name, "market": r.market, "label": r.label,
+        "factor_ids": _json.loads(r.factor_ids) if r.factor_ids else [],
+        "train_range": f"{r.train_start},{r.train_end}",
+        "val_range": f"{r.val_start},{r.val_end}",
+        "test_range": f"{r.test_start},{r.test_end}",
+        "bq_table": r.bq_table, "status": r.status, "row_count": r.row_count,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    } for r in rows]
+
+
+@app.get("/api/admin/ml/datasets/{market}/factors")
+def admin_ml_dataset_factors(market: str):
+    """Return available factor columns from BQ factor_values for a given market."""
+    client = _bq.Client(project="deductive-notch-495015-c2")
+    query = """
+        SELECT DISTINCT factor_id, source_builder
+        FROM quant.factor_values
+        WHERE factor_id LIKE @prefix
+        ORDER BY factor_id
+    """
+    prefix = f"{market}_%"
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("prefix", "STRING", prefix)]
+    )
+    try:
+        rows = client.query(query, job_config=job_config).result()
+        return [{
+            "factor_id": r.factor_id,
+            "source": r.source_builder or "unknown",
+            "label": r.factor_id.replace(f"{market}_", "", 1),
+        } for r in rows]
+    except Exception:
+        return []
+
+
+@app.post("/api/admin/ml/datasets")
+def admin_ml_dataset_create(body: dict = Body(...)):
+    session = get_session()
+    name = body.get("name", "")
+    if not name:
+        raise HTTPException(400, detail="Missing 'name'")
+    if session.query(_MlDataset).filter(_MlDataset.name == name).first():
+        raise HTTPException(409, detail=f"Dataset '{name}' already exists")
+    ds = _MlDataset(
+        name=name, market=body.get("market", "us"), label=body.get("label", "fwd_ret_5d"),
+        factor_ids=_json.dumps(body.get("factor_ids", [])),
+        train_start=body.get("train_start", ""), train_end=body.get("train_end", ""),
+        val_start=body.get("val_start", ""), val_end=body.get("val_end", ""),
+        test_start=body.get("test_start", ""), test_end=body.get("test_end", ""),
+    )
+    session.add(ds)
+    session.commit()
+    return {"id": ds.id, "name": ds.name, "status": ds.status}
+
+
+@app.post("/api/admin/ml/datasets/{ds_id}/generate")
+def admin_ml_dataset_generate(ds_id: int):
+    """Build/replace BQ table for a dataset in ml_dataset.{name}. Logs to train module."""
+    from datetime import datetime as _dt
+    session = get_session()
+    ds = session.query(_MlDataset).filter(_MlDataset.id == ds_id).first()
+    if not ds:
+        raise HTTPException(404, detail=f"Dataset {ds_id} not found")
+
+    # Generate via task queue for logging
+    cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant-prod && "
+           f"PYTHONPATH=/opt/quant-prod .venv/bin/python3 -c \""
+           f"from admin.server import _generate_dataset_inner; "
+           f"_generate_dataset_inner({ds_id})\" "
+           f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
+           f"| tee -a /var/log/quant/prod/train/dataset_{ds.name}.log")
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd, "dataset": ds.name}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id}
+
+
+def _generate_dataset_inner(ds_id: int):
+    """Inner function called by task worker. Logs to stdout which is piped to tee."""
+    import json as _json
+    from admin.models import get_session, MlDataset
+    from google.cloud import bigquery as _bq_inner
+    from datetime import datetime, timezone
+
+    session = get_session()
+    ds = session.query(MlDataset).filter(MlDataset.id == ds_id).first()
+    if not ds:
+        print(f"ERROR: dataset {ds_id} not found")
+        return
+
+    factor_ids = _json.loads(ds.factor_ids)
+    if not factor_ids:
+        print("ERROR: no factors selected")
+        return
+
+    print(f"Generating dataset {ds.name} — {len(factor_ids)} factors")
+    client = _bq_inner.Client(project="deductive-notch-495015-c2")
+    table_name = ds.name
+    full_table = f"deductive-notch-495015-c2.ml_dataset.{table_name}"
+    label_col = ds.label
+    market_prefix = ds.market + "_"
+    label_factor_id = market_prefix + ds.label.replace("fwd_", "")
+
+    pivot_cols = ",\n                   ".join(
+        "MAX(CASE WHEN factor_id = '{}' THEN value END) AS {}".format(
+            f, f.replace(market_prefix, "", 1)
+        )
+        for f in factor_ids
+    )
+
+    try:
+        client.query(f"DROP TABLE IF EXISTS deductive-notch-495015-c2.ml_dataset.{table_name}").result()
+        print(f"Creating table deductive-notch-495015-c2.ml_dataset.{table_name}...")
+
+        create_sql = f"""
+            CREATE TABLE deductive-notch-495015-c2.ml_dataset.{table_name} AS
+            WITH raw AS (
+                SELECT symbol, date, factor_id, value,
+                       CASE
+                           WHEN date BETWEEN '{ds.train_start}' AND '{ds.train_end}' THEN 'train'
+                           WHEN date BETWEEN '{ds.val_start}' AND '{ds.val_end}' THEN 'val'
+                           WHEN date BETWEEN '{ds.test_start}' AND '{ds.test_end}' THEN 'test'
+                       END AS split
+                FROM deductive-notch-495015-c2.quant.factor_values
+                WHERE factor_id IN UNNEST(@factor_ids)
+                  AND date BETWEEN '{ds.train_start}' AND '{ds.test_end}'
+            )
+            SELECT symbol, date, split,
+                   {pivot_cols},
+                   MAX(CASE WHEN factor_id = '{label_factor_id}' THEN value END) AS `{label_col}`
+            FROM raw
+            WHERE split IS NOT NULL
+            GROUP BY symbol, date, split
+        """
+        job_config = _bq_inner.QueryJobConfig(
+            query_parameters=[_bq_inner.ArrayQueryParameter("factor_ids", "STRING", factor_ids)]
+        )
+        client.query(create_sql, job_config=job_config).result()
+
+        cnt = list(client.query(f"SELECT COUNT(*) AS n FROM deductive-notch-495015-c2.ml_dataset.{table_name}").result())[0].n
+        print(f"Done: {cnt} rows")
+
+        ds.bq_table = full_table
+        ds.status = "ready"
+        ds.row_count = cnt
+        ds.updated_at = datetime.now(timezone.utc)
+        session.commit()
+    except Exception as e:
+        print(f"ERROR: {e}")
+        ds.status = "failed"
+        session.commit()
+
+
+@app.delete("/api/admin/ml/datasets/{ds_id}")
+def admin_ml_dataset_delete(ds_id: int):
+    session = get_session()
+    ds = session.query(_MlDataset).filter(_MlDataset.id == ds_id).first()
+    if not ds:
+        raise HTTPException(404, detail=f"Dataset {ds_id} not found")
+    if ds.bq_table:
+        try:
+            _bq.Client(project="deductive-notch-495015-c2").query(f"DROP TABLE IF EXISTS {ds.bq_table}").result()
+        except Exception:
+            pass
+    session.delete(ds)
+    session.commit()
+    return {"status": "ok"}
+
+
+# ── ML Configs ────────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/ml/configs")
+def admin_ml_configs():
+    session = get_session()
+    rows = session.query(_MlConfig).order_by(_MlConfig.created_at.desc()).all()
+    return [{
+        "id": r.id, "name": r.name, "description": r.description,
+        "config_path": r.config_path, "dataset_name": r.dataset_name,
+        "registry_model_name": r.registry_model_name, "status": r.status,
+    } for r in rows]
+
+
+@app.get("/api/admin/ml/configs/{name}")
+def admin_ml_config_get(name: str):
+    path = _ML_CONFIG_DIR / name if name.endswith(".yaml") else _ML_CONFIG_DIR / f"{name}.yaml"
+    if not path.exists():
+        raise HTTPException(404, detail=f"Config '{name}' not found")
+    return {"name": name, "content": path.read_text()}
+
+
+@app.put("/api/admin/ml/configs/{name}")
+def admin_ml_config_put(name: str, body: dict = Body(...)):
+    import shutil
+    content = body.get("content", "")
+    if not content:
+        raise HTTPException(400, detail="Missing 'content'")
+    _ML_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    fname = name if name.endswith(".yaml") else f"{name}.yaml"
+    path = _ML_CONFIG_DIR / fname
+    if path.exists():
+        shutil.copy2(path, path.with_suffix(".yaml.bak"))
+    path.write_text(content)
+    # Parse YAML to extract dataset_name and registry_model_name
+    try:
+        cfg = _yaml.safe_load(content)
+        dataset_name = cfg.get("data", {}).get("dataset", "")
+        registry_name = cfg.get("registry", {}).get("model_name", "")
+    except Exception:
+        dataset_name = ""
+        registry_name = ""
+    # Upsert to DB
+    session = get_session()
+    existing = session.query(_MlConfig).filter(_MlConfig.name == fname).first()
+    if existing:
+        existing.config_path = str(path)
+        existing.dataset_name = dataset_name
+        existing.registry_model_name = registry_name
+    else:
+        session.add(_MlConfig(
+            name=fname, config_path=str(path),
+            dataset_name=dataset_name, registry_model_name=registry_name,
+            description=body.get("description", ""),
+        ))
+    session.commit()
+    return {"status": "ok", "name": fname}
+
+
+@app.delete("/api/admin/ml/configs/{name}")
+def admin_ml_config_delete(name: str):
+    session = get_session()
+    fname = name if name.endswith(".yaml") else f"{name}.yaml"
+    cfg = session.query(_MlConfig).filter(_MlConfig.name == fname).first()
+    if not cfg:
+        raise HTTPException(404, detail=f"Config '{fname}' not found")
+    # Check MLflow for registered models
+    if cfg.registry_model_name:
+        try:
+            r = requests.get(
+                f"{MLFLOW_API}/model-versions/search",
+                params={"name": cfg.registry_model_name}, timeout=5,
+            )
+            versions = r.json().get("model_versions", [])
+            if versions:
+                raise HTTPException(409, detail=f"模型 '{cfg.registry_model_name}' 下有 {len(versions)} 个版本，请先在 MLflow 删除所有版本")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+    path = _ML_CONFIG_DIR / fname
+    if path.exists():
+        import shutil
+        shutil.move(str(path), str(path.with_suffix(".yaml.del")))
+    session.delete(cfg)
+    session.commit()
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/ml/configs/{name}/register")
+def admin_ml_config_register(name: str):
+    """Register config to model center."""
+    session = get_session()
+    fname = name if name.endswith(".yaml") else f"{name}.yaml"
+    cfg = session.query(_MlConfig).filter(_MlConfig.name == fname).first()
+    if not cfg:
+        raise HTTPException(404, detail=f"Config '{fname}' not found")
+    cfg.status = "registered"
+    session.commit()
+    return {"status": "ok", "name": fname}
+
+
+# ── Model Center ──────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/ml/center")
+def admin_ml_center():
+    """Model center list: MLflow models + config info."""
+    session = get_session()
+    # Load configs for dataset_name lookup
+    config_map: dict[str, dict] = {}
+    for cfg in session.query(_MlConfig).all():
+        key = cfg.registry_model_name or cfg.name.replace(".yaml", "")
+        config_map[key] = {"dataset_name": cfg.dataset_name or "", "config_name": cfg.name}
+
+    result = []
+    # Fetch ALL MLflow registered models
+    try:
+        r = requests.get(f"{MLFLOW_API}/registered-models/search", timeout=5)
+        mlflow_models = r.json().get("registered_models", [])
+    except Exception:
+        mlflow_models = []
+
+    seen = set()
+    for m in mlflow_models:
+        model_name = m.get("name", "")
+        if not model_name or model_name in seen:
+            continue
+        seen.add(model_name)
+        cfg = config_map.get(model_name, {})
+        # Fetch full version details with metrics
+        mlflow_versions = []
+        try:
+            rv = requests.get(f"{MLFLOW_API}/model-versions/search", params={"name": model_name}, timeout=5)
+            raw_versions = rv.json().get("model_versions", [])
+            for v in raw_versions:
+                vdet = {
+                    "version": v.get("version", ""),
+                    "stage": v.get("current_stage", ""),
+                    "run_id": v.get("run_id", ""),
+                }
+                # Fetch run metrics
+                try:
+                    rr = requests.get(f"{MLFLOW_API}/runs/get", params={"run_id": v["run_id"]}, timeout=5)
+                    run_data = rr.json().get("run", {}).get("data", {})
+                    vdet["rmse"] = next((m["value"] for m in run_data.get("metrics", []) if m["key"] == "rmse"), None)
+                    vdet["ic"] = next((m["value"] for m in run_data.get("metrics", []) if m["key"] == "rank_ic"), None)
+                    vdet["icir"] = next((m["value"] for m in run_data.get("metrics", []) if m["key"] == "icir"), None)
+                    vdet["n_features"] = next((int(p["value"]) for p in run_data.get("params", []) if p["key"] == "n_features"), None)
+                    vdet["dataset"] = next((p["value"] for p in run_data.get("params", []) if p["key"] == "dataset_name"), None)
+                except Exception:
+                    pass
+                mlflow_versions.append(vdet)
+        except Exception:
+            pass
+        result.append({
+            "model_name": model_name,
+            "dataset_name": cfg.get("dataset_name", "—"),
+            "config_name": cfg.get("config_name", "—"),
+            "versions": mlflow_versions,
+        })
+
+    # Also include registered configs that don't have MLflow models yet
+    for cfg in session.query(_MlConfig).filter(_MlConfig.status == "registered").all():
+        model_name = cfg.registry_model_name or cfg.name.replace(".yaml", "")
+        if model_name not in seen:
+            seen.add(model_name)
+            result.append({
+                "model_name": model_name,
+                "dataset_name": cfg.dataset_name or "",
+                "config_name": cfg.name,
+                "versions": [],
+            })
+    return result
+
+
+@app.post("/api/admin/ml/train")
+def admin_ml_train(body: dict = Body(...)):
+    """Submit training task for a config."""
+    config_name = body.get("config_name", "")
+    skip_tuning = body.get("skip_tuning", False)
+    if not config_name:
+        raise HTTPException(400, detail="Missing 'config_name'")
+    fname = config_name if config_name.endswith(".yaml") else f"{config_name}.yaml"
+    path = _ML_CONFIG_DIR / fname
+    if not path.exists():
+        raise HTTPException(404, detail=f"Config '{config_name}' not found")
+    cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+           f".venv/bin/python3 -c \"import logging; logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s [%(name)s] %(message)s'); "
+           f"from ml.pipeline import TrainPipeline; "
+           f"p = TrainPipeline('{path}'); p.run(skip_tuning={skip_tuning})\" "
+           f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
+           f"| tee -a /var/log/quant/prod/train/{config_name}.log")
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd, "config": config_name}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id}
+
+
+@app.delete("/api/admin/ml/center/{model_name}")
+def admin_ml_center_delete(model_name: str):
+    """Unregister from model center. Does NOT delete the config template."""
+    session = get_session()
+    configs = session.query(_MlConfig).filter(
+        (_MlConfig.registry_model_name == model_name) |
+        (_MlConfig.name == model_name + ".yaml")
+    ).all()
+    for c in configs:
+        if c.status == "registered":
+            c.status = "draft"
+    session.commit()
+    return {"status": "ok", "unregistered": len(configs)}
+
+
+# ── MLflow Proxy ─────────────────────────────────────────────────────────
+# MLflow runs on :5000 but cloudflared only tunnels :8091.
+# Proxy requests so the embedded iframe works through the tunnel.
+
+import httpx
+from fastapi.responses import StreamingResponse
+
+_MLFLOW_BASE = "http://127.0.0.1:5000"
+
+
+@app.get("/mlflow")
+async def mlflow_redirect():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/mlflow/")
+
+
+@app.api_route("/mlflow/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def mlflow_proxy(path: str, request: Request):
+    """Reverse proxy to MLflow server."""
+    url = f"{_MLFLOW_BASE}/{path}"
+    async with httpx.AsyncClient(timeout=30) as client:
+        body = await request.body()
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length")}
+        r = await client.request(request.method, url, content=body, headers=headers, params=request.query_params)
+        return StreamingResponse(
+            iter([r.content]),
+            status_code=r.status_code,
+            headers={k: v for k, v in r.headers.items() if k.lower() not in ("content-encoding", "transfer-encoding", "content-length")},
+        )
 
 
 # ── Dashboard APIs (migrated from dashboard/server.py) ─────────────────────────
