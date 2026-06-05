@@ -879,3 +879,120 @@ fi
 - 代码任务必须先描述计划、等批准再动手
 - 系统配置修改必须先展示改动、等审阅再执行
 - 标的覆盖数量以 `config/symbols.yaml` 为准，不得自设
+
+---
+
+## 16. 管理平台 (Admin Platform)
+
+### 16.1 概述
+
+统一管理平台，在一个前端页面上操作所有量化系统模块，替代 SSH + 命令行。
+
+- **地址**: `http://localhost:8091`（公网通过 cloudflared tunnel）
+- **架构**: React 18 + Ant Design Pro (Vite/TS) → FastAPI (:8091) → SQLAlchemy/SQLite → Worker
+- **认证**: 无（cloudflared 隧道 + 防火墙保护）
+- **部署**: `systemctl [start|stop|restart] quant-admin quant-admin-worker`
+
+### 16.2 模块功能
+
+#### 实验管理
+
+| 功能 | 操作 |
+|------|------|
+| 实验列表 | 查看所有实验、状态、当前 run、PID |
+| 注册实验 | 表单填写 type/market/strategy/version/config → 自动生成 ID |
+| 启动/停止/重启 | 按钮触发 → worker 执行 `exp_cli` |
+| 实验详情 | Drawer: 基本信息、权益图（复用 Dashboard）、持仓、交易、run 历史 |
+| 清空实验 | 一键清 BQ + state + runs（需二次确认） |
+
+#### 数据采集
+
+| 功能 | 操作 |
+|------|------|
+| ws_collector 状态 | 进程状态、最后心跳 |
+| 启停 ws_collector | 按钮触发 |
+| 📊 数据地图 | 所有 BQ 表：表名、行数、最近写入、Schema（点击展开） |
+| 数据回填 | 选择 market + 日期范围 → worker 异步执行 |
+| F10 采集监控 | 采集器名称、是否运行中 |
+
+#### 日志浏览
+
+| 功能 | 操作 |
+|------|------|
+| 模块筛选 | `collector / live / factor / cron / train / ...` |
+| 级别筛选 | ERROR / WARNING / INFO / DEBUG |
+| 实时 tail | WebSocket 推送新日志行 |
+| 搜索 | 关键字 + 时间范围（DatePicker） |
+
+#### Cron 任务管理
+
+| 功能 | 操作 |
+|------|------|
+| 任务列表 | name, description, schedule, command（39 个任务） |
+| 启停开关 | Switch 切换 |
+| 立即触发 | 按钮 → worker 执行 |
+| 新建/编辑 | Modal 表单：name / description / schedule / command |
+| 执行历史 | Drawer 显示 Task 表中最近任务记录 |
+
+**SSOT**: 系统 crontab（`quant` 用户）。管理平台直接读写。
+
+#### 模型 & 策略管理
+
+| 功能 | 操作 |
+|------|------|
+| 模型列表 | 所有注册模型 + 版本列表（MLflow API） |
+| 版本对比 | 选中两个版本 → 对比 RMSE / IC / 特征数 |
+| Stage 管理 | Promote to Production / Archive |
+| 训练触发 | 选择模型 + 参数 → worker 异步训练 |
+| 训练历史 | 每个版本的训练参数和指标 |
+| 策略列表 | 浏览所有策略源码 |
+| 策略编辑 | 在线编辑（语法高亮）+ 保存 |
+| MLflow UI | iframe 嵌入 `http://localhost:5000` |
+
+#### 因子管理
+
+| 功能 | 操作 |
+|------|------|
+| 因子列表 | 所有因子 + 支持市场 + 状态 + IC |
+| 因子详情 | Drawer 显示市场数据覆盖（标的数、日期范围、总数据量） |
+| 批量计算 | 选择 source/market/日期范围 → worker |
+| 激活/停用 | 切换因子状态 |
+
+### 16.3 任务队列
+
+SQLite Task 表 (`/var/quant/admin.db`) + worker 进程异步执行。
+
+| 字段 | 说明 |
+|------|------|
+| id | 自增 |
+| type | `shell` / `exp_start` / `factor_compute` / ... |
+| status | `pending` → `running` → `done` / `failed` |
+| params | JSON 参数 |
+| result | 执行结果文本 |
+
+Worker 循环轮询 pending → 标记 running → subprocess → 更新 done/failed。
+
+### 16.4 启动/停止
+
+```bash
+# 启动
+sudo systemctl start quant-admin quant-admin-worker
+
+# 停止
+sudo systemctl stop quant-admin quant-admin-worker
+
+# 重启
+sudo systemctl restart quant-admin quant-admin-worker
+
+# 前端重建（修改前端代码后）
+cd /opt/quant-dev/admin/frontend && npm run build
+cp -r dist/* /opt/quant-prod/admin/frontend/dist/
+```
+
+### 16.5 注意事项
+
+- 管理平台和 Dashboard (:8090) 是独立服务，互不干扰
+- 管理平台直接操作系统 crontab（`quant` 用户），修改立即生效
+- Worker 执行的命令运行在 `/opt/quant-prod`，使用 `.venv/bin/python3`
+- 前端使用相对路径 API（不需要配置域名）
+- admin.db 存储在 `/var/quant/admin.db`

@@ -1,6 +1,6 @@
 """Quant Admin Platform — FastAPI server."""
 
-import subprocess, json as _json, os, glob
+import subprocess, json as _json, os, glob, logging
 import requests
 import pandas as pd
 from contextlib import asynccontextmanager
@@ -9,8 +9,8 @@ from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_serializer
 from sqlalchemy.orm import Session
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Optional, Any
 
 from google.cloud import bigquery
 
@@ -905,6 +905,479 @@ def admin_factor_compute(source: str = "tech", market: str = "us",
     session.add(task)
     session.commit()
     return {"task_id": task.id}
+
+
+# ── Dashboard APIs (migrated from dashboard/server.py) ─────────────────────────
+
+_DB_BQ_PROJECT = "deductive-notch-495015-c2"
+_DB_BQ = lambda: bigquery.Client(project=_DB_BQ_PROJECT)
+_DB_TABLE = lambda name: f"{_DB_BQ_PROJECT}.quant.{name}"
+
+
+def _db_serialize(x: Any) -> Any:
+    """Inline replacement for dashboard _serialize(x)."""
+    if x is None:
+        return None
+    return x.isoformat() if hasattr(x, "isoformat") else str(x)
+
+
+def _db_row_to_dict(r, names):
+    """Inline replacement for dashboard _row_to_dict(r, names)."""
+    return {n: _db_serialize(getattr(r, n, None)) for n in names}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/admin/dashboard/experiments — latest equity snapshot per experiment
+# ---------------------------------------------------------------------------
+@app.get("/api/admin/dashboard/experiments")
+async def dash_experiments(type: str = ""):
+    client = _DB_BQ()
+    prefix_filter = ""
+    if type:
+        prefix_filter = f"AND exp_id LIKE '{type}_%'"
+    query = f"""
+        SELECT * EXCEPT (rn)
+        FROM (
+            SELECT *,
+                   ROW_NUMBER() OVER (PARTITION BY exp_id ORDER BY ts DESC) AS rn
+            FROM {_DB_TABLE("experiment_equity")}
+            WHERE NOT STARTS_WITH(exp_id, "test_") {prefix_filter}
+        )
+        WHERE rn = 1
+        ORDER BY ts DESC
+    """
+    try:
+        rows = client.query(query).result()
+        return [{"exp_id": row.exp_id, "ts": _db_serialize(row.ts),
+                 "bar": row.bar, "equity": row.equity, "cash": row.cash,
+                 "portfolio_value": row.portfolio_value, "daily_pnl": row.daily_pnl,
+                 "drawdown": row.drawdown}
+                for row in rows]
+    except Exception as exc:
+        logging.getLogger(__name__).error("dash_experiments query error: %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# GET /api/admin/dashboard/experiments/meta — experiment tracker metadata
+# ---------------------------------------------------------------------------
+@app.get("/api/admin/dashboard/experiments/meta")
+async def dash_experiments_meta():
+    from pathlib import Path
+    exp_dir = Path("/opt/quant-dev/output/live/experiments")
+    if not exp_dir.exists():
+        return []
+    result = []
+    for exp_path in sorted(exp_dir.iterdir()):
+        if not exp_path.is_dir():
+            continue
+        exp_file = exp_path / "experiment.json"
+        if not exp_file.exists():
+            continue
+        try:
+            meta = _json.loads(exp_file.read_text())
+            sessions_file = exp_path / "investment_sessions.json"
+            sessions = []
+            if sessions_file.exists():
+                sessions = _json.loads(sessions_file.read_text())
+            result.append({
+                "exp_id": meta.get("experiment_id", exp_path.name),
+                "name": meta.get("name", ""),
+                "status": meta.get("status", "unknown"),
+                "created_at": meta.get("created_at", ""),
+                "sessions": len(sessions),
+            })
+        except Exception:
+            pass
+    return result
+
+
+# ---------------------------------------------------------------------------
+# GET /api/admin/dashboard/equity/{exp_id} — equity time-series for one experiment
+# ---------------------------------------------------------------------------
+@app.get("/api/admin/dashboard/equity/{exp_id}")
+async def dash_equity_series(exp_id: str, run_id: str = ""):
+    client = _DB_BQ()
+    if not run_id:
+        latest_q = f"""
+            SELECT run_id FROM {_DB_TABLE("experiment_equity")}
+            WHERE exp_id = @exp_id
+            ORDER BY ts DESC LIMIT 1
+        """
+        latest_rows = list(client.query(latest_q, job_config=bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id)]
+        )).result())
+        if latest_rows:
+            run_id = latest_rows[0].run_id or ""
+    run_filter = f"AND run_id = '{run_id}'" if run_id else ""
+    query = f"""
+        SELECT ts, bar, equity, cash, portfolio_value, daily_pnl, drawdown, run_id
+        FROM {_DB_TABLE("experiment_equity")}
+        WHERE exp_id = @exp_id {run_filter}
+        ORDER BY bar ASC
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id)]
+    )
+    try:
+        rows = client.query(query, job_config=job_config).result()
+        return [_db_row_to_dict(r, ["ts", "bar", "equity", "cash",
+                                     "portfolio_value", "daily_pnl", "drawdown", "run_id"])
+                for r in rows]
+    except Exception as exc:
+        logging.getLogger(__name__).error("dash_equity_series query error for %s: %s", exp_id, exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# GET /api/admin/dashboard/trades/{exp_id} — recent trades for one experiment
+# ---------------------------------------------------------------------------
+@app.get("/api/admin/dashboard/trades/{exp_id}")
+async def dash_trades(exp_id: str, limit: int = 200, run_id: str = ""):
+    client = _DB_BQ()
+    if not run_id:
+        latest_q = f"""
+            SELECT run_id FROM {_DB_TABLE("experiment_trades")}
+            WHERE exp_id = '{exp_id}'
+            ORDER BY ts DESC LIMIT 1
+        """
+        latest_rows = list(client.query(latest_q).result())
+        if latest_rows:
+            run_id = latest_rows[0].run_id or ""
+    run_filter = f"AND run_id = @run_id" if run_id else ""
+    query = f"""
+        SELECT ts, bar, symbol, side, qty, price, commission
+        FROM {_DB_TABLE("experiment_trades")}
+        WHERE exp_id = @exp_id {run_filter}
+        ORDER BY ts DESC
+        LIMIT @limit
+    """
+    params = [
+        bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id),
+        bigquery.ScalarQueryParameter("limit", "INT64", limit),
+    ]
+    if run_id:
+        params.append(bigquery.ScalarQueryParameter("run_id", "STRING", run_id))
+    job_config = bigquery.QueryJobConfig(query_parameters=params)
+    try:
+        rows = client.query(query, job_config=job_config).result()
+        result = []
+        for r in rows:
+            d = _db_row_to_dict(r, ["ts", "bar", "symbol", "side",
+                                     "qty", "price", "commission"])
+            if "hk" in exp_id and d.get("symbol"):
+                d["symbol"] = d["symbol"].zfill(5)
+            result.append(d)
+        return result
+    except Exception as exc:
+        logging.getLogger(__name__).error("dash_trades query error for %s: %s", exp_id, exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# GET /api/admin/dashboard/experiments/{exp_id}/positions — current positions (FIFO)
+# ---------------------------------------------------------------------------
+@app.get("/api/admin/dashboard/experiments/{exp_id}/positions")
+async def dash_experiment_positions(exp_id: str, run_id: str = ""):
+    from collections import defaultdict
+    client = _DB_BQ()
+    if not run_id:
+        latest_q = f"""
+            SELECT run_id FROM {_DB_TABLE("experiment_trades")}
+            WHERE exp_id = '{exp_id}'
+            ORDER BY ts DESC LIMIT 1
+        """
+        latest_rows = list(client.query(latest_q).result())
+        if latest_rows:
+            run_id = latest_rows[0].run_id or ""
+    run_filter = f"AND run_id = '{run_id}'" if run_id else ""
+    trades_q = f"""
+        SELECT symbol, side, qty, price, ts
+        FROM {_DB_TABLE("experiment_trades")}
+        WHERE exp_id = '{exp_id}' {run_filter}
+        ORDER BY ts
+    """
+    rows = list(client.query(trades_q).result())
+    if not rows:
+        return []
+
+    lots = defaultdict(list)
+    for r in rows:
+        sym = r.symbol
+        qty = float(r.qty)
+        price = float(r.price)
+        if r.side == "buy":
+            lots[sym].append({"qty": qty, "price": price})
+        else:
+            remaining = qty
+            while remaining > 0 and lots[sym]:
+                lot = lots[sym][0]
+                if lot["qty"] <= remaining:
+                    remaining -= lot["qty"]
+                    lots[sym].pop(0)
+                else:
+                    lot["qty"] -= remaining
+                    remaining = 0
+
+    if not lots:
+        return []
+
+    result = []
+    for sym, sym_lots in lots.items():
+        total_qty = sum(l["qty"] for l in sym_lots)
+        if total_qty <= 0:
+            continue
+        total_cost = sum(l["qty"] * l["price"] for l in sym_lots)
+        avg_cost = total_cost / total_qty
+
+        us_prefix = sym.startswith("US.")
+        if us_prefix:
+            market = "us"
+            bare = sym[3:]
+        elif sym.startswith("HK."):
+            market = "hk"
+            bare = sym[3:]
+        else:
+            market = "hk" if "hk" in exp_id else "us"
+            bare = sym
+        prefix = "US." if market == "us" else "HK."
+        if market == "hk":
+            bare = bare.zfill(5)
+        bq_sym = f"{prefix}{bare}"
+        table = _DB_TABLE(f"{market}_bars_5m")
+        try:
+            price_q = f"""
+                SELECT close FROM `{table}`
+                WHERE symbol = '{bq_sym}'
+                ORDER BY timestamp DESC LIMIT 1
+            """
+            price_rows = list(client.query(price_q).result())
+            current_price = float(price_rows[0].close) if price_rows else avg_cost
+        except Exception:
+            current_price = avg_cost
+
+        pnl = (current_price - avg_cost) * total_qty
+        pnl_pct = (current_price - avg_cost) / avg_cost * 100 if avg_cost > 0 else 0
+        result.append({
+            "symbol": bare,
+            "qty": round(total_qty, 2),
+            "avg_cost": round(avg_cost, 2),
+            "current_price": round(current_price, 2),
+            "pnl": round(pnl, 2),
+            "pnl_pct": round(pnl_pct, 2),
+        })
+    return result
+
+
+# ---------------------------------------------------------------------------
+# GET /api/admin/dashboard/experiments/{exp_id}/runs — run history
+# ---------------------------------------------------------------------------
+@app.get("/api/admin/dashboard/experiments/{exp_id}/runs")
+async def dash_experiment_runs(exp_id: str):
+    client = _DB_BQ()
+    query = f"""
+        SELECT run_id, status, started_at, ended_at, base_run
+        FROM {_DB_TABLE("experiment_runs")}
+        WHERE exp_id = '{exp_id}'
+        ORDER BY started_at DESC
+    """
+    try:
+        rows = client.query(query).result()
+        return [_db_row_to_dict(r, ["run_id", "status", "started_at", "ended_at", "base_run"])
+                for r in rows]
+    except Exception as exc:
+        logging.getLogger(__name__).error("dash_experiment_runs query error for %s: %s", exp_id, exc)
+        return []
+
+
+# ── Paper Run Dashboard API ──
+
+@app.get("/api/admin/dashboard/paper-runs")
+async def dash_paper_runs(limit: int = 50):
+    client = _DB_BQ()
+    try:
+        query = f"""
+            SELECT run_id, name, strategy, market, status, n_periods,
+                   created_at, error_msg
+            FROM (
+              SELECT *, ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY created_at DESC) AS rn
+              FROM {_DB_TABLE("paper_runs")}
+            )
+            WHERE rn = 1
+            ORDER BY created_at DESC
+            LIMIT {min(limit, 200)}
+        """
+        rows = client.query(query).result()
+        names = ["run_id", "name", "strategy", "market", "status",
+                 "n_periods", "created_at", "error_msg"]
+        return [_db_row_to_dict(r, names) for r in rows]
+    except Exception as e:
+        logging.getLogger(__name__).error("dash_paper_runs query failed: %s", e)
+        return []
+
+
+@app.get("/api/admin/dashboard/paper-runs/{run_id}")
+async def dash_paper_run_detail(run_id: str):
+    client = _DB_BQ()
+    try:
+        run_query = f"""
+            SELECT run_id, name, strategy, market, status, n_periods,
+                   config_json, created_at, error_msg
+            FROM {_DB_TABLE("paper_runs")}
+            WHERE run_id = '{run_id}'
+            ORDER BY created_at DESC LIMIT 1
+        """
+        run_rows = list(client.query(run_query).result())
+        if not run_rows:
+            return {"error": "not found", "run_id": run_id}
+        run_names = ["run_id", "name", "strategy", "market", "status",
+                     "n_periods", "config_json", "created_at", "error_msg"]
+        run = _db_row_to_dict(run_rows[0], run_names)
+
+        metrics = {}
+        try:
+            m_query = f"""
+                SELECT *
+                FROM {_DB_TABLE("paper_metrics")}
+                WHERE run_id = '{run_id}'
+            """
+            m_rows = list(client.query(m_query).result())
+            if m_rows:
+                m_names = ["run_id", "total_return", "annual_return", "annual_vol",
+                          "sharpe", "sortino", "max_drawdown", "calmar",
+                          "win_rate", "total_trades", "profit_factor",
+                          "start_equity", "end_equity", "computed_at"]
+                metrics = _db_row_to_dict(m_rows[0], m_names)
+        except Exception as e:
+            logging.getLogger(__name__).error("dash_paper_metrics query failed: %s", e)
+            metrics = {"error": str(e)}
+
+        equity = []
+        try:
+            e_query = f"""
+                SELECT ts, bar, equity, cash, portfolio_value, daily_pnl, drawdown
+                FROM {_DB_TABLE("experiment_equity")}
+                WHERE exp_id = '{run_id}'
+                ORDER BY bar
+            """
+            e_rows = client.query(e_query).result()
+            e_names = ["ts", "bar", "equity", "cash", "portfolio_value", "daily_pnl", "drawdown"]
+            equity = [_db_row_to_dict(r, e_names) for r in e_rows]
+        except Exception:
+            pass
+
+        trades = []
+        try:
+            t_query = f"""
+                SELECT ts, bar, symbol, side, qty, price, commission
+                FROM {_DB_TABLE("experiment_trades")}
+                WHERE exp_id = '{run_id}'
+                ORDER BY bar
+                LIMIT 500
+            """
+            t_rows = client.query(t_query).result()
+            t_names = ["ts", "bar", "symbol", "side", "qty", "price", "commission"]
+            trades = [_db_row_to_dict(r, t_names) for r in t_rows]
+            if run.get("market", "").lower() == "hk":
+                for t in trades:
+                    if t.get("symbol"):
+                        t["symbol"] = t["symbol"].zfill(5)
+        except Exception:
+            pass
+
+        return {"run": run, "metrics": metrics, "equity": equity, "trades": trades}
+    except Exception as e:
+        logging.getLogger(__name__).error("dash_paper_run_detail failed: %s", e)
+        return {"error": str(e), "run_id": run_id}
+
+
+# ── Pipeline (data freshness) API ──
+
+@app.get("/api/admin/dashboard/pipeline")
+async def dash_pipeline():
+    client = _DB_BQ()
+    result: dict = {
+        "us": None, "hk": None,
+        "us_open": False, "hk_open": False,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    now = datetime.now(timezone.utc)
+    result["us_open"] = (
+        now.weekday() < 5 and
+        datetime(now.year, now.month, now.day, 13, 30, tzinfo=timezone.utc) <= now <=
+        datetime(now.year, now.month, now.day, 20, 0, tzinfo=timezone.utc)
+    )
+    result["hk_open"] = (
+        now.weekday() < 5 and
+        datetime(now.year, now.month, now.day, 1, 30, tzinfo=timezone.utc) <= now <=
+        datetime(now.year, now.month, now.day, 8, 0, tzinfo=timezone.utc)
+    )
+    try:
+        q = f"""
+            SELECT MAX(
+              TIMESTAMP(DATETIME(timestamp), "America/New_York")
+            ) AS latest FROM {_DB_TABLE("us_bars_5m")}
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+        """
+        rows = list(client.query(q).result())
+        if rows and rows[0].latest:
+            result["us"] = _db_serialize(rows[0].latest)
+    except Exception as exc:
+        logging.getLogger(__name__).error("dash_pipeline us query error: %s", exc)
+    try:
+        q = f"""
+            SELECT MAX(
+              TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)
+            ) AS latest FROM {_DB_TABLE("hk_bars_5m")}
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+        """
+        rows = list(client.query(q).result())
+        if rows and rows[0].latest:
+            result["hk"] = _db_serialize(rows[0].latest)
+    except Exception as exc:
+        logging.getLogger(__name__).error("dash_pipeline hk query error: %s", exc)
+    return result
+
+
+# ── Market Data API ──
+
+@app.get("/api/admin/dashboard/market/symbols/{market}")
+async def dash_market_symbols(market: str):
+    import yaml
+    from pathlib import Path
+    config_path = Path("/opt/quant-dev/config/symbols.yaml")
+    cfg = yaml.safe_load(config_path.read_text())
+    syms = cfg.get("markets", {}).get(market, {}).get("symbols", [])
+    prefix = f"{'US' if market == 'us' else 'HK'}."
+    return [s.replace(prefix, "") for s in syms if s.startswith(prefix)]
+
+
+@app.get("/api/admin/dashboard/market/{market}/{symbol}")
+async def dash_market_bars(market: str, symbol: str, limit: int = 78):
+    client = _DB_BQ()
+    table = _DB_TABLE(f"{market}_bars_5m")
+    full_symbol = f"{'US' if market == 'us' else 'HK'}.{symbol}"
+    if market == "hk":
+        ts_expr = "TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)"
+    else:
+        ts_expr = 'TIMESTAMP(DATETIME(timestamp), "America/New_York")'
+    query = f"""
+        WITH dedup AS (
+          SELECT {ts_expr} AS timestamp, open, high, low, close, volume,
+            ROW_NUMBER() OVER (PARTITION BY symbol, timestamp ORDER BY _ingest_time DESC NULLS LAST) AS rn
+          FROM `{table}`
+          WHERE symbol = '{full_symbol}'
+            AND {ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
+        )
+        SELECT timestamp, open, high, low, close, volume
+        FROM dedup WHERE rn = 1
+        ORDER BY timestamp DESC
+        LIMIT {limit}
+    """
+    rows = list(client.query(query).result())
+    rows.reverse()
+    return [{"ts": _db_serialize(r.timestamp), "o": r.open, "h": r.high,
+             "l": r.low, "c": r.close, "v": r.volume} for r in rows]
 
 
 # ── Static file serving (production build, after all API routes) ──────────────
