@@ -2,11 +2,12 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons';
 import { PageContainer } from '@ant-design/pro-layout';
-import { Select, Input, Button, Switch, Tag, Space, Typography } from 'antd';
+import { Select, Input, Button, Switch, Tag, Space, Typography, DatePicker } from 'antd';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { api, WS_BASE } from '../api';
 
 const { Search } = Input;
+const { RangePicker } = DatePicker;
 const { Text } = Typography;
 
 const MAX_LINES = 500;
@@ -54,6 +55,7 @@ const LogViewer: React.FC = () => {
   const [fileName, setFileName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [live, setLive] = useState(false);
+  const [timeRange, setTimeRange] = useState<[string, string] | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -68,12 +70,14 @@ const LogViewer: React.FC = () => {
     }
   }, []);
 
-  const fetchLogs = useCallback(async (mod: string, lvl: string, s: string) => {
+  const fetchLogs = useCallback(async (mod: string, lvl: string, s: string, tr: [string, string] | null) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ module: mod, lines: '100' });
       if (lvl) params.set('level', lvl);
       if (s) params.set('search', s);
+      if (tr && tr[0]) params.set('start', tr[0]);
+      if (tr && tr[1]) params.set('end', tr[1]);
       const data = await api.get(`/api/admin/logs?${params.toString()}`);
       if (!data.error) {
         setLines(data.lines || []);
@@ -94,7 +98,7 @@ const LogViewer: React.FC = () => {
         if (data.length > 0) {
           const defaultMod = data[0].name;
           setModule(defaultMod);
-          fetchLogs(defaultMod, '', '');
+          fetchLogs(defaultMod, '', '', null);
         }
       }
     }).catch(console.error);
@@ -155,12 +159,12 @@ const LogViewer: React.FC = () => {
   }, [live, module]);
 
   const handleRefresh = () => {
-    fetchLogs(module, level, search);
+    fetchLogs(module, level, search, timeRange);
   };
 
   const handleSearch = (value: string) => {
     setSearch(value);
-    fetchLogs(module, level, value);
+    fetchLogs(module, level, value, timeRange);
   };
 
   return (
@@ -179,7 +183,7 @@ const LogViewer: React.FC = () => {
           value={module}
           onChange={(val) => {
             setModule(val);
-            fetchLogs(val, level, search);
+            fetchLogs(val, level, search, timeRange);
           }}
           style={{ width: 120 }}
           options={modules.map((m) => ({
@@ -191,7 +195,7 @@ const LogViewer: React.FC = () => {
           value={level}
           onChange={(val) => {
             setLevel(val);
-            fetchLogs(module, val, search);
+            fetchLogs(module, val, search, timeRange);
           }}
           allowClear
           placeholder="Level"
@@ -203,6 +207,24 @@ const LogViewer: React.FC = () => {
           allowClear
           onSearch={handleSearch}
           style={{ width: 200 }}
+        />
+        <RangePicker
+          showTime
+          onChange={(dates) => {
+            if (dates && dates[0] && dates[1]) {
+              const tr: [string, string] = [
+                dates[0].toISOString(),
+                dates[1].toISOString(),
+              ];
+              setTimeRange(tr);
+              fetchLogs(module, level, search, tr);
+            } else {
+              setTimeRange(null);
+              fetchLogs(module, level, search, null);
+            }
+          }}
+          style={{ width: 360 }}
+          placeholder={['开始时间', '结束时间']}
         />
         <Button
           icon={<ReloadOutlined />}

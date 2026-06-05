@@ -234,6 +234,34 @@ def admin_experiment_clear(exp_id: str):
 
 # ── Data Map + Collector status ──────────────────────────────────────────────
 
+@app.get("/api/admin/data/f10")
+def admin_data_f10():
+    """Return F10 collector status."""
+    # Check running F10 processes
+    try:
+        r = subprocess.run(
+            ["pgrep", "-f", "collect_futu_factors"],
+            capture_output=True, text=True, timeout=5,
+        )
+        running_pids = [p for p in r.stdout.strip().split("\n") if p]
+    except Exception:
+        running_pids = []
+
+    collectors = [
+        {
+            "name": "us_rating_summary",
+            "description": "美股评级汇总 (collect-us-rating-summary)",
+            "running": len(running_pids) > 0,
+        },
+        {
+            "name": "us_insider_trade",
+            "description": "美股内部人交易 (collect-us-insider-trade)",
+            "running": False,
+        },
+    ]
+    return collectors
+
+
 @app.get("/api/admin/data/tables")
 def admin_data_tables():
     """Return all BQ tables with row counts, schemas, last write times."""
@@ -451,6 +479,27 @@ def admin_cron_run(command: str = Query("")):
     return {"task_id": task.id}
 
 
+@app.get("/api/admin/cron/{index}/history")
+def admin_cron_history(index: int):
+    """Return recent execution history from task queue."""
+    session = get_session()
+    tasks = (
+        session.query(Task)
+        .filter(Task.type.in_(["shell", "cron_run"]))
+        .order_by(Task.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [{
+        "id": t.id,
+        "status": t.status,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "started_at": t.started_at.isoformat() if t.started_at else None,
+        "finished_at": t.finished_at.isoformat() if t.finished_at else None,
+        "result": (t.result or "")[:200],
+    } for t in tasks]
+
+
 # ── Log Browser ───────────────────────────────────────────────────────────────
 
 LOG_ROOT = "/var/log/quant/prod"
@@ -473,6 +522,8 @@ def admin_logs(
     module: str = Query("collector"),
     level: str = Query(""),
     search: str = Query(""),
+    start: str = Query(""),
+    end: str = Query(""),
     lines: int = Query(100),
 ):
     """Read log lines from /var/log/quant/prod/{module}/, filtered."""
@@ -483,6 +534,20 @@ def admin_logs(
     if not files:
         return {"module": module, "lines": [], "file": None}
     log_file = files[0]
+    # Parse optional time range filter
+    ts_start = None
+    ts_end = None
+    if start:
+        try:
+            ts_start = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        except Exception:
+            pass
+    if end:
+        try:
+            ts_end = datetime.fromisoformat(end.replace("Z", "+00:00"))
+        except Exception:
+            pass
+
     result_lines = []
     with open(log_file) as f:
         all_lines = f.readlines()
@@ -498,6 +563,21 @@ def admin_logs(
                 lvl = ""
                 msg = line.strip()
                 ts = ""
+            # Time range filter
+            if ts_start and ts:
+                try:
+                    line_ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if line_ts < ts_start:
+                        continue
+                except Exception:
+                    pass
+            if ts_end and ts:
+                try:
+                    line_ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if line_ts > ts_end:
+                        continue
+                except Exception:
+                    pass
             if level and level.upper() != lvl.upper():
                 continue
             if search and search.lower() not in msg.lower():
@@ -570,6 +650,41 @@ def admin_models():
         return result
     except Exception as e:
         return {"error": str(e)}
+
+
+@app.get("/api/admin/models/{name}/history")
+def admin_model_history(name: str):
+    """Return training run history for a model with key metrics."""
+    rv = requests.post(
+        f"{MLFLOW_API}/model-versions/search",
+        json={"filter": f"name='{name}'"},
+        timeout=5,
+    )
+    versions = rv.json().get("model_versions", []) or []
+    history = []
+    for v in versions:
+        try:
+            run_r = requests.get(
+                f"{MLFLOW_API}/runs/get",
+                json={"run_id": v["run_id"]},
+                timeout=5,
+            )
+            run_data = run_r.json().get("run", {}).get("data", {})
+            metrics = {m["key"]: m["value"] for m in run_data.get("metrics", [])}
+            params = {p["key"]: p["value"] for p in run_data.get("params", [])}
+        except Exception:
+            metrics = {}
+            params = {}
+        history.append({
+            "version": v["version"],
+            "run_id": v["run_id"],
+            "rmse": metrics.get("rmse"),
+            "ic": metrics.get("ic"),
+            "dataset": params.get("dataset", ""),
+            "n_features": int(params.get("n_features", 0)),
+            "n_trials": int(params.get("n_trials", 0)),
+        })
+    return history
 
 
 @app.post("/api/admin/models/train")

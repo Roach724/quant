@@ -4,6 +4,7 @@ import {
   PauseCircleOutlined,
   ReloadOutlined,
   HistoryOutlined,
+  DatabaseOutlined,
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
@@ -31,6 +32,12 @@ interface DataTableItem {
   row_count: number;
   last_write: string | null;
   schema: TableSchema[];
+}
+
+interface F10Collector {
+  name: string;
+  description: string;
+  running: boolean;
 }
 
 // ── Poll helper ──────────────────────────────────────────────────────────────
@@ -92,12 +99,19 @@ const DataMap: React.FC = () => {
     }
   };
 
+  const [f10Collectors, setF10Collectors] = useState<F10Collector[]>([]);
+
+  const loadF10 = () => {
+    api.get('/api/admin/data/f10').then(setF10Collectors).catch(() => {});
+  };
+
   const loadCollector = () => {
     api.get('/api/admin/data/collectors').then(setCollector).catch(() => {});
   };
 
   useEffect(() => {
     loadCollector();
+    loadF10();
   }, []);
 
   const handleCollectorAction = async (action: string) => {
@@ -285,6 +299,44 @@ const DataMap: React.FC = () => {
             开始回填
           </Button>
         </Space>
+      </Card>
+
+      {/* ── F10 Collector Card ────────────────────────────────────────────── */}
+      <Card
+        title={
+          <Space>
+            <DatabaseOutlined />
+            <span>F10 采集器</span>
+          </Space>
+        }
+        style={{ marginBottom: 16 }}
+      >
+        {f10Collectors.length === 0 ? (
+          <Text type="secondary">加载中...</Text>
+        ) : (
+          <Table
+            dataSource={f10Collectors}
+            rowKey="name"
+            pagination={false}
+            size="small"
+            columns={[
+              { title: '名称', dataIndex: 'name', key: 'name', width: 160 },
+              { title: '描述', dataIndex: 'description', key: 'description' },
+              {
+                title: '状态',
+                dataIndex: 'running',
+                key: 'running',
+                width: 100,
+                render: (running: boolean) =>
+                  running ? (
+                    <Tag color="green">Running</Tag>
+                  ) : (
+                    <Tag color="default">Stopped</Tag>
+                  ),
+              },
+            ]}
+          />
+        )}
       </Card>
 
       {/* ── Data Map Table ─────────────────────────────────────────────────── */}

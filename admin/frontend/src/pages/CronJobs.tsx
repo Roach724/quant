@@ -2,6 +2,7 @@ import {
   ThunderboltOutlined,
   PlusOutlined,
   EditOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
@@ -13,7 +14,11 @@ import {
   Modal,
   Form,
   Input,
+  Drawer,
+  Table,
+  Tag,
 } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { useRef, useState } from 'react';
 import { api } from '../api';
 
@@ -28,11 +33,33 @@ interface CronJob {
   description: string;
 }
 
+interface HistoryEntry {
+  id: number;
+  status: string;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  result: string;
+}
+
+const statusColor: Record<string, string> = {
+  pending: 'default',
+  running: 'processing',
+  done: 'green',
+  failed: 'red',
+};
+
 const CronJobs: React.FC = () => {
   const actionRef = useRef<ActionType | undefined>(undefined);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [form] = Form.useForm();
+
+  // History drawer state
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyData, setHistoryData] = useState<HistoryEntry[]>([]);
+  const [historyTitle, setHistoryTitle] = useState('');
 
   // ── Run ────────────────────────────────────────────────────────────────────
 
@@ -46,6 +73,68 @@ const CronJobs: React.FC = () => {
       message.error(`Failed: ${err.message}`);
     }
   };
+
+  // ── History ────────────────────────────────────────────────────────────────
+
+  const handleHistory = async (index: number, label: string) => {
+    setHistoryTitle(`Execution History — ${label}`);
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    setHistoryData([]);
+    try {
+      const data: HistoryEntry[] = await api.get(`/api/admin/cron/${index}/history`);
+      setHistoryData(data || []);
+    } catch (err: any) {
+      message.error(`Failed to load history: ${err.message}`);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const historyColumns: ColumnsType<HistoryEntry> = [
+    {
+      title: 'Task ID',
+      dataIndex: 'id',
+      width: 80,
+      key: 'id',
+    },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      width: 90,
+      key: 'status',
+      render: (s: string) => (
+        <Tag color={statusColor[s] || 'default'}>{s}</Tag>
+      ),
+    },
+    {
+      title: 'Created',
+      dataIndex: 'created_at',
+      width: 170,
+      key: 'created_at',
+      render: (v: string | null) => v || '-',
+    },
+    {
+      title: 'Duration',
+      key: 'duration',
+      width: 100,
+      render: (_: any, r: HistoryEntry) => {
+        if (r.started_at && r.finished_at) {
+          const ms =
+            new Date(r.finished_at).getTime() - new Date(r.started_at).getTime();
+          const s = (ms / 1000).toFixed(1);
+          return `${s}s`;
+        }
+        return '-';
+      },
+    },
+    {
+      title: 'Result',
+      dataIndex: 'result',
+      key: 'result',
+      ellipsis: true,
+    },
+  ];
 
   // ── Toggle enabled ─────────────────────────────────────────────────────────
 
@@ -174,7 +263,7 @@ const CronJobs: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 160,
+      width: 240,
       render: (_, r) => (
         <Space>
           {r.command && (
@@ -185,6 +274,17 @@ const CronJobs: React.FC = () => {
               onClick={() => handleRun(r.command)}
             >
               执行
+            </Button>
+          )}
+          {r.index !== undefined && (
+            <Button
+              size="small"
+              icon={<HistoryOutlined />}
+              onClick={() =>
+                handleHistory(r.index!, r.name || r.command?.slice(0, 40) || `#${r.index}`)
+              }
+            >
+              历史
             </Button>
           )}
           {r.index !== undefined && r.name && (
@@ -274,6 +374,23 @@ const CronJobs: React.FC = () => {
           </Form.Item>
         </Form>
       </Modal>
+
+      <Drawer
+        title={historyTitle}
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        width={700}
+      >
+        <Table
+          dataSource={historyData}
+          loading={historyLoading}
+          rowKey="id"
+          columns={historyColumns}
+          pagination={{ pageSize: 20, size: 'small' }}
+          size="small"
+          locale={{ emptyText: '暂无执行记录' }}
+        />
+      </Drawer>
     </>
   );
 };
