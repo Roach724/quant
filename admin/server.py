@@ -154,6 +154,92 @@ def admin_experiment_register(data: dict):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/api/admin/experiments/create-from-config")
+def admin_experiment_create_from_config(body: dict = Body(...)):
+    """Create a new experiment by copying a config template."""
+    import shutil, yaml as _yaml
+    template = body.get("template", "")
+    new_id = body.get("exp_id", "")
+    if not template or not new_id:
+        raise HTTPException(status_code=400, detail="Missing 'template' or 'exp_id'")
+    config_dir = Path("/opt/quant-prod/live/configs")
+    template_path = config_dir / template
+    if not template_path.exists():
+        raise HTTPException(status_code=404, detail=f"Template '{template}' not found")
+    new_path = config_dir / f"{new_id}.yaml"
+    if new_path.exists():
+        raise HTTPException(status_code=409, detail=f"Config '{new_id}.yaml' already exists")
+    # Copy template and update experiment.id in the copy
+    shutil.copy2(template_path, new_path)
+    mgr = ExperimentManager()
+    try:
+        exp_id = mgr.register(
+            exp_type=body.get("type", "live"),
+            market=body.get("market", "us"),
+            strategy=body.get("strategy", "ml"),
+            version=int(body.get("version", 1)),
+            config_path=str(new_path),
+            name=body.get("name", new_id),
+        )
+        return {"exp_id": exp_id, "config_path": str(new_path)}
+    except ValueError as e:
+        new_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/admin/experiments/configs")
+def admin_experiment_configs():
+    """List all experiment config templates (YAML files)."""
+    config_dir = Path("/opt/quant-prod/live/configs")
+    if not config_dir.exists():
+        return []
+    configs = []
+    for f in sorted(config_dir.glob("*.yaml")):
+        configs.append({
+            "name": f.name,
+            "path": str(f),
+            "size": f.stat().st_size,
+        })
+    return configs
+
+
+@app.delete("/api/admin/experiments/configs/{name}")
+def admin_experiment_config_delete(name: str):
+    """Delete a config template file."""
+    import shutil
+    path = Path("/opt/quant-prod/live/configs") / name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    backup = path.with_suffix(path.suffix + ".del")
+    shutil.move(str(path), str(backup))
+    return {"status": "ok", "backup": str(backup)}
+
+
+@app.get("/api/admin/experiments/configs/{name}")
+def admin_experiment_config_get(name: str):
+    """Read a single config template file."""
+    path = Path("/opt/quant-prod/live/configs") / name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    return {"name": name, "content": path.read_text()}
+
+
+@app.put("/api/admin/experiments/configs/{name}")
+def admin_experiment_config_put(name: str, body: dict = Body(...)):
+    """Create or update a config template file. Backs up existing."""
+    import shutil
+    content = body.get("content", "")
+    if not content:
+        raise HTTPException(status_code=400, detail="Missing 'content'")
+    path = Path("/opt/quant-prod/live/configs") / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        backup = path.with_suffix(path.suffix + ".bak")
+        shutil.copy2(path, backup)
+    path.write_text(content)
+    return {"status": "ok", "name": name}
+
+
 @app.post("/api/admin/experiments/{exp_id}/{action}")
 def admin_experiment_action(exp_id: str, action: str):
     """start / stop / restart an experiment via task queue."""

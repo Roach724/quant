@@ -10,7 +10,7 @@ import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-ro
 import { useState } from 'react';
 import './App.css';
 import Dashboard from './pages/Dashboard';
-import Experiments from './pages/Experiments';
+import ExperimentDashboard from './pages/Experiments';
 import DataMap from './pages/DataMap';
 import LogViewer from './pages/LogViewer';
 import CronJobs from './pages/CronJobs';
@@ -49,7 +49,7 @@ function AppLayout() {
     >
       <Routes>
         <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/experiments" element={<Experiments />} />
+        <Route path="/experiments" element={<ExperimentDashboard />} />
         <Route path="/data" element={<DataMap />} />
         <Route path="/logs" element={<LogViewer />} />
         <Route path="/cron" element={<CronJobs />} />
