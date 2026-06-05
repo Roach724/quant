@@ -205,6 +205,18 @@ const LabTab: React.FC = () => {
     } catch (err: any) { message.error(`${action} ${expId} failed: ${err.message}`); }
   };
 
+  const handleDelete = async (expId: string) => {
+    try {
+      const data = await api.post(`/api/admin/experiments/${expId}/delete`);
+      if (data.status === 'ok') {
+        message.success(`${expId} deleted`);
+        actionRef.current?.reload();
+      } else {
+        message.error(`Delete failed: ${JSON.stringify(data)}`);
+      }
+    } catch (err: any) { message.error(`Delete ${expId} failed: ${err.message}`); }
+  };
+
   const openDetail = async (exp: ExperimentItem) => {
     setDetailExp(exp); setDetailDrawer(true);
     setRunsLoading(true); setEquityLoading(true);
@@ -274,7 +286,7 @@ const LabTab: React.FC = () => {
           <Popconfirm title={`重启 ${r.exp_id}？`} onConfirm={() => handleAction(r.exp_id, 'restart')}>
             <Tooltip title="Restart"><Button size="small" icon={<ReloadOutlined />} /></Tooltip>
           </Popconfirm>
-          <Popconfirm title={`永久删除 ${r.exp_id}？`} description="将删除所有数据" onConfirm={() => handleAction(r.exp_id, 'delete')}
+          <Popconfirm title={`永久删除 ${r.exp_id}？`} description="将删除所有数据" onConfirm={() => handleDelete(r.exp_id)}
             okText="确认删除" okButtonProps={{ danger: true }}>
             <Tooltip title="Delete"><Button size="small" danger icon={<DeleteOutlined />} /></Tooltip>
           </Popconfirm>
