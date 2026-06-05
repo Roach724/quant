@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import {
   PlusOutlined, DeleteOutlined, SettingOutlined, EyeOutlined,
-  ThunderboltOutlined, ExperimentOutlined, CheckCircleOutlined,
+  ThunderboltOutlined, ExperimentOutlined, ReloadOutlined,
 } from '@ant-design/icons';
 import {
   Tabs, Table, Button, Space, Modal, Select, Input, DatePicker,
-  Tag, Popconfirm, message, Checkbox, Typography, Drawer,
+  Tag, Popconfirm, message, Checkbox, Typography, Drawer, Tooltip,
 } from 'antd';
 import { api } from '../api';
 
@@ -72,6 +72,7 @@ const DatasetsTab: React.FC = () => {
   return (
     <>
       <Button type="primary" icon={<PlusOutlined />} onClick={openCreate} style={{ marginBottom: 16 }}>新建数据集</Button>
+      <Tooltip title="刷新"><Button icon={<ReloadOutlined />} onClick={() => { (async () => { setDatasets(await api.get('/api/admin/ml/datasets')); })(); }} style={{ marginBottom: 16, marginLeft: 8 }} /></Tooltip>
       <Table dataSource={datasets} rowKey="id" loading={loading} size="small" columns={[
         { title: '名称', dataIndex: 'name', width: 160 },
         { title: '市场', dataIndex: 'market', width: 60, render: (v: string) => <Tag>{v.toUpperCase()}</Tag> },
@@ -144,7 +145,7 @@ const MlConfigsTab: React.FC = () => {
 
   return (
     <>
-      <Space style={{ marginBottom: 16 }}><Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditorName(''); setEditorContent(''); setEditorOpen(true); }}>新建配置</Button></Space>
+      <Space style={{ marginBottom: 16 }}><Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditorName(''); setEditorContent(''); setEditorOpen(true); }}>新建配置</Button><Tooltip title="刷新"><Button icon={<ReloadOutlined />} onClick={() => { (async () => { setConfigs(await api.get("/api/admin/ml/configs")); })(); }} /></Tooltip></Space>
       <Table dataSource={configs} rowKey="id" loading={loading} size="small" columns={[
         { title: '配置名', dataIndex: 'name', width: 180 },
         { title: '数据集', dataIndex: 'dataset_name', width: 140 },
@@ -152,7 +153,6 @@ const MlConfigsTab: React.FC = () => {
         { title: '状态', dataIndex: 'status', width: 100, render: (v) => v === 'registered' ? <Tag color="green">已注册</Tag> : <Tag>草稿</Tag> },
         { title: '操作', width: 200, render: (_, r) => (<Space>
           <Button size="small" icon={<SettingOutlined />} onClick={() => openEditor(r.name)}>编辑</Button>
-          {r.status !== 'registered' && <Popconfirm title="注册？" onConfirm={async () => { await api.post(`/api/admin/ml/configs/${r.name}/register`); (async () => { setConfigs(await api.get('/api/admin/ml/configs')); })(); }}><Button size="small" type="primary" icon={<CheckCircleOutlined />}>注册</Button></Popconfirm>}
           <Popconfirm title="删除？" onConfirm={async () => { try { await api.del(`/api/admin/ml/configs/${r.name}`); (async () => { setConfigs(await api.get('/api/admin/ml/configs')); })(); } catch (e: any) { message.error(e.message); } }} okButtonProps={{ danger: true }}><Button size="small" danger icon={<DeleteOutlined />} /></Popconfirm>
         </Space>) },
       ]} />
@@ -280,8 +280,8 @@ const ModelCenterTab: React.FC = () => {
         <Space direction="vertical" style={{ width: '100%' }}>
           <Text strong>选择配置模板:</Text>
           <Select value={createTemplate} onChange={setCreateTemplate} style={{ width: '100%' }}
-            options={templateList.filter((c: any) => c.status !== 'registered').map((c: any) => ({ value: c.name, label: `${c.name} (${c.registry_model_name || '—'})` }))} />
-          {templateList.filter((c: any) => c.status !== 'registered').length === 0 && <Text type="secondary">所有配置已注册，请先在 ML 配置中新建或取消注册</Text>}
+            options={templateList.map((c: any) => ({ value: c.name, label: `${c.name} (${c.registry_model_name || '—'})` }))} />
+          {templateList.length === 0 && <Text type="secondary">暂无配置，请先在 ML 配置中新建</Text>}
         </Space>
       </Modal>
     </>

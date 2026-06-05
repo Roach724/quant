@@ -1,4 +1,5 @@
-import { Card, Select, Table, Spin, Empty, Row, Col, Statistic } from 'antd';
+import { Card, Select, Table, Spin, Empty, Row, Col, Statistic, Button } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { api } from '../api';
@@ -79,6 +80,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
       {/* ── Controls ── */}
       <Row gutter={12} style={{ marginBottom: 16 }}>
         <Col>
+          <span style={{ fontSize: 11, color: '#999', display: 'block', marginBottom: 2 }}>Experiment</span>
           <Select
             value={selectedExp}
             onChange={(v) => { setSelectedExp(v); setSelectedRun(''); }}
@@ -93,6 +95,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
         </Col>
         {runs.length > 0 && (
           <Col>
+            <span style={{ fontSize: 11, color: '#999', display: 'block', marginBottom: 2 }}>Run</span>
             <Select
               value={selectedRun}
               onChange={setSelectedRun}
@@ -106,6 +109,9 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
             />
           </Col>
         )}
+        <Col>
+          <Button icon={<ReloadOutlined />} onClick={() => { loadExperiments(); if (selectedExp) loadData(selectedExp, selectedRun); }} size="small">刷新</Button>
+        </Col>
       </Row>
 
       {/* ── Metric Cards ── */}
