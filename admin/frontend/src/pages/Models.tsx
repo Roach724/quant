@@ -207,20 +207,21 @@ const ModelCenterTab: React.FC = () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const MlflowTab: React.FC = () => {
-  const mlflowUrl = '/mlflow';
   return (
-    <div>
-      <Space style={{ marginBottom: 12 }}>
-        <Button type="primary" onClick={() => window.open(mlflowUrl, '_blank')}>
-          在新窗口打开 MLflow
+    <div style={{ textAlign: 'center', padding: 60 }}>
+      <div style={{ fontSize: 48, marginBottom: 16 }}>📊</div>
+      <Text style={{ fontSize: 16, display: 'block', marginBottom: 24 }}>
+        MLflow 运行在 VM :5000 端口，无法通过 cloudflared 隧道嵌入。
+      </Text>
+      <Space direction="vertical">
+        <Button type="primary" size="large" onClick={() => window.open('http://127.0.0.1:5000', '_blank')}>
+          从 VM 本机打开 MLflow
         </Button>
-        <Text type="secondary">内嵌 iframe 可能被浏览器阻止，可点击按钮在新窗口打开</Text>
+        <Text type="secondary" style={{ maxWidth: 400 }}>
+          如需远程访问，可通过 SSH 端口转发: <br/>
+          <Text code copyable>ssh -L 5000:127.0.0.1:5000 quant-vm</Text>
+        </Text>
       </Space>
-      <iframe
-        src={mlflowUrl}
-        style={{ width: '100%', height: 'calc(100vh - 200px)', border: '1px solid #d9d9d9', borderRadius: 6 }}
-        title="MLflow UI"
-      />
     </div>
   );
 };

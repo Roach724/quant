@@ -1635,6 +1635,12 @@ from fastapi.responses import StreamingResponse
 _MLFLOW_BASE = "http://127.0.0.1:5000"
 
 
+@app.get("/mlflow")
+async def mlflow_redirect():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/mlflow/")
+
+
 @app.api_route("/mlflow/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def mlflow_proxy(path: str, request: Request):
     """Reverse proxy to MLflow server."""
