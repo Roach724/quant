@@ -1356,18 +1356,21 @@ def admin_ml_dataset_generate(ds_id: int):
     label_col = ds.label
 
     # Build pivot using MAX(CASE WHEN) — simpler and more reliable than PIVOT
+    market_prefix = ds.market + "_"
     pivot_cols = ",\n                   ".join(
-        f"MAX(CASE WHEN factor_id = '{f}' THEN value END) AS `{f.replace(f'{ds.market}_', '', 1)}`"
+        "MAX(CASE WHEN factor_id = '{}' THEN value END) AS {}".format(
+            f, f.replace(market_prefix, "", 1)
+        )
         for f in factor_ids
     )
 
     try:
         # Drop existing if any
-        client.query(f"DROP TABLE IF EXISTS `{full_table}`").result()
+        client.query(f"DROP TABLE IF EXISTS deductive-notch-495015-c2.ml_dataset.{table_name}").result()
 
-        # Create table with 3 splits unioned
+        # Create table with 3 splits unioned using MAX(CASE WHEN)
         create_sql = f"""
-            CREATE TABLE `{full_table}` AS
+            CREATE TABLE deductive-notch-495015-c2.ml_dataset.{table_name} AS
             WITH raw AS (
                 SELECT symbol, DATE(timestamp) AS date, factor_id, value,
                        CASE
@@ -1375,7 +1378,7 @@ def admin_ml_dataset_generate(ds_id: int):
                            WHEN timestamp BETWEEN '{ds.val_start}' AND '{ds.val_end}' THEN 'val'
                            WHEN timestamp BETWEEN '{ds.test_start}' AND '{ds.test_end}' THEN 'test'
                        END AS split
-                FROM `deductive-notch-495015-c2.quant.factor_values`
+                FROM deductive-notch-495015-c2.quant.factor_values
                 WHERE factor_id IN UNNEST(@factor_ids)
                   AND timestamp BETWEEN '{ds.train_start}' AND '{ds.test_end}'
             )
@@ -1391,7 +1394,7 @@ def admin_ml_dataset_generate(ds_id: int):
         )
         client.query(create_sql, job_config=job_config).result()
 
-        cnt = list(client.query(f"SELECT COUNT(*) AS n FROM `{full_table}`").result())[0].n
+        cnt = list(client.query(f"SELECT COUNT(*) AS n FROM deductive-notch-495015-c2.ml_dataset.{table_name}").result())[0].n
         ds.bq_table = full_table
         ds.status = "ready"
         ds.row_count = cnt

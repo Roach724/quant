@@ -1,7 +1,6 @@
 import {
   ReloadOutlined, DeleteOutlined, EyeOutlined,
 } from '@ant-design/icons';
-import { PageContainer } from '@ant-design/pro-layout';
 import { Select, Input, Button, Switch, Tag, Space, Typography, DatePicker, Tabs, Table, Popconfirm, Modal, Tooltip, message } from 'antd';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { api, WS_BASE } from '../api';
@@ -208,12 +207,13 @@ const LogManager: React.FC = () => {
 const LogViewer: React.FC = () => {
   const [tab, setTab] = useState('browse');
   return (
-    <PageContainer header={{ title: '日志' }}>
+    <div>
+      <Typography.Title level={5} style={{ marginBottom: 12 }}>日志</Typography.Title>
       <Tabs activeKey={tab} onChange={setTab} items={[
         { key: 'browse', label: '日志浏览', children: <LogBrowser /> },
         { key: 'manage', label: '日志管理', children: <LogManager /> },
       ]} />
-    </PageContainer>
+    </div>
   );
 };
 

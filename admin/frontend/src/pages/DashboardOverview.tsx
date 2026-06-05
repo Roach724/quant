@@ -1,4 +1,4 @@
-import { Card, Tag, Row, Col, Switch, Select, Spin, Empty } from 'antd';
+import { Card, Tag, Row, Col, Switch, Select, Spin, Empty, Space } from 'antd';
 import { useEffect, useState, useCallback } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { api } from '../api';
@@ -14,15 +14,16 @@ export default function DashboardOverview() {
   // K-line states
   const [usSymbols, setUsSymbols] = useState<string[]>([]);
   const [hkSymbols, setHkSymbols] = useState<string[]>([]);
-  const [usSymbol, setUsSymbol] = useState('AAPL');
-  const [hkSymbol, setHkSymbol] = useState('00700');
+  const [usSymbol, setUsSymbol] = useState('');
+  const [hkSymbol, setHkSymbol] = useState('');
   const [usData, setUsData] = useState<any[]>([]);
   const [hkData, setHkData] = useState<any[]>([]);
   const [chartLoading, setChartLoading] = useState(false);
+  const [chartDays, setChartDays] = useState(1);
 
   useEffect(() => { loadData(); }, []);
-  useEffect(() => { loadChart('us', usSymbol); }, [usSymbol]);
-  useEffect(() => { loadChart('hk', hkSymbol); }, [hkSymbol]);
+  useEffect(() => { if (usSymbol) loadChart('us', usSymbol, chartDays); }, [usSymbol, chartDays]);
+  useEffect(() => { if (hkSymbol) loadChart('hk', hkSymbol, chartDays); }, [hkSymbol, chartDays]);
 
   const loadData = async () => {
     try {
@@ -51,20 +52,22 @@ export default function DashboardOverview() {
   const loadSymbols = async (market: 'us' | 'hk') => {
     try {
       const symbols = await api.get(`/api/admin/dashboard/market/symbols/${market}`);
-      if (Array.isArray(symbols)) {
-        if (market === 'us') { setUsSymbols(symbols); if (!usSymbol) setUsSymbol(symbols[0]); }
-        else { setHkSymbols(symbols); if (!hkSymbol) setHkSymbol(symbols[0]); }
+      if (Array.isArray(symbols) && symbols.length > 0) {
+        if (market === 'us') { setUsSymbols(symbols); if (!usSymbol) { const s = symbols[0]; setUsSymbol(s); loadChart('us', s, chartDays); } }
+        else { setHkSymbols(symbols); if (!hkSymbol) { const s = symbols[0]; setHkSymbol(s); loadChart('hk', s, chartDays); } }
       }
     } catch (e) { console.error('load symbols failed', e); }
   };
 
   useEffect(() => { loadSymbols('us'); loadSymbols('hk'); }, []);
 
-  const loadChart = useCallback(async (market: 'us' | 'hk', symbol: string) => {
+  const loadChart = useCallback(async (market: 'us' | 'hk', symbol: string, days: number = 1) => {
     if (!symbol) return;
     setChartLoading(true);
+    const barsPerDay = market === 'us' ? 78 : 54;  // ~78 5m bars/day US, ~54 HK
+    const limit = days * barsPerDay;
     try {
-      const data = await api.get(`/api/admin/dashboard/market/${market}/${symbol}?limit=78`);
+      const data = await api.get(`/api/admin/dashboard/market/${market}/${symbol}?limit=${limit}`);
       if (Array.isArray(data)) {
         if (market === 'us') setUsData(data); else setHkData(data);
       }
@@ -113,52 +116,22 @@ export default function DashboardOverview() {
 
       {/* ── K-line Charts ── */}
       <div style={{ marginTop: 24 }}>
-        <Row gutter={[16, 16]}>
-          <Col xs={24} lg={12}>
-            <Card
-              size="small"
-              title="🇺🇸 US K-line (5m)"
-              extra={
-                <Select
-                  size="small"
-                  value={usSymbol}
-                  onChange={setUsSymbol}
-                  showSearch
-                  style={{ width: 120 }}
-                  options={usSymbols.map((s) => ({ value: s, label: s }))}
-                />
-              }
-            >
-              <Spin spinning={chartLoading}>
-                {usData.length === 0 ? <Empty description="No data" /> : (
-                  <ReactECharts option={makeCandlestickOption(usData, usSymbol)} style={{ height: 350 }} />
-                )}
-              </Spin>
-            </Card>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Card
-              size="small"
-              title="🇭🇰 HK K-line (5m)"
-              extra={
-                <Select
-                  size="small"
-                  value={hkSymbol}
-                  onChange={setHkSymbol}
-                  showSearch
-                  style={{ width: 120 }}
-                  options={hkSymbols.map((s) => ({ value: s, label: s }))}
-                />
-              }
-            >
-              <Spin spinning={chartLoading}>
-                {hkData.length === 0 ? <Empty description="No data" /> : (
-                  <ReactECharts option={makeCandlestickOption(hkData, hkSymbol)} style={{ height: 350 }} />
-                )}
-              </Spin>
-            </Card>
-          </Col>
-        </Row>
+        <Card size="small" title={<Space><span>🇺🇸 US K-line (5m)</span><Select size="small" value={chartDays} onChange={setChartDays} style={{ width: 80, marginLeft: 8 }}
+          options={[{ value: 1, label: '1d' }, { value: 3, label: '3d' }, { value: 7, label: '7d' }]} /></Space>}
+          extra={<Select size="small" value={usSymbol} onChange={(v) => { setUsSymbol(v); loadChart('us', v, chartDays); }} showSearch style={{ width: 130 }}
+            options={usSymbols.map(s => ({ value: s, label: s }))} />}
+          style={{ marginBottom: 12 }}>
+          <Spin spinning={chartLoading}>
+            {usData.length === 0 ? <Empty description="No data" /> : <ReactECharts option={makeCandlestickOption(usData, usSymbol)} style={{ height: 350 }} />}
+          </Spin>
+        </Card>
+        <Card size="small" title="🇭🇰 HK K-line (5m)"
+          extra={<Select size="small" value={hkSymbol} onChange={(v) => { setHkSymbol(v); loadChart('hk', v, chartDays); }} showSearch style={{ width: 130 }}
+            options={hkSymbols.map(s => ({ value: s, label: s }))} />}>
+          <Spin spinning={chartLoading}>
+            {hkData.length === 0 ? <Empty description="No data" /> : <ReactECharts option={makeCandlestickOption(hkData, hkSymbol)} style={{ height: 350 }} />}
+          </Spin>
+        </Card>
       </div>
     </div>
   );
