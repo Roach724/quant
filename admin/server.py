@@ -2,6 +2,7 @@
 
 import subprocess, json as _json, os, glob
 import requests
+import pandas as pd
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect
@@ -15,6 +16,7 @@ from google.cloud import bigquery
 
 from admin.models import init_db, get_session, Task
 from live.experiment_manager import ExperimentManager
+from factors.registry import FactorRegistry
 
 DB_SESSION_DEP = Depends(get_session)
 
@@ -427,6 +429,79 @@ def admin_strategy_save(name: str, source: str = ""):
     with open(path, "w") as f:
         f.write(source)
     return {"status": "saved"}
+
+
+# ── Factor Management ──────────────────────────────────────────────────────────
+
+@app.get("/api/admin/factors")
+def admin_factors():
+    """List all factors with market coverage from factor_values."""
+    reg = FactorRegistry()
+    markets = ["us", "hk", "crypto"]
+    active_frames = []
+    for m in markets:
+        try:
+            df = reg.get_active(market=m)
+            if not df.empty:
+                active_frames.append(df)
+        except Exception:
+            pass
+    if not active_frames:
+        return []
+    active = pd.concat(active_frames, ignore_index=True)
+
+    client = bigquery.Client(project="deductive-notch-495015-c2")
+    # Get market coverage per factor
+    coverage = {}
+    try:
+        cov_rows = client.query("""
+            SELECT factor_id,
+              CASE WHEN STARTS_WITH(symbol, 'US.') THEN 'us'
+                   WHEN STARTS_WITH(symbol, 'HK.') THEN 'hk'
+                   ELSE 'crypto' END AS market,
+              COUNT(DISTINCT symbol) AS symbols,
+              MIN(date) AS min_date, MAX(date) AS max_date, COUNT(*) AS total_rows
+            FROM quant.factor_values
+            GROUP BY factor_id, market ORDER BY factor_id, market
+        """).result()
+        for c in cov_rows:
+            fid = c.factor_id
+            coverage.setdefault(fid, []).append({
+                "market": c.market, "symbols": c.symbols,
+                "min_date": str(c.min_date) if c.min_date else None,
+                "max_date": str(c.max_date) if c.max_date else None,
+                "total_rows": c.total_rows,
+            })
+    except Exception:
+        pass
+
+    result = []
+    for _, row in active.iterrows():
+        fid = row["factor_id"]
+        is_active = row.get("is_active", True)
+        result.append({
+            "factor_id": fid, "name": row.get("name", ""),
+            "category": row.get("category", ""),
+            "status": "active" if is_active else "inactive",
+            "markets": [c["market"] for c in coverage.get(fid, [])],
+            "coverage": coverage.get(fid, []),
+            "latest_ic": row.get("latest_ic_mean"),
+        })
+    return result
+
+
+@app.post("/api/admin/factors/compute")
+def admin_factor_compute(source: str = "tech", market: str = "us",
+                         start: str = "2020-01-01", end: str = "2026-06-03"):
+    """Trigger factor batch computation via task queue."""
+    cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+           f".venv/bin/python3 scripts/compute_factors_batch.py "
+           f"--source {source} --market {market} --start {start} --end {end}")
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id}
 
 
 if __name__ == "__main__":
