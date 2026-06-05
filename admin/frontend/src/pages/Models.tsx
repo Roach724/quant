@@ -52,8 +52,16 @@ const DatasetsTab: React.FC = () => {
   const [cFactors, setCFactors] = useState<FactorItem[]>([]); const [cSelectedFactors, setCSelectedFactors] = useState<string[]>([]);
   const [cSourceFilter, setCSourceFilter] = useState('all');
   const [cTrainRange, setCTrainRange] = useState<[string, string] | null>(null); const [cValRange, setCValRange] = useState<[string, string] | null>(null); const [cTestRange, setCTestRange] = useState<[string, string] | null>(null);
+  const [dGen, setDGen] = useState(false);
+
+  const dPoll = (tid: number): Promise<void> => new Promise((resolve, reject) => {
+    const c = () => { api.get(`/api/admin/tasks/${tid}`).then((d: any) => {
+      if (d.status === 'completed') resolve(); else if (d.status === 'failed') reject(new Error(d.result || 'Failed')); else setTimeout(c, 2000);
+    }).catch(reject); }; c();
+  });
 
   useEffect(() => { (async () => { setLoading(true); try { setDatasets(await api.get('/api/admin/ml/datasets')); } catch { } finally { setLoading(false); } })(); }, []);
+  useEffect(() => { (async () => { try { const d = await api.get('/api/tasks'); for (const t of (d.tasks || [])) { if ((t.status === 'pending' || t.status === 'running') && (t.params?.cmd || '').includes('_generate_dataset_inner')) { setDGen(true); try { await dPoll(t.id); } catch { } setDGen(false); } } } catch { } })(); }, []);
 
   const openCreate = async () => {
     setCName(''); setCMarket('us'); setCLabel('fwd_ret_5d');
@@ -81,8 +89,8 @@ const DatasetsTab: React.FC = () => {
         { title: 'Label', dataIndex: 'label', width: 120 },
         { title: 'BQ表', dataIndex: 'bq_table', width: 200, ellipsis: true, render: (v: string | null) => v ? <Text style={{ fontFamily: 'monospace', fontSize: 11, color: '#1677ff' }}>{v.split('.').pop()}</Text> : <Text type="secondary">—</Text> },
         { title: '操作', width: 160, render: (_, r) => (<Space>
-          <Popconfirm title="生成/覆盖？" onConfirm={async () => { try { const res = await api.post(`/api/admin/ml/datasets/${r.id}/generate`); message.success(`${res.row_count || 0} rows`); (async () => { setDatasets(await api.get('/api/admin/ml/datasets')); })(); } catch (e: any) { message.error(e.message); } }}>
-            <Button size="small" type="primary" icon={<ThunderboltOutlined />}>生成</Button>
+          <Popconfirm title="生成/覆盖？" onConfirm={() => { void (async () => { try { setDGen(true); const res = await api.post(`/api/admin/ml/datasets/${r.id}/generate`); if (res.task_id) { try { await dPoll(res.task_id); } catch { } } message.success(res.row_count ? `${res.row_count} rows` : "Done"); (async () => { setDatasets(await api.get('/api/admin/ml/datasets')); })(); } catch (e: any) { message.error(e.message); } finally { setDGen(false); } })(); }} disabled={dGen}>
+            <Button size="small" type="primary" icon={<ThunderboltOutlined />} disabled={dGen} loading={dGen}>生成</Button>
           </Popconfirm>
           <Popconfirm title="删除？" onConfirm={async () => { await api.del(`/api/admin/ml/datasets/${r.id}`); (async () => { setDatasets(await api.get('/api/admin/ml/datasets')); })(); }} okButtonProps={{ danger: true }}>
             <Button size="small" danger icon={<DeleteOutlined />} />
@@ -184,14 +192,31 @@ const ModelCenterTab: React.FC = () => {
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [createTemplate, setCreateTemplate] = useState('');
+  const [training, setTraining] = useState(false);
+
+  const pollTask = (taskId: number): Promise<void> =>
+    new Promise((resolve, reject) => {
+      const check = () => {
+        api.get(`/api/admin/tasks/${taskId}`).then((d: any) => {
+          if (d.status === 'completed') resolve();
+          else if (d.status === 'failed') reject(new Error(d.result || 'Task failed'));
+          else setTimeout(check, 2000);
+        }).catch(reject);
+      };
+      check();
+    });
   const [templateList, setTemplateList] = useState<any[]>([]);
 
   const load = async () => { setLoading(true); try { setItems(await api.get('/api/admin/ml/center')); } catch { } finally { setLoading(false); } };
   useEffect(() => { load(); }, []);
 
   const doTrain = async (configName: string, skipTuning: boolean) => {
-    try { const r = await api.post('/api/admin/ml/train', { config_name: configName, skip_tuning: skipTuning }); message.success(`Task #${r.task_id} submitted`); }
-    catch (e: any) { message.error(e.message); }
+    setTraining(true);
+    try {
+      const r = await api.post('/api/admin/ml/train', { config_name: configName, skip_tuning: skipTuning });
+      try { await pollTask(r.task_id); message.success('Training completed'); load(); } catch (e: any) { message.error(e.message); }
+    } catch (e: any) { message.error(e.message); }
+    finally { setTraining(false); }
   };
 
   const doDelete = async (modelName: string) => {
@@ -215,6 +240,10 @@ const ModelCenterTab: React.FC = () => {
     } catch (e: any) { message.error(e.message); }
   };
 
+  
+  // On mount, check for already-running training tasks (survives page refresh)
+  useEffect(() => { (async () => { try { const d = await api.get('/api/tasks'); for (const t of (d.tasks || [])) { if ((t.status === 'pending' || t.status === 'running') && ((t.params?.cmd || '').includes('ml.pipeline') || (t.params?.cmd || '').includes('TrainPipeline'))) { setTraining(true); try { await pollTask(t.id); } catch { } setTraining(false); } } } catch { } })(); }, []);
+
   const doStage = async (modelName: string, version: string, stage: string) => {
     try { await api.post(`/api/admin/models/${modelName}/stage?version=${encodeURIComponent(version)}&stage=${stage}`); message.success(`${modelName} v${version} → ${stage}`); (async () => { setItems(await api.get('/api/admin/ml/center')); })(); }
     catch (e: any) { message.error(e.message); }
@@ -230,11 +259,11 @@ const ModelCenterTab: React.FC = () => {
       return prod ? <Tag color="green">v{prod.version} Prod</Tag> : <Text type="secondary">—</Text>;
     }},
     { title: '操作', width: 240, render: (_: any, r: CenterItem) => (<Space>
-      <Popconfirm title="快速训练（无调优）？" onConfirm={() => doTrain(r.config_name, true)} disabled={r.config_name === '—'}>
-        <Button size="small" icon={<ThunderboltOutlined />} disabled={r.config_name === '—'}>快速</Button>
+      <Popconfirm title="快速训练（无调优）？" onConfirm={() => { void doTrain(r.config_name, true); }} disabled={r.config_name === '—' || training}>
+        <Button size="small" icon={<ThunderboltOutlined />} disabled={r.config_name === '—' || training} loading={training}>快速</Button>
       </Popconfirm>
-      <Popconfirm title="Optuna 调优训练？" onConfirm={() => doTrain(r.config_name, false)} disabled={r.config_name === '—'}>
-        <Button size="small" type="primary" icon={<ExperimentOutlined />} disabled={r.config_name === '—'}>调优</Button>
+      <Popconfirm title="Optuna 调优训练？" onConfirm={() => { void doTrain(r.config_name, false); }} disabled={r.config_name === '—' || training}>
+        <Button size="small" type="primary" icon={<ExperimentOutlined />} disabled={r.config_name === '—' || training} loading={training}>调优</Button>
       </Popconfirm>
       <Popconfirm title="取消注册？配置模板会保留" onConfirm={() => doDelete(r.model_name)}>
         <Button size="small" danger icon={<DeleteOutlined />}>取消注册</Button>

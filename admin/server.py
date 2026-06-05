@@ -1347,24 +1347,53 @@ def admin_ml_dataset_create(body: dict = Body(...)):
 
 @app.post("/api/admin/ml/datasets/{ds_id}/generate")
 def admin_ml_dataset_generate(ds_id: int):
-    """Build/replace BQ table for a dataset in ml_dataset.{name}."""
+    """Build/replace BQ table for a dataset in ml_dataset.{name}. Logs to train module."""
     from datetime import datetime as _dt
     session = get_session()
     ds = session.query(_MlDataset).filter(_MlDataset.id == ds_id).first()
     if not ds:
         raise HTTPException(404, detail=f"Dataset {ds_id} not found")
 
+    # Generate via task queue for logging
+    cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant-prod && "
+           f"PYTHONPATH=/opt/quant-prod .venv/bin/python3 -c \""
+           f"from admin.server import _generate_dataset_inner; "
+           f"_generate_dataset_inner({ds_id})\" "
+           f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
+           f"| tee -a /var/log/quant/prod/train/dataset_{ds.name}.log")
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd, "dataset": ds.name}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id}
+
+
+def _generate_dataset_inner(ds_id: int):
+    """Inner function called by task worker. Logs to stdout which is piped to tee."""
+    import json as _json
+    from admin.models import get_session, MlDataset
+    from google.cloud import bigquery as _bq_inner
+    from datetime import datetime, timezone
+
+    session = get_session()
+    ds = session.query(MlDataset).filter(MlDataset.id == ds_id).first()
+    if not ds:
+        print(f"ERROR: dataset {ds_id} not found")
+        return
+
     factor_ids = _json.loads(ds.factor_ids)
     if not factor_ids:
-        raise HTTPException(400, detail="No factors selected")
+        print("ERROR: no factors selected")
+        return
 
-    client = _bq.Client(project="deductive-notch-495015-c2")
+    print(f"Generating dataset {ds.name} — {len(factor_ids)} factors")
+    client = _bq_inner.Client(project="deductive-notch-495015-c2")
     table_name = ds.name
     full_table = f"deductive-notch-495015-c2.ml_dataset.{table_name}"
     label_col = ds.label
-
-    # Build pivot using MAX(CASE WHEN) — simpler and more reliable than PIVOT
     market_prefix = ds.market + "_"
+    label_factor_id = market_prefix + ds.label.replace("fwd_", "")
+
     pivot_cols = ",\n                   ".join(
         "MAX(CASE WHEN factor_id = '{}' THEN value END) AS {}".format(
             f, f.replace(market_prefix, "", 1)
@@ -1373,10 +1402,9 @@ def admin_ml_dataset_generate(ds_id: int):
     )
 
     try:
-        # Drop existing if any
         client.query(f"DROP TABLE IF EXISTS deductive-notch-495015-c2.ml_dataset.{table_name}").result()
+        print(f"Creating table deductive-notch-495015-c2.ml_dataset.{table_name}...")
 
-        # Create table with 3 splits unioned using MAX(CASE WHEN)
         create_sql = f"""
             CREATE TABLE deductive-notch-495015-c2.ml_dataset.{table_name} AS
             WITH raw AS (
@@ -1392,27 +1420,28 @@ def admin_ml_dataset_generate(ds_id: int):
             )
             SELECT symbol, date, split,
                    {pivot_cols},
-                   MAX(CASE WHEN factor_id = '{label_col}' THEN value END) AS label
+                   MAX(CASE WHEN factor_id = '{label_factor_id}' THEN value END) AS `{label_col}`
             FROM raw
             WHERE split IS NOT NULL
             GROUP BY symbol, date, split
         """
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ArrayQueryParameter("factor_ids", "STRING", factor_ids)]
+        job_config = _bq_inner.QueryJobConfig(
+            query_parameters=[_bq_inner.ArrayQueryParameter("factor_ids", "STRING", factor_ids)]
         )
         client.query(create_sql, job_config=job_config).result()
 
         cnt = list(client.query(f"SELECT COUNT(*) AS n FROM deductive-notch-495015-c2.ml_dataset.{table_name}").result())[0].n
+        print(f"Done: {cnt} rows")
+
         ds.bq_table = full_table
         ds.status = "ready"
         ds.row_count = cnt
-        ds.updated_at = _dt.now(timezone.utc)
+        ds.updated_at = datetime.now(timezone.utc)
         session.commit()
-        return {"status": "ok", "table": full_table, "row_count": cnt}
     except Exception as e:
+        print(f"ERROR: {e}")
         ds.status = "failed"
         session.commit()
-        raise HTTPException(500, detail=str(e))
 
 
 @app.delete("/api/admin/ml/datasets/{ds_id}")
@@ -1617,9 +1646,11 @@ def admin_ml_train(body: dict = Body(...)):
     if not path.exists():
         raise HTTPException(404, detail=f"Config '{config_name}' not found")
     cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
-           f".venv/bin/python3 -c \"from ml.pipeline import TrainPipeline; "
+           f".venv/bin/python3 -c \"import logging; logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s [%(name)s] %(message)s'); "
+           f"from ml.pipeline import TrainPipeline; "
            f"p = TrainPipeline('{path}'); p.run(skip_tuning={skip_tuning})\" "
-           f"2>&1 | tee -a /var/log/quant/prod/train/{config_name}.log")
+           f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
+           f"| tee -a /var/log/quant/prod/train/{config_name}.log")
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd, "config": config_name}, status="pending")
     session.add(task)
