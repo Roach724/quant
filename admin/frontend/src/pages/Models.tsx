@@ -11,7 +11,6 @@ import { api } from '../api';
 
 const { Text } = Typography;
 const { RangePicker } = DatePicker;
-const { TextArea } = Input;
 
 interface FactorItem { factor_id: string; source: string; label: string; }
 interface DatasetItem { id: number; name: string; market: string; label: string; factor_ids: string[]; train_range: string; val_range: string; test_range: string; bq_table: string | null; status: string; row_count: number; }
@@ -136,6 +135,7 @@ const MlConfigsTab: React.FC = () => {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorName, setEditorName] = useState('');
   const [editorContent, setEditorContent] = useState('');
+  const [newConfigName, setNewConfigName] = useState('');
 
   useEffect(() => { (async () => { setLoading(true); try { setConfigs(await api.get('/api/admin/ml/configs')); } catch { } finally { setLoading(false); } })(); }, []);
 
@@ -156,9 +156,17 @@ const MlConfigsTab: React.FC = () => {
           <Popconfirm title="删除？" onConfirm={async () => { try { await api.del(`/api/admin/ml/configs/${r.name}`); (async () => { setConfigs(await api.get('/api/admin/ml/configs')); })(); } catch (e: any) { message.error(e.message); } }} okButtonProps={{ danger: true }}><Button size="small" danger icon={<DeleteOutlined />} /></Popconfirm>
         </Space>) },
       ]} />
-      <Drawer title={editorName || '新建配置'} open={editorOpen} onClose={() => setEditorOpen(false)} width={700} extra={<Button type="primary" onClick={saveEditor}>保存</Button>}>
-        {!editorName && <Input placeholder="配置名 (e.g. lgb_us_v1.yaml)" onChange={e => setEditorName(e.target.value + '.yaml')} style={{ marginBottom: 12 }} />}
-        <TextArea value={editorContent} onChange={e => setEditorContent(e.target.value)} rows={30} style={{ fontFamily: 'monospace', fontSize: 12 }} placeholder={`data:\n  dataset: us_tech_v1\n  label: fwd_ret_5d\n\nmodel:\n  type: lightgbm\n...`} />
+      <Drawer title={editorName ? `编辑: ${editorName}` : '新建配置'} open={editorOpen} onClose={() => setEditorOpen(false)} width={700} extra={<Button type="primary" onClick={saveEditor}>保存</Button>}>
+        {!editorName && (
+          <Space style={{ marginBottom: 12 }}>
+            <Input placeholder="配置文件名" value={newConfigName} onChange={e => setNewConfigName(e.target.value)} style={{ width: 200 }} />
+            <Text type="secondary">.yaml</Text>
+            <Button size="small" onClick={() => { setEditorName(newConfigName + '.yaml'); setNewConfigName(''); }} disabled={!newConfigName}>确定</Button>
+          </Space>
+        )}
+        {editorName && (
+          <Input.TextArea value={editorContent} onChange={e => setEditorContent(e.target.value)} rows={30} style={{ fontFamily: 'monospace', fontSize: 12 }} placeholder={`data:\n  dataset: us_tech_v1\n  label: fwd_ret_5d\n\nmodel:\n  type: lightgbm\n...`} />
+        )}
       </Drawer>
     </>
   );
@@ -172,8 +180,12 @@ const ModelCenterTab: React.FC = () => {
   const [items, setItems] = useState<CenterItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createTemplate, setCreateTemplate] = useState('');
+  const [templateList, setTemplateList] = useState<any[]>([]);
 
-  useEffect(() => { (async () => { setLoading(true); try { setItems(await api.get('/api/admin/ml/center')); } catch { } finally { setLoading(false); } })(); }, []);
+  const load = async () => { setLoading(true); try { setItems(await api.get('/api/admin/ml/center')); } catch { } finally { setLoading(false); } };
+  useEffect(() => { load(); }, []);
 
   const doTrain = async (configName: string, skipTuning: boolean) => {
     try { const r = await api.post('/api/admin/ml/train', { config_name: configName, skip_tuning: skipTuning }); message.success(`Task #${r.task_id} submitted`); }
@@ -184,7 +196,20 @@ const ModelCenterTab: React.FC = () => {
     try {
       await api.del(`/api/admin/ml/center/${encodeURIComponent(modelName)}`);
       message.success(`${modelName} unregistered`);
-      (async () => { setItems(await api.get("/api/admin/ml/center")); })();
+      load();
+    } catch (e: any) { message.error(e.message); }
+  };
+
+  const openCreate = async () => {
+    setCreateOpen(true); setCreateTemplate('');
+    try { setTemplateList(await api.get('/api/admin/ml/configs')); } catch { }
+  };
+  const doCreate = async () => {
+    if (!createTemplate) return;
+    try {
+      await api.post(`/api/admin/ml/configs/${createTemplate}/register`);
+      message.success(`Registered ${createTemplate}`);
+      setCreateOpen(false); load();
     } catch (e: any) { message.error(e.message); }
   };
 
@@ -238,14 +263,28 @@ const ModelCenterTab: React.FC = () => {
   };
 
   return (
-    <Table dataSource={items} rowKey="model_name" loading={loading} size="small"
+    <>
+      <Space style={{ marginBottom: 16 }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>从模板创建</Button>
+      </Space>
+      <Table dataSource={items} rowKey="model_name" loading={loading} size="small"
       columns={columns}
       expandable={{
         expandedRowKeys: expandedKeys,
         onExpandedRowsChange: (keys) => setExpandedKeys(keys as string[]),
         expandedRowRender: renderVersions,
       }}
-    />
+      />
+      <Modal title="从模板创建模型" open={createOpen} onCancel={() => setCreateOpen(false)} onOk={doCreate}
+        okText="注册" okButtonProps={{ disabled: !createTemplate }}>
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Text strong>选择配置模板:</Text>
+          <Select value={createTemplate} onChange={setCreateTemplate} style={{ width: '100%' }}
+            options={templateList.filter((c: any) => c.status !== 'registered').map((c: any) => ({ value: c.name, label: `${c.name} (${c.registry_model_name || '—'})` }))} />
+          {templateList.filter((c: any) => c.status !== 'registered').length === 0 && <Text type="secondary">所有配置已注册，请先在 ML 配置中新建或取消注册</Text>}
+        </Space>
+      </Modal>
+    </>
   );
 };
 
