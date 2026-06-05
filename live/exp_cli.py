@@ -154,6 +154,8 @@ def cmd_start(mgr: ExperimentManager, args: argparse.Namespace) -> None:
         sys.exit(1)
 
     mgr.set_pid(exp_id, proc.pid)
+    mgr._data[exp_id]["status"] = "running"
+    mgr._save()
     print(f"Started {exp_id} (PID={proc.pid})")
 
 
@@ -222,6 +224,8 @@ def cmd_restart(mgr: ExperimentManager, args: argparse.Namespace) -> None:
         start_new_session=True,
     )
     mgr.set_pid(exp_id, proc.pid)
+    mgr._data[exp_id]["status"] = "running"
+    mgr._save()
     print(f"Restarted {exp_id} (PID={proc.pid})")
 
 
