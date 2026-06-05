@@ -67,8 +67,8 @@ log "Building admin frontend..."
 FRONTEND_DIR="$PROD_ROOT/admin/frontend"
 if [ -f "$FRONTEND_DIR/package.json" ]; then
     cd "$FRONTEND_DIR"
-    npm install --silent 2>&1 | tail -1 || log "WARNING: npm install had warnings"
-    npm run build 2>&1 || log "WARNING: frontend build failed (admin may use stale dist)"
+    npm install 2>&1 | tail -3 || log "WARNING: npm install had warnings"
+    npm run build 2>&1 | tail -5 || log "WARNING: frontend build failed (admin may use stale dist)"
     cd "$PROD_ROOT"
     log "Frontend build complete"
 else
