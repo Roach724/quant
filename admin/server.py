@@ -181,6 +181,7 @@ def admin_experiment_create_from_config(body: dict = Body(...)):
             version=int(body.get("version", 1)),
             config_path=str(new_path),
             name=body.get("name", new_id),
+            exp_id=new_id,
         )
         return {"exp_id": exp_id, "config_path": str(new_path)}
     except ValueError as e:
