@@ -172,6 +172,13 @@ def admin_experiment_create_from_config(body: dict = Body(...)):
         raise HTTPException(status_code=409, detail=f"Config '{new_id}.yaml' already exists")
     # Copy template and update experiment.id in the copy
     shutil.copy2(template_path, new_path)
+    # Inject exp_id into the config YAML so run.py uses it for log file naming
+    try:
+        cfg = _yaml.safe_load(new_path.read_text()) or {}
+        cfg.setdefault("experiment", {})["id"] = new_id
+        new_path.write_text(_yaml.dump(cfg, default_flow_style=False, allow_unicode=True))
+    except Exception:
+        pass
     mgr = ExperimentManager()
     try:
         exp_id = mgr.register(
