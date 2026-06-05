@@ -1,3 +1,5 @@
+import ExperimentDetail from '../components/ExperimentDetail';
+
 export default function DashboardProd() {
-  return <div>DashboardProd — coming soon</div>;
+  return <ExperimentDetail type="prod" readonly />;
 }

@@ -1,3 +1,5 @@
+import ExperimentDetail from '../components/ExperimentDetail';
+
 export default function DashboardLive() {
-  return <div>DashboardLive — coming soon</div>;
+  return <ExperimentDetail type="live" />;
 }

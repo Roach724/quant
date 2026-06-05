@@ -1,3 +1,5 @@
+import ExperimentDetail from '../components/ExperimentDetail';
+
 export default function DashboardDebug() {
-  return <div>DashboardDebug — coming soon</div>;
+  return <ExperimentDetail type="debug" />;
 }
