@@ -1,6 +1,6 @@
 # 量化交易系统 — 规范与子系统手册
 
-> 最后更新: 2026-06-04 | 维护者: Jarvis + 老大
+> 最后更新: 2026-06-05 | 维护者: Jarvis + 老大
 >
 > 本文档汇总项目中所有已建立的规范、子系统、约定和使用方式。
 > 新成员或新功能开发前应先阅读本文档。
@@ -20,7 +20,7 @@
 9. [Live Runner 子系统](#9-live-runner-子系统)
 10. [Paper Run 子系统](#10-paper-run-子系统)
 11. [BQ 直写规范](#11-bq-直写规范)
-12. [Dashboard 子系统](#12-dashboard-子系统)
+12. [Admin 管理平台](#12-admin-管理平台)
 13. [市场日历规范](#13-市场日历规范)
 14. [市场时段保护](#14-市场时段保护)
 15. [生产禁区 (quant-prod)](#15-生产禁区-quant-prod)
@@ -31,14 +31,15 @@
 
 ```
 /opt/quant-prod/
+├── admin/            # 管理平台 (React + FastAPI :8091)
 ├── collectors/       # 数据采集 (ws_collector, F10, 因子采集器)
 ├── common/           # 共享模块 (bq_writer, logging_util)
 ├── config/           # 全局配置 (symbols.yaml SSOT)
-├── dashboard/        # FastAPI :8090 + Vue 3 SPA
+├── dashboard/        # Dashboard Observer (写入 BQ, 原 Dashboard :8090 已合并)
 ├── engine/           # 交易引擎 (Portfolio, Strategy, DataSource)
 ├── factors/          # 因子系统 (TechFactorBuilder, FactorRegistry)
 ├── live/             # 实时模拟子系统 (LiveRunner, ExperimentManager)
-├── ml/               # 模型训练与注册 (MLflow, ModelRegistry)
+├── ml/               # 模型训练与注册 (MLflow, ModelRegistry, pipeline)
 ├── paper_run/        # 纸交回测子系统
 ├── scripts/          # 运维脚本 (cron, deploy, backfill, train)
 ├── strategies/       # 策略实现 (MLPredStrategy, SimpleMomentum)
@@ -55,7 +56,7 @@
 - **无论多紧急，不准跳过 dev 直接改 prod**
 
 **关键路径：**
-- 数据流: Futu OpenD → ws_collector → BQ → LiveRunner → Dashboard
+- 数据流: Futu OpenD → ws_collector → BQ → LiveRunner → Admin Dashboard
 - 模型流: BQ factor_values → train_*.py → MLflow → ModelRegistry → LiveRunner
 - 部署流: GitHub → CI (ruff+mypy+pytest) → CD (deploy.sh) → systemd restart
 
@@ -86,7 +87,7 @@
 1. `deploy.sh fetch` — 拉取最新代码到 `/opt/quant-prod/`
 2. `pip install -r requirements.txt` — 安装依赖
 3. Smoke test — 验证核心模块可导入
-4. 重启 ws-collector systemd 服务（**有市场保护**，见 §14）
+4. 重启服务（**有市场保护**，见 §14）
 
 ### 2.3 使用方式
 
@@ -101,6 +102,11 @@ git push origin feature/xxx
 ```
 
 **分支保护**: `stable` 和 `main` 都禁止直接 push，必须通过 PR。
+
+**前端部署注意事项**：
+- Admin 前端修改后必须 `npm run build` 重新构建 `dist/`
+- `dist/` hash 变更后需同步部署，不能只 cp 后端代码
+- 严格走 CI/CD 流程，禁止手动 cp 文件到 prod
 
 ---
 
@@ -154,6 +160,8 @@ logging.getLogger().addHandler(fh)
 ```
 
 **生产环境**: 日志由 Ops Agent 采集到 GCP Logs Explorer，可在 Cloud Console 查看和搜索。
+
+**Admin 日志查看**: Admin 平台 → 日志浏览 Tab → 按模块/级别/时间筛选 + 实时 WebSocket Tail。
 
 ---
 
@@ -407,7 +415,7 @@ python scripts/train_us_tech_v1_explicit.py
 python scripts/train_hk_tech_v1.py
 # → BQ factor_values wide pivot → LightGBM → 注册
 
-# 通用训练器
+# ML Pipeline 训练器
 python ml/trainer.py --market us --source tech
 ```
 
@@ -737,54 +745,422 @@ write_rows_to_bq(df, table_name="factor_values")
 
 ---
 
-## 12. Dashboard 子系统
+## 12. Admin 管理平台
 
-### 12.1 架构
+### 12.1 概述
+
+统一管理平台，在一个前端页面上操作所有量化系统模块，替代 SSH + 命令行。
+
+- **地址**: `http://localhost:8091`（公网通过 cloudflared tunnel）
+- **架构**: React 18 + Ant Design Pro + ECharts (Vite/TypeScript) → FastAPI (:8091) → SQLAlchemy/SQLite + BQ → Worker
+- **认证**: 无（cloudflared 隧道 + 防火墙保护）
+- **部署**: `systemctl [start|stop|restart] quant-admin quant-admin-worker`
+- **前端**：Vite 构建 → `admin/frontend/dist/` → FastAPI StaticFiles 挂载
+- **后端**：FastAPI + SQLAlchemy ORM → SQLite (`/var/quant/admin.db`) + BQ Client
+
+### 12.2 整体架构
 
 ```
-DashboardObserver → BQ (experiment_equity, experiment_trades, paper_runs, paper_metrics)
-     ↓
-FastAPI server (:8090) → REST API
-     ↓
-Vue 3 SPA (index.html) → Chart.js + Plotly
-     ↓
-cloudflared tunnel → 公网访问
+┌──────────────────────────────────────────────────────┐
+│  React 18 + Ant Design Pro + ECharts (Vite/TS SPA)  │
+│  ├─ Dashboard Tab (7 sub-tabs)                      │
+│  ├─ 实验管理 Tab (配置 + 实验室)                      │
+│  ├─ 数据采集 Tab (ws_collector / 回填 / BQ地图)       │
+│  ├─ 日志浏览 Tab (实时 WebSocket tail + 搜索)         │
+│  ├─ Cron Tab (39 任务管理)                           │
+│  ├─ 模型&策略 Tab (数据集/ML配置/模型中心/策略/MLflow) │
+│  └─ 因子管理 Tab                                     │
+├──────────────────────────────────────────────────────┤
+│          FastAPI server.py (:8091)                   │
+│  ├─ REST API (6 模块 × 45+ 端点)                     │
+│  ├─ WebSocket /ws/logs (实时日志)                    │
+│  ├─ MLflow 反向代理 (/mlflow/*)                      │
+│  ├─ Dashboard 内嵌 API (/api/admin/dashboard/*)      │
+│  └─ StaticFiles (dist/ SPA 单页应用)                 │
+├──────────────────────────────────────────────────────┤
+│               Backend                                │
+│  ├─ SQLAlchemy → SQLite /var/quant/admin.db         │
+│  │   └─ Task queue (shell/exp/factor/…)             │
+│  ├─ BigQuery Client → quant.* 43 tables             │
+│  ├─ MLflow API (:5000) → 模型版本/指标               │
+│  ├─ ExperimentManager → registry.json              │
+│  ├─ FactorRegistry → BQ factor_registry             │
+│  └─ cron_wrapper.sh → system crontab                │
+├──────────────────────────────────────────────────────┤
+│  Worker (worker.py)                                  │
+│  └─ Poll SQLite pending → subprocess → done/failed  │
+└──────────────────────────────────────────────────────┘
 ```
 
-### 12.2 关键技术
+### 12.3 Dashboard Tab（7 子页）
 
-- **前端**: 单文件 SPA，Vue 3 CDN，无构建步骤
-- **图表**: Plotly.js (K 线) + Chart.js
-- **实时推送**: WebSocket (`/ws/live`)
-- **API**: FastAPI + BigQuery Python client
+Dashboard Tab 内嵌原 Dashboard (:8090) 全部功能，统一迁移到 Admin 平台。
 
-### 12.3 API 端点
+#### 12.3.1 Overview（概览）
 
-| 端点 | 用途 |
+**功能**: 所有实验概览卡片，显示最新权益快照。
+
+**API**: `GET /api/admin/dashboard/experiments?type=live`
+
+**前端**: ECharts 权益曲线图 + Ant Design Card 网格
+
+**交互**:
+- 按 type 过滤（Live/Paper/Prod）
+- 点击卡片进入实验详情
+- 显示权益、回撤、日盈等核心指标
+
+#### 12.3.2 Live（实时实验）
+
+**功能**: 单实验详情：权益曲线 + 持仓 + 交易记录。
+
+**API**:
+- `GET /api/admin/dashboard/equity/{exp_id}?run_id=X` — 权益时序
+- `GET /api/admin/dashboard/trades/{exp_id}?run_id=X` — 交易记录
+- `GET /api/admin/dashboard/experiments/{exp_id}/positions` — 当前持仓 (FIFO)
+- `GET /api/admin/dashboard/experiments/{exp_id}/runs` — 历史 run
+
+**前端交互**:
+- ECharts 权益 + 回撤双轴图
+- 持仓表格（FIFO 成本、当前价、浮盈）
+- 交易列表（支持 run 切换）
+
+#### 12.3.3 Paper Run（回测）
+
+**功能**: 回测运行列表 + 指标卡片 + 权益图 + 交易。
+
+**API**:
+- `GET /api/admin/dashboard/paper-runs` — 列表
+- `GET /api/admin/dashboard/paper-runs/{run_id}` — 详情
+
+**指标卡片**: Sharpe / Sortino / MaxDD / Calmar / CAGR / WinRate / ProfitFactor
+
+#### 12.3.4 Prod（生产实验/只读）
+
+**功能**: 仅显示 `prod_*` 实验，只读模式，无操作按钮。
+
+#### 12.3.5 Pipeline（数据管道健康）
+
+**功能**: 数据管道健康状态，显示 US/HK 最新 bar 时间戳。
+
+**API**: `GET /api/admin/dashboard/pipeline`
+
+**交互**: 显示 US/HK 数据新鲜度（绿色=正常，红色=超时），市场开放状态指示。
+
+#### 12.3.6 Alerts（告警）
+
+**功能**: 实时告警推送（WebSocket）。
+
+#### 12.3.7 Debug（开发实验）
+
+**功能**: 仅显示 `debug_*` 实验，开发调试用。
+
+### 12.4 实验管理 Tab
+
+#### 12.4.1 实验配置（Config Templates）
+
+**概念**: 配置模板与实例分离。配置模板是 YAML 文件的"蓝图"，实验室是"运行实例"。
+
+**功能**:
+- 配置模板列表（名称、大小、路径）
+- 查看/编辑/删除模板（Modal 编辑器）
+- 从模板创建实验（→ 自动注入 exp_id 到 YAML → 调用 ExperimentManager.register）
+
+**API**:
+- `GET /api/admin/experiments/configs` — 列表
+- `GET /api/admin/experiments/configs/{name}` — 读取内容
+- `PUT /api/admin/experiments/configs/{name}` — 创建/更新
+- `DELETE /api/admin/experiments/configs/{name}` — 删除（备份到 .del）
+- `POST /api/admin/experiments/create-from-config` — 从模板创建实验
+
+**前端交互**:
+- Table 展示模板列表
+- 点击编辑 → Modal 弹出 YAML 编辑器（TextArea 语法高亮）
+- 点击"创建实验" → Modal 表单（type/market/strategy/version/name）
+- 提交后调用 create-from-config → worker 异步注册
+
+**安全**: 编辑模板时自动备份 `.bak` 文件；删除时备份为 `.del`
+
+#### 12.4.2 实验室（Running Experiments）
+
+**功能**: 查看所有实验、管理生命周期。
+
+**API**:
+- `GET /api/admin/experiments` — 列表（含 PID）
+- `GET /api/admin/experiments/{exp_id}/runs` — 运行历史
+- `GET /api/admin/experiments/{exp_id}/config` — 查看配置
+- `PUT /api/admin/experiments/{exp_id}/config` — 编辑配置
+- `POST /api/admin/experiments/register` — 注册新实验
+- `POST /api/admin/experiments/{exp_id}/{action}` — start/stop/restart
+- `POST /api/admin/experiments/{exp_id}/clear` — 清空数据
+- `DELETE /api/admin/experiments/{exp_id}/delete` — 彻底删除
+
+**前端交互**:
+- 3 个子 Tab：Live / Paper / Prod（过滤 type）
+- Table 展示 ID、状态、市场、策略、当前 run、PID
+- 操作按钮：Start / Stop / Restart（通过 task queue 异步）
+- 实验详情 Drawer：
+  - 基本信息（ID、类型、市场、策略、状态）
+  - 权益曲线图（ECharts，复用 Dashboard API）
+  - 持仓表（FIFO 计算）
+  - 交易记录
+  - Run 历史时间线
+- 清空实验：二次确认 → 清理 BQ + state + registry runs
+- 删除实验：二次确认 → kill 进程 → 清理 BQ + state + output + logs + unregister
+
+**二次确认**: 所有破坏性操作（stop/clear/delete）都需要用户确认。
+
+### 12.5 数据采集 Tab
+
+#### 12.5.1 ws_collector 状态
+
+**功能**: 查看和启停 ws_collector。
+
+**API**:
+- `GET /api/admin/data/collectors` — 状态 + 最后心跳
+- `POST /api/admin/data/collector/{action}` — start/stop/restart
+
+**前端交互**:
+- 状态卡片（active/inactive/unknown）+ 心跳时间
+- 启停按钮（通过 task queue 异步执行 `systemctl`）
+
+#### 12.5.2 数据回填
+
+**功能**: 选择 market + 频率 + 日期范围 → worker 异步回填。
+
+**API**:
+- `GET /api/admin/data/backfill/options` — 可选表列表
+- `POST /api/admin/data/backfill` — 触发回填
+
+**前端交互**:
+- 多选表（US/HK × 5m/1d）+ DatePicker 日期范围
+- 提交 → Task Queue → 轮询 task 状态
+- 支持多表批量回填（串行执行）
+
+#### 12.5.3 BQ Tables（数据地图）
+
+**功能**: 所有 BQ 表的元数据：表名、行数、最近写入、Schema。
+
+**API**: `GET /api/admin/data/tables`
+
+**前端交互**:
+- Table 展示所有 BQ 表
+- 行数、最后写入时间、Schema（点击展开）
+- 24 小时缓存（减少 BQ INFO_SCHEMA 查询）
+
+#### 12.5.4 F10 采集监控
+
+**功能**: F10 数据采集器状态。
+
+**API**: `GET /api/admin/data/f10`
+
+### 12.6 日志浏览 Tab
+
+#### 12.6.1 日志查看
+
+**功能**: 按模块、级别、关键字、时间范围筛选日志。
+
+**API**:
+- `GET /api/admin/logs/modules` — 模块列表
+- `GET /api/admin/logs?module=X&level=Y&search=Z&start=&end=&lines=100` — 日志行
+
+**前端交互**:
+- 模块下拉（collector/live/paper_run/factor/cron/train/……）
+- 级别下拉（ERROR/WARNING/INFO/DEBUG）
+- 搜索框 + DatePicker 时间范围
+- 日志行列表（JSON 解析显示 ts + level + msg）
+- 颜色编码（ERROR 红色、WARNING 黄色）
+
+#### 12.6.2 实时日志
+
+**功能**: WebSocket 实时 tail 最新日志。
+
+**API**: `WebSocket /ws/logs?module=collector`
+
+**前端交互**:
+- 建立 WebSocket → 持续接收新日志行
+- 自动追加到日志列表顶部
+- 支持启停（按钮控制连接/断开）
+
+#### 12.6.3 日志文件管理
+
+**功能**: 查看和删除日志文件。
+
+**API**:
+- `GET /api/admin/logs/files?module=X` — 文件列表（含大小、修改时间）
+- `DELETE /api/admin/logs/files?module=X&file=Y` — 删除文件
+
+### 12.7 Cron Tab
+
+#### 12.7.1 任务列表
+
+**功能**: 管理系统 crontab（quant 用户），显示/编辑/启停 cron 任务。
+
+**API**:
+- `GET /api/admin/cron` — 读取系统 crontab
+- `POST /api/admin/cron` — 保存修改
+- `POST /api/admin/cron/add` — 新增
+- `PUT /api/admin/cron/{index}` — 编辑/启停
+- `DELETE /api/admin/cron/{index}` — 删除
+
+**SSOT**: 系统 crontab（`quant` 用户）。管理平台直接读写。
+
+**前端交互**:
+- Table 展示所有任务：name, description, schedule, command, enabled
+- Switch 启停切换
+- "立即运行" 按钮 → task queue
+- Modal 表单：新增/编辑（name/description/schedule/command）
+
+#### 12.7.2 执行历史
+
+**功能**: 查看最近执行记录。
+
+**API**: `GET /api/admin/cron/{index}/history`
+
+**前端**: Drawer 展示 Task 表中最近记录（时间、状态、输出摘要）
+
+### 12.8 模型 & 策略 Tab
+
+#### 12.8.1 数据集
+
+**功能**: 管理 ML 训练数据集，从 BQ factor_values 宽表 pivot 生成。
+
+**API**:
+- `GET /api/admin/ml/datasets` — 数据集列表
+- `POST /api/admin/ml/datasets` — 创建数据集
+- `POST /api/admin/ml/datasets/{id}/generate` — 生成 BQ 表
+- `DELETE /api/admin/ml/datasets/{id}` — 删除
+- `GET /api/admin/ml/datasets/{market}/factors` — 可选因子列
+
+**前端交互**:
+- Table 展示数据集（name/market/label/factors/行数/状态）
+- 创建表单：选择 market → 勾选 factor_ids → 定义 train/val/test 日期范围
+- 生成按钮 → task queue → worker 执行 SQL PIVOT → BQ ml_dataset.{name}
+- SQL 生成过程实时写入日志中心（可查看）
+
+#### 12.8.2 ML 配置
+
+**概念**: ML 配置（YAML 模板）与模型中心（注册实例）分离。ML 配置是"蓝图"，模型中心是"已训练的产物"。
+
+**功能**:
+- 查看/编辑/删除 ML 配置 YAML
+- 注册到模型中心
+
+**API**:
+- `GET /api/admin/ml/configs` — 列表
+- `GET /api/admin/ml/configs/{name}` — 读取
+- `PUT /api/admin/ml/configs/{name}` — 创建/更新
+- `DELETE /api/admin/ml/configs/{name}` — 删除（检查是否有注册模型）
+- `POST /api/admin/ml/configs/{name}/register` — 注册
+
+#### 12.8.3 模型中心
+
+**功能**: 浏览所有已注册模型版本，管理 Stage，触发训练。
+
+**API**:
+- `GET /api/admin/ml/center` — 模型列表（含版本、指标）
+- `DELETE /api/admin/ml/center/{model_name}` — 取消注册
+- `POST /api/admin/ml/train` — 触发训练
+- `POST /api/admin/models/{name}/stage` — 修改 Stage
+
+**前端交互**:
+- Table 展示模型（模型名/数据集/配置/版本列表）
+- 展开行显示版本详情：version, stage, RMSE, IC, n_features, 训练时间
+- Stage 按钮：Promote to Production / Archive
+- 训练按钮 → task queue → worker 跑 ML Pipeline
+- 训练日志实时写入 /var/log/quant/prod/train/{config}.log
+
+#### 12.8.4 策略管理
+
+**功能**: 浏览/编辑/删除策略源码文件。
+
+**API**:
+- `GET /api/admin/strategies` — 列表
+- `GET /api/admin/strategies/{name}` — 读取源码
+- `PUT /api/admin/strategies/{name}` — 保存
+- `DELETE /api/admin/strategies/{name}` — 删除（备份 .del）
+
+**前端交互**:
+- 策略文件列表
+- 点击 → Modal TextArea 编辑器
+- 保存后直接写文件
+
+#### 12.8.5 MLflow UI
+
+**功能**: iframe 嵌入 MLflow 界面。
+
+**实现**: FastAPI 反向代理 `/mlflow/*` → `http://127.0.0.1:5000`
+
+**特殊注意事项**:
+- MLflow 3.x API 部分端点从 POST 改为 GET（模型 stage transition）
+- 代理需要同时转发 GET/POST/PUT/DELETE/PATCH 所有方法
+
+### 12.9 因子管理 Tab
+
+**功能**: 因子列表、详情、批量计算、激活/停用。
+
+**API**:
+- `GET /api/admin/factors` — 列表（含市场覆盖、覆盖率数据）
+- `POST /api/admin/factors/{factor_id}/toggle` — 启停
+- `POST /api/admin/factors/{factor_id}/evaluate` — 评估
+- `POST /api/admin/factors/compute` — 批量计算
+
+**前端交互**:
+- Table 展示所有因子：factor_id, name, category, status, markets, IC
+- 因子详情 Drawer：各市场数据覆盖（标的数/日期范围/总数据量）
+- 批量计算：选择 source/market/日期范围 → task queue
+- 启停开关切换
+
+### 12.10 任务队列
+
+**位置**: `admin/models.py` → SQLite `/var/quant/admin.db` Task 表
+
+**Worker**: `admin/worker.py` → 轮询 pending → subprocess → done/failed
+
+| 字段 | 说明 |
 |------|------|
-| `GET /api/experiments?type=live` | 实验最新快照（按类型过滤） |
-| `GET /api/experiments/meta` | 实验元数据（含休眠实验） |
-| `GET /api/equity/{exp_id}?run_id=X` | 权益曲线（按 run 过滤） |
-| `GET /api/trades/{exp_id}?run_id=X` | 交易记录 |
-| `GET /api/experiments/{exp_id}/positions` | 当前持仓（自动补 HK 前导零） |
-| `GET /api/experiments/{exp_id}/runs` | 历史 run 列表 |
-| `GET /api/paper-runs` | Paper run 列表 |
-| `GET /api/paper-runs/{run_id}` | 单次 paper run 详情 |
-| `GET /api/market/{market}/{symbol}` | K 线图数据（时区修正+去重） |
-| `GET /api/pipeline` | 数据管道健康状态 |
+| id | 自增 |
+| type | `shell` / `exp_start` / `factor_compute` / ... |
+| status | `pending` → `running` → `done` / `failed` |
+| params | JSON 参数 (command, dataset, config 等) |
+| result | 执行结果文本 (末尾 5000 字符) |
 
-### 12.4 时区修正
+**执行流程**:
+```
+前端 → POST /api/admin/experiments/{id}/start
+     → server.py 创建 Task (status=pending)
+     → worker.py 轮询到 pending
+     → 标记 running → subprocess.run(cmd) → 更新 done/failed
+     → 前端轮询 GET /api/tasks/{id} → 显示状态
+```
 
-BQ 中 bar 的时间戳是 Futu 当地时间（错标 UTC）。Dashboard API 读取时自动修正:
-- **HK**: `TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)`
-- **US**: `TIMESTAMP(DATETIME(timestamp), "America/New_York")` (自动处理夏令时)
+**超时控制**: 默认 subprocess timeout=3600s（模型训练可达 1h+）
 
-### 12.5 启动方式
+### 12.11 启动/停止
 
 ```bash
-cd /opt/quant-prod && .venv/bin/python3 -m uvicorn dashboard.server:app --host 0.0.0.0 --port 8090
-# 访问: http://localhost:8090
+# 启动
+sudo systemctl start quant-admin quant-admin-worker
+
+# 停止
+sudo systemctl stop quant-admin quant-admin-worker
+
+# 重启
+sudo systemctl restart quant-admin quant-admin-worker
+
+# 前端重建（修改前端代码后）
+cd /opt/quant-dev/admin/frontend && npm run build
+# → CI/CD 自动部署 dist/ 到 prod
 ```
+
+### 12.12 开发注意事项
+
+- 管理平台和原 Dashboard (:8090) 是独立服务，Dashboard API 已迁移到 Admin 内嵌（`/api/admin/dashboard/*`）
+- **永不手动 cp 文件到 prod** — 前端改动走 git → CI/CD → deploy
+- 管理平台直接操作系统 crontab（`quant` 用户），修改立即生效
+- Worker 执行的命令运行在 `/opt/quant-prod`，使用 `.venv/bin/python3`
+- 前端使用相对路径 API（不需要配置域名）
+- admin.db 存储在 `/var/quant/admin.db`
+- ROUTE ORDER MATTERS — 具体路径必须在通配路径之前注册（`/api/admin/experiments/{exp_id}/delete` 必须在 `/{action}` 之前）
 
 ---
 
@@ -852,7 +1228,7 @@ fi
 
 - CD 部署时自动检查，开盘期间跳过 ws_collector 重启
 - **手动重启 ws_collector 需老大批准**
-- 该保护仅作用于 ws_collector，其他服务（Dashboard, MLflow）不受影响
+- 该保护仅作用于 ws_collector，其他服务（Admin, MLflow）不受影响
 
 ---
 
@@ -869,7 +1245,7 @@ fi
 
 - Live 实验的 paper trading（`mode: live`）允许在 prod 运行（属于实时模拟，非开发）
 - 数据采集 cron 任务允许在 prod 执行
-- Dashboard 服务允许在 prod 运行
+- Admin 服务允许在 prod 运行
 
 ### 15.3 通用红线
 
@@ -879,120 +1255,4 @@ fi
 - 代码任务必须先描述计划、等批准再动手
 - 系统配置修改必须先展示改动、等审阅再执行
 - 标的覆盖数量以 `config/symbols.yaml` 为准，不得自设
-
----
-
-## 16. 管理平台 (Admin Platform)
-
-### 16.1 概述
-
-统一管理平台，在一个前端页面上操作所有量化系统模块，替代 SSH + 命令行。
-
-- **地址**: `http://localhost:8091`（公网通过 cloudflared tunnel）
-- **架构**: React 18 + Ant Design Pro (Vite/TS) → FastAPI (:8091) → SQLAlchemy/SQLite → Worker
-- **认证**: 无（cloudflared 隧道 + 防火墙保护）
-- **部署**: `systemctl [start|stop|restart] quant-admin quant-admin-worker`
-
-### 16.2 模块功能
-
-#### 实验管理
-
-| 功能 | 操作 |
-|------|------|
-| 实验列表 | 查看所有实验、状态、当前 run、PID |
-| 注册实验 | 表单填写 type/market/strategy/version/config → 自动生成 ID |
-| 启动/停止/重启 | 按钮触发 → worker 执行 `exp_cli` |
-| 实验详情 | Drawer: 基本信息、权益图（复用 Dashboard）、持仓、交易、run 历史 |
-| 清空实验 | 一键清 BQ + state + runs（需二次确认） |
-
-#### 数据采集
-
-| 功能 | 操作 |
-|------|------|
-| ws_collector 状态 | 进程状态、最后心跳 |
-| 启停 ws_collector | 按钮触发 |
-| 📊 数据地图 | 所有 BQ 表：表名、行数、最近写入、Schema（点击展开） |
-| 数据回填 | 选择 market + 日期范围 → worker 异步执行 |
-| F10 采集监控 | 采集器名称、是否运行中 |
-
-#### 日志浏览
-
-| 功能 | 操作 |
-|------|------|
-| 模块筛选 | `collector / live / factor / cron / train / ...` |
-| 级别筛选 | ERROR / WARNING / INFO / DEBUG |
-| 实时 tail | WebSocket 推送新日志行 |
-| 搜索 | 关键字 + 时间范围（DatePicker） |
-
-#### Cron 任务管理
-
-| 功能 | 操作 |
-|------|------|
-| 任务列表 | name, description, schedule, command（39 个任务） |
-| 启停开关 | Switch 切换 |
-| 立即触发 | 按钮 → worker 执行 |
-| 新建/编辑 | Modal 表单：name / description / schedule / command |
-| 执行历史 | Drawer 显示 Task 表中最近任务记录 |
-
-**SSOT**: 系统 crontab（`quant` 用户）。管理平台直接读写。
-
-#### 模型 & 策略管理
-
-| 功能 | 操作 |
-|------|------|
-| 模型列表 | 所有注册模型 + 版本列表（MLflow API） |
-| 版本对比 | 选中两个版本 → 对比 RMSE / IC / 特征数 |
-| Stage 管理 | Promote to Production / Archive |
-| 训练触发 | 选择模型 + 参数 → worker 异步训练 |
-| 训练历史 | 每个版本的训练参数和指标 |
-| 策略列表 | 浏览所有策略源码 |
-| 策略编辑 | 在线编辑（语法高亮）+ 保存 |
-| MLflow UI | iframe 嵌入 `http://localhost:5000` |
-
-#### 因子管理
-
-| 功能 | 操作 |
-|------|------|
-| 因子列表 | 所有因子 + 支持市场 + 状态 + IC |
-| 因子详情 | Drawer 显示市场数据覆盖（标的数、日期范围、总数据量） |
-| 批量计算 | 选择 source/market/日期范围 → worker |
-| 激活/停用 | 切换因子状态 |
-
-### 16.3 任务队列
-
-SQLite Task 表 (`/var/quant/admin.db`) + worker 进程异步执行。
-
-| 字段 | 说明 |
-|------|------|
-| id | 自增 |
-| type | `shell` / `exp_start` / `factor_compute` / ... |
-| status | `pending` → `running` → `done` / `failed` |
-| params | JSON 参数 |
-| result | 执行结果文本 |
-
-Worker 循环轮询 pending → 标记 running → subprocess → 更新 done/failed。
-
-### 16.4 启动/停止
-
-```bash
-# 启动
-sudo systemctl start quant-admin quant-admin-worker
-
-# 停止
-sudo systemctl stop quant-admin quant-admin-worker
-
-# 重启
-sudo systemctl restart quant-admin quant-admin-worker
-
-# 前端重建（修改前端代码后）
-cd /opt/quant-dev/admin/frontend && npm run build
-cp -r dist/* /opt/quant-prod/admin/frontend/dist/
-```
-
-### 16.5 注意事项
-
-- 管理平台和 Dashboard (:8090) 是独立服务，互不干扰
-- 管理平台直接操作系统 crontab（`quant` 用户），修改立即生效
-- Worker 执行的命令运行在 `/opt/quant-prod`，使用 `.venv/bin/python3`
-- 前端使用相对路径 API（不需要配置域名）
-- admin.db 存储在 `/var/quant/admin.db`
+- **禁止手动 cp 文件到 prod** — 前端 dist 构建和部署必须走 CI/CD

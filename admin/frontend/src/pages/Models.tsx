@@ -206,6 +206,10 @@ const ModelCenterTab: React.FC = () => {
       check();
     });
   const [templateList, setTemplateList] = useState<any[]>([]);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [configName, setConfigName] = useState('');
+  const [configContent, setConfigContent] = useState('');
+  const [configLoading, setConfigLoading] = useState(false);
 
   const load = async () => { setLoading(true); try { setItems(await api.get('/api/admin/ml/center')); } catch { } finally { setLoading(false); } };
   useEffect(() => { load(); }, []);
@@ -217,6 +221,16 @@ const ModelCenterTab: React.FC = () => {
       try { await pollTask(r.task_id); message.success('Training completed'); load(); } catch (e: any) { message.error(e.message); }
     } catch (e: any) { message.error(e.message); }
     finally { setTraining(false); }
+  };
+
+  const openConfig = async (name: string) => {
+    setConfigName(name); setConfigOpen(true); setConfigLoading(true);
+    try { const d = await api.get(`/api/admin/ml/configs/${name}`); setConfigContent(d.content || ''); } catch { }
+    finally { setConfigLoading(false); }
+  };
+  const saveConfig = async () => {
+    try { await api.put(`/api/admin/ml/configs/${configName}`, { content: configContent }); message.success('Saved'); setConfigOpen(false); }
+    catch (e: any) { message.error(e.message); }
   };
 
   const doDelete = async (modelName: string) => {
@@ -268,6 +282,7 @@ const ModelCenterTab: React.FC = () => {
       <Popconfirm title="取消注册？配置模板会保留" onConfirm={() => doDelete(r.model_name)}>
         <Button size="small" danger icon={<DeleteOutlined />}>取消注册</Button>
       </Popconfirm>
+      <Button size="small" icon={<SettingOutlined />} onClick={() => openConfig(r.config_name)}>配置</Button>
     </Space>) },
   ];
 
@@ -316,6 +331,13 @@ const ModelCenterTab: React.FC = () => {
           {templateList.length === 0 && <Text type="secondary">暂无配置，请先在 ML 配置中新建</Text>}
         </Space>
       </Modal>
+
+      <Drawer title={`模型配置: ${configName}`} open={configOpen} onClose={() => setConfigOpen(false)} width={700}
+        extra={<Button type="primary" onClick={saveConfig}>保存</Button>}>
+        {configLoading ? <Text type="secondary">Loading...</Text> :
+          <Input.TextArea value={configContent} onChange={e => setConfigContent(e.target.value)} rows={30}
+            style={{ fontFamily: 'monospace', fontSize: 12 }} />}
+      </Drawer>
     </>
   );
 };
