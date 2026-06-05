@@ -1,38 +1,52 @@
 {
   "jobs": [
     {
-      "name": "factor-compute-tech-daily",
-      "description": "每日增量计算技术因子（周一至五 6:00 UTC）",
+      "name": "factor-tech-us-daily",
+      "description": "每日增量计算美股技术因子（周一至五 6:00 UTC）",
       "schedule": "0 6 * * 1-5",
-      "command": "python scripts/compute_factors_batch.py --incremental --source tech",
+      "command": "cd /opt/quant-prod && .venv/bin/python3 scripts/compute_factors_batch.py --incremental --source tech --market us",
       "enabled": true
     },
     {
-      "name": "daily-memory-archive",
-      "description": "每日 0:00 归档前一天对话",
-      "schedule": "0 0 * * *",
-      "command": "(memory archive script)",
+      "name": "factor-tech-hk-daily",
+      "description": "每日增量计算港股技术因子（周一至五 6:00 UTC）",
+      "schedule": "0 6 * * 1-5",
+      "command": "cd /opt/quant-prod && .venv/bin/python3 scripts/compute_factors_batch.py --incremental --source tech --market hk",
       "enabled": true
     },
     {
-      "name": "factor-compute-f10-weekly",
-      "description": "每周日全量计算 F10 基本面因子（2:00 UTC）",
+      "name": "factor-f10-us-weekly",
+      "description": "每周日全量计算美股F10基本面因子（2:00 UTC）",
       "schedule": "0 2 * * 0",
-      "command": "python scripts/compute_factors_batch.py --source fundamental",
+      "command": "cd /opt/quant-prod && .venv/bin/python3 scripts/compute_factors_batch.py --source fundamental --market us",
+      "enabled": true
+    },
+    {
+      "name": "factor-f10-hk-weekly",
+      "description": "每周日全量计算港股F10基本面因子（2:00 UTC）",
+      "schedule": "0 2 * * 0",
+      "command": "cd /opt/quant-prod && .venv/bin/python3 scripts/compute_factors_batch.py --source fundamental --market hk",
       "enabled": true
     },
     {
       "name": "collect-us-rating-summary",
       "description": "美股评级汇总采集（每日 3:30 UTC）",
       "schedule": "30 3 * * *",
-      "command": "collect_futu_factors --table us_rating_summary",
+      "command": "cd /opt/quant-prod && .venv/bin/python3 -m collectors.collect_futu_factors --table us_rating_summary",
       "enabled": true
     },
     {
       "name": "collect-us-insider-trade",
       "description": "美股内部人交易采集（每日 4:00 UTC）",
       "schedule": "0 4 * * *",
-      "command": "collect_futu_factors --table us_insider_trade",
+      "command": "cd /opt/quant-prod && .venv/bin/python3 -m collectors.collect_futu_factors --table us_insider_trade",
+      "enabled": true
+    },
+    {
+      "name": "daily-memory-archive",
+      "description": "每日 0:00 北京时间归档对话（仍在 OpenClaw 运行，此处仅展示）",
+      "schedule": "0 0 * * *",
+      "command": "(OpenClaw systemEvent)",
       "enabled": true
     }
   ]

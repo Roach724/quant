@@ -358,38 +358,47 @@ CRON_REGISTRY = os.environ.get(
 
 @app.get("/api/admin/cron")
 def admin_cron_list():
-    """Read cron job registry; fall back to system crontab."""
-    # Try cron registry first
+    """Read system crontab, merge with registry for names/descriptions."""
+    # Load registry for metadata (names, descriptions)
+    registry_jobs = {}
     resolved = os.path.abspath(CRON_REGISTRY)
     if os.path.isfile(resolved):
         try:
             with open(resolved) as f:
                 data = _json.load(f)
-            return data.get("jobs", [])
+            for j in data.get("jobs", []):
+                cmd = j.get("command", "").strip()
+                if cmd:
+                    registry_jobs[cmd] = j
         except Exception:
-            pass  # Fall through to system crontab
+            pass
 
-    # Fallback to system crontab
+    # Read system crontab (source of truth)
     r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
-    lines = r.stdout.strip().split("\n") if r.stdout.strip() else []
+    raw = r.stdout.strip()
+    if not raw:
+        # Fallback to registry-only if no crontab
+        return list(registry_jobs.values()) if registry_jobs else []
+
+    lines = raw.split("\n")
     jobs = []
     for i, line in enumerate(lines):
         line = line.strip()
         if not line or line.startswith("#"):
-            if line.startswith("#"):
-                jobs.append({
-                    "index": i, "raw": line, "enabled": False,
-                    "schedule": "", "command": "", "comment": line.lstrip("# "),
-                    "name": "", "description": "",
-                })
             continue
         parts = line.split(None, 5)
         if len(parts) >= 6:
+            cmd = parts[5].strip()
+            # Look up registry metadata by command
+            meta = registry_jobs.get(cmd, {})
             jobs.append({
-                "index": i, "raw": line, "enabled": True,
+                "index": i,
+                "raw": line,
+                "enabled": True,
                 "schedule": " ".join(parts[:5]),
-                "command": parts[5], "comment": "",
-                "name": "", "description": "",
+                "command": cmd,
+                "name": meta.get("name", ""),
+                "description": meta.get("description", ""),
             })
     return jobs
 
