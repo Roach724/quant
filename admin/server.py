@@ -1380,15 +1380,15 @@ def admin_ml_dataset_generate(ds_id: int):
         create_sql = f"""
             CREATE TABLE deductive-notch-495015-c2.ml_dataset.{table_name} AS
             WITH raw AS (
-                SELECT symbol, DATE(timestamp) AS date, factor_id, value,
+                SELECT symbol, date, factor_id, value,
                        CASE
-                           WHEN timestamp BETWEEN '{ds.train_start}' AND '{ds.train_end}' THEN 'train'
-                           WHEN timestamp BETWEEN '{ds.val_start}' AND '{ds.val_end}' THEN 'val'
-                           WHEN timestamp BETWEEN '{ds.test_start}' AND '{ds.test_end}' THEN 'test'
+                           WHEN date BETWEEN '{ds.train_start}' AND '{ds.train_end}' THEN 'train'
+                           WHEN date BETWEEN '{ds.val_start}' AND '{ds.val_end}' THEN 'val'
+                           WHEN date BETWEEN '{ds.test_start}' AND '{ds.test_end}' THEN 'test'
                        END AS split
                 FROM deductive-notch-495015-c2.quant.factor_values
                 WHERE factor_id IN UNNEST(@factor_ids)
-                  AND timestamp BETWEEN '{ds.train_start}' AND '{ds.test_end}'
+                  AND date BETWEEN '{ds.train_start}' AND '{ds.test_end}'
             )
             SELECT symbol, date, split,
                    {pivot_cols},

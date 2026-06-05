@@ -229,6 +229,8 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   const [runsLoading, setRunsLoading] = useState(false);
   const [equityLatest, setEquityLatest] = useState<Record<string, any> | null>(null);
   const [equityLoading, setEquityLoading] = useState(false);
+  const [positions, setPositions] = useState<any[]>([]);
+  const [positionsLoading, setPositionsLoading] = useState(false);
   const [configDrawer, setConfigDrawer] = useState<{ open: boolean; expId: string; content: string; loading: boolean }>({ open: false, expId: '', content: '', loading: false });
 
   // Create from template
@@ -266,13 +268,17 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
 
   const openDetail = async (exp: ExperimentItem) => {
     setDetailExp(exp); setDetailDrawer(true);
-    setRunsLoading(true); setEquityLoading(true);
-    setRuns([]); setEquityLatest(null);
+    setRunsLoading(true); setEquityLoading(true); setPositionsLoading(true);
+    setRuns([]); setEquityLatest(null); setPositions([]);
     try { const d = await api.get(`/api/admin/experiments/${exp.exp_id}/runs`); setRuns(d); } catch { setRuns([]); } finally { setRunsLoading(false); }
     try {
       const eq = await api.get(`/api/admin/dashboard/equity/${exp.exp_id}`);
       setEquityLatest(Array.isArray(eq) && eq.length > 0 ? eq[eq.length - 1] : eq);
     } catch { setEquityLatest(null); } finally { setEquityLoading(false); }
+    try {
+      const pos = await api.get(`/api/admin/dashboard/experiments/${exp.exp_id}/positions`);
+      setPositions(Array.isArray(pos) ? pos : []);
+    } catch { setPositions([]); } finally { setPositionsLoading(false); }
   };
 
   const openConfig = async (expId: string) => {
@@ -407,6 +413,20 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
                   <Descriptions.Item label="PnL">${Math.round(equityLatest.daily_pnl || 0)}</Descriptions.Item>
                 </Descriptions>
               ) : <Alert message="No equity data" type="warning" />}
+
+            <Divider>Positions ({positions.length})</Divider>
+            {positionsLoading ? <Alert message="Loading..." type="info" /> :
+              positions.length === 0 ? <Alert message="No open positions" type="info" /> :
+              <Table dataSource={positions} rowKey="symbol" size="small" pagination={false}
+                columns={[
+                  { title: 'Symbol', dataIndex: 'symbol', width: 80 },
+                  { title: 'Qty', dataIndex: 'qty', width: 80, render: (v: any) => Number(v).toFixed(2) },
+                  { title: 'Avg Cost', dataIndex: 'avg_cost', width: 100, render: (v: any) => `$${Number(v).toFixed(2)}` },
+                  { title: 'Price', dataIndex: 'current_price', width: 100, render: (v: any) => `$${Number(v).toFixed(2)}` },
+                  { title: 'PnL', dataIndex: 'pnl', width: 100, render: (v: any) => ({ children: `$${Number(v).toFixed(2)}`, props: { style: { color: Number(v) >= 0 ? '#3f8600' : '#cf1322' } } }) },
+                  { title: 'PnL%', dataIndex: 'pnl_pct', width: 80, render: (v: any) => ({ children: `${Number(v).toFixed(2)}%`, props: { style: { color: Number(v) >= 0 ? '#3f8600' : '#cf1322' } } }) },
+                ]}
+              />}
 
             <Divider>Runs</Divider>
             <Table dataSource={runs} rowKey="run_id" loading={runsLoading} size="small" columns={runColumns} pagination={false} />
