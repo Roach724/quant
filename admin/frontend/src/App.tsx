@@ -10,6 +10,7 @@ import ProLayout from '@ant-design/pro-layout';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import './App.css';
+import Dashboard from './pages/Dashboard';
 import Experiments from './pages/Experiments';
 import DataMap from './pages/DataMap';
 import LogViewer from './pages/LogViewer';
@@ -18,6 +19,7 @@ import Models from './pages/Models';
 import Factors from './pages/Factors';
 
 const menuData = [
+  { path: '/dashboard', name: 'Dashboard', icon: <DashboardOutlined /> },
   { path: '/experiments', name: '实验管理', icon: <ExperimentOutlined /> },
   { path: '/data', name: '数据采集', icon: <CloudServerOutlined /> },
   { path: '/logs', name: '日志浏览', icon: <FileTextOutlined /> },
@@ -29,7 +31,7 @@ const menuData = [
 function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [pathname, setPathname] = useState(location.pathname || '/experiments');
+  const [pathname, setPathname] = useState(location.pathname || '/dashboard');
 
   return (
     <ProLayout
@@ -40,8 +42,8 @@ function AppLayout() {
       menuItemRender={(item, dom) => (
         <a
           onClick={() => {
-            setPathname(item.path || '/experiments');
-            navigate(item.path || '/experiments');
+            setPathname(item.path || '/dashboard');
+            navigate(item.path || '/dashboard');
           }}
         >
           {dom}
@@ -49,13 +51,14 @@ function AppLayout() {
       )}
     >
       <Routes>
+        <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/experiments" element={<Experiments />} />
         <Route path="/data" element={<DataMap />} />
         <Route path="/logs" element={<LogViewer />} />
         <Route path="/cron" element={<CronJobs />} />
         <Route path="/models" element={<Models />} />
         <Route path="/factors" element={<Factors />} />
-        <Route path="/" element={<Experiments />} />
+        <Route path="/" element={<Dashboard />} />
       </Routes>
     </ProLayout>
   );
