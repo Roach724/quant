@@ -50,11 +50,15 @@ const DatasetsTab: React.FC = () => {
   const [createOpen, setCreateOpen] = useState(false);
   const [cName, setCName] = useState(''); const [cMarket, setCMarket] = useState('us'); const [cLabel, setCLabel] = useState('fwd_ret_5d');
   const [cFactors, setCFactors] = useState<FactorItem[]>([]); const [cSelectedFactors, setCSelectedFactors] = useState<string[]>([]);
+  const [cSourceFilter, setCSourceFilter] = useState('all');
   const [cTrainRange, setCTrainRange] = useState<[string, string] | null>(null); const [cValRange, setCValRange] = useState<[string, string] | null>(null); const [cTestRange, setCTestRange] = useState<[string, string] | null>(null);
 
   useEffect(() => { (async () => { setLoading(true); try { setDatasets(await api.get('/api/admin/ml/datasets')); } catch { } finally { setLoading(false); } })(); }, []);
 
-  const openCreate = async () => { setCreateOpen(true); try { setCFactors(await api.get(`/api/admin/ml/datasets/${cMarket}/factors`)); } catch { } };
+  const openCreate = async () => { setCreateOpen(true); fetchFactors(cMarket); };
+  const fetchFactors = async (market: string) => {
+    try { setCFactors(await api.get(`/api/admin/ml/datasets/${market}/factors`)); } catch { }
+  };
   const doCreate = async () => {
     try { await api.post('/api/admin/ml/datasets', { name: cName, market: cMarket, label: cLabel, factor_ids: cSelectedFactors, train_start: cTrainRange?.[0] || '', train_end: cTrainRange?.[1] || '', val_start: cValRange?.[0] || '', val_end: cValRange?.[1] || '', test_start: cTestRange?.[0] || '', test_end: cTestRange?.[1] || '' }); message.success('Registered'); setCreateOpen(false); (async () => { setDatasets(await api.get('/api/admin/ml/datasets')); })(); }
     catch (e: any) { message.error(e.message); }
@@ -79,8 +83,18 @@ const DatasetsTab: React.FC = () => {
       ]} />
       <Modal title="新建数据集" open={createOpen} onCancel={() => setCreateOpen(false)} onOk={doCreate} okText="创建" width={800}>
         <Space direction="vertical" style={{ width: '100%' }}>
-          <Space><Text strong>名称:</Text><Input value={cName} onChange={e => setCName(e.target.value)} style={{ width: 200 }} /><Text strong>市场:</Text><Select value={cMarket} onChange={(v) => { setCMarket(v); setCSelectedFactors([]); }} style={{ width: 80 }} options={['us', 'hk'].map(m => ({ value: m, label: m.toUpperCase() }))} /><Text strong>Label:</Text><Select value={cLabel} onChange={setCLabel} style={{ width: 140 }} options={['fwd_ret_5d', 'fwd_ret_20d'].map(l => ({ value: l, label: l }))} /></Space>
-          <Space direction="vertical"><Text strong>因子:</Text><Checkbox.Group style={{ maxHeight: 300, overflow: 'auto', display: 'flex', flexDirection: 'column' }} value={cSelectedFactors} onChange={(v) => setCSelectedFactors(v as string[])} options={cFactors.map(f => ({ label: `${f.factor_id} (${f.source})`, value: f.factor_id }))} /></Space>
+          <Space><Text strong>名称:</Text><Input value={cName} onChange={e => setCName(e.target.value)} style={{ width: 200 }} /><Text strong>市场:</Text><Select value={cMarket} onChange={(v) => { setCMarket(v); setCSelectedFactors([]); fetchFactors(v); }} style={{ width: 80 }} options={['us', 'hk'].map(m => ({ value: m, label: m.toUpperCase() }))} /><Text strong>Label:</Text><Select value={cLabel} onChange={setCLabel} style={{ width: 140 }} options={['fwd_ret_5d', 'fwd_ret_20d'].map(l => ({ value: l, label: l }))} /></Space>
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Space><Text strong>因子类型:</Text>
+              <Select value={cSourceFilter} onChange={setCSourceFilter} style={{ width: 120 }} options={[
+                { value: 'all', label: '全部' },
+                ...Array.from(new Set(cFactors.map(f => f.source))).map(s => ({ value: s, label: s })),
+              ]} />
+              <Text type="secondary">{cSelectedFactors.length} / {cFactors.length} 已选择</Text>
+            </Space>
+            <Checkbox.Group style={{ maxHeight: 300, overflow: 'auto', display: 'flex', flexDirection: 'column' }}
+              value={cSelectedFactors} onChange={(v) => setCSelectedFactors(v as string[])}
+              options={cFactors.filter(f => cSourceFilter === 'all' || f.source === cSourceFilter).map(f => ({ label: `${f.factor_id} (${f.source})`, value: f.factor_id }))} /></Space>
           <Space><Text strong>训练:</Text><RangePicker onChange={(d) => d && d[0] && d[1] ? setCTrainRange([d[0].format('YYYY-MM-DD'), d[1].format('YYYY-MM-DD')]) : setCTrainRange(null)} /></Space>
           <Space><Text strong>验证:</Text><RangePicker onChange={(d) => d && d[0] && d[1] ? setCValRange([d[0].format('YYYY-MM-DD'), d[1].format('YYYY-MM-DD')]) : setCValRange(null)} /></Space>
           <Space><Text strong>测试:</Text><RangePicker onChange={(d) => d && d[0] && d[1] ? setCTestRange([d[0].format('YYYY-MM-DD'), d[1].format('YYYY-MM-DD')]) : setCTestRange(null)} /></Space>
@@ -144,6 +158,14 @@ const ModelCenterTab: React.FC = () => {
     catch (e: any) { message.error(e.message); }
   };
 
+  const doDelete = async (modelName: string) => {
+    try {
+      await api.del(`/api/admin/ml/center/${encodeURIComponent(modelName)}`);
+      message.success(`Deleted ${modelName}`);
+      (async () => { setItems(await api.get("/api/admin/ml/center")); })();
+    } catch (e: any) { message.error(e.message); }
+  };
+
   const doStage = async (modelName: string, version: string, stage: string) => {
     try { await api.post(`/api/admin/models/${modelName}/stage?version=${encodeURIComponent(version)}&stage=${stage}`); message.success(`${modelName} v${version} → ${stage}`); (async () => { setItems(await api.get('/api/admin/ml/center')); })(); }
     catch (e: any) { message.error(e.message); }
@@ -164,6 +186,9 @@ const ModelCenterTab: React.FC = () => {
       </Popconfirm>
       <Popconfirm title="Optuna 调优训练？" onConfirm={() => doTrain(r.config_name, false)} disabled={r.config_name === '—'}>
         <Button size="small" type="primary" icon={<ExperimentOutlined />} disabled={r.config_name === '—'}>调优</Button>
+      </Popconfirm>
+      <Popconfirm title="删除？有版本则拒绝" onConfirm={() => doDelete(r.model_name)} disabled={(r.versions || []).length > 0}>
+        <Button size="small" danger icon={<DeleteOutlined />} disabled={(r.versions || []).length > 0} />
       </Popconfirm>
     </Space>) },
   ];

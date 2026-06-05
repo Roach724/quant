@@ -792,7 +792,7 @@ def admin_cron_history(index: int):
 # ── Log Browser ───────────────────────────────────────────────────────────────
 
 LOG_ROOTS = ["/var/log/quant/prod", "/var/log/quant/dev"]
-LOG_MODULES = ["collector", "live", "factor", "cron", "train", "loader", "backfill", "quality", "adhoc"]
+LOG_MODULES = ["collector", "live", "paper_run", "factor", "cron", "train", "loader", "backfill", "quality", "adhoc"]
 
 
 def _module_log_files(module: str) -> list[str]:
@@ -1623,6 +1623,29 @@ def admin_ml_train(body: dict = Body(...)):
     session.add(task)
     session.commit()
     return {"task_id": task.id}
+
+
+@app.delete("/api/admin/ml/center/{model_name}")
+def admin_ml_center_delete(model_name: str):
+    """Delete model center entry. Fails if MLflow has registered versions."""
+    try:
+        r = requests.get(f"{MLFLOW_API}/model-versions/search", params={"name": model_name}, timeout=5)
+        versions = r.json().get("model_versions", [])
+        if versions:
+            raise HTTPException(409, detail=f"{model_name} 下有 {len(versions)} 个版本，请先在 MLflow 删除")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    session = get_session()
+    configs = session.query(_MlConfig).filter(
+        (_MlConfig.registry_model_name == model_name) |
+        (_MlConfig.name == model_name + ".yaml")
+    ).all()
+    for c in configs:
+        session.delete(c)
+    session.commit()
+    return {"status": "ok", "deleted_configs": len(configs)}
 
 
 # ── MLflow Proxy ─────────────────────────────────────────────────────────
