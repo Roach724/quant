@@ -35,6 +35,7 @@ const Factors: React.FC = () => {
   const actionRef = useRef<ActionType | undefined>(undefined);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedFactor, setSelectedFactor] = useState<FactorItem | null>(null);
+  const [evaluating, setEvaluating] = useState(false);
 
   // Batch compute state
   const [computeSource, setComputeSource] = useState('tech');
@@ -73,6 +74,18 @@ const Factors: React.FC = () => {
       actionRef.current?.reload();
     } catch (err: any) {
       message.error(`Toggle failed: ${err.message}`);
+    }
+  };
+
+  const handleEvaluate = async (factorId: string) => {
+    setEvaluating(true);
+    try {
+      const data = await api.post(`/api/admin/factors/${factorId}/evaluate`);
+      message.success(`Evaluation queued as task #${data.task_id}`);
+    } catch (err: any) {
+      message.error(`Evaluate failed: ${err.message}`);
+    } finally {
+      setEvaluating(false);
     }
   };
 
@@ -281,6 +294,16 @@ const Factors: React.FC = () => {
                 </Tag>
               </Descriptions.Item>
             </Descriptions>
+
+            <Button
+              type="primary"
+              loading={evaluating}
+              onClick={() => handleEvaluate(selectedFactor.factor_id)}
+              style={{ marginBottom: 16 }}
+            >
+              运行评估
+            </Button>
+
             <h4 style={{ marginBottom: 8 }}>Market Coverage</h4>
             <Table
               size="small"

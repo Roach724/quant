@@ -866,6 +866,21 @@ def admin_factor_toggle(factor_id: str, active: bool = True):
     return {"status": "ok", "factor_id": factor_id, "active": active}
 
 
+@app.post("/api/admin/factors/{factor_id}/evaluate")
+def admin_factor_evaluate(factor_id: str):
+    """Trigger factor evaluation via task queue."""
+    cmd = (
+        f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+        f".venv/bin/python3 -c \"from factors.registry import FactorRegistry; "
+        f"FactorRegistry().evaluate('{factor_id}')\""
+    )
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id, "factor_id": factor_id}
+
+
 @app.post("/api/admin/factors/compute")
 def admin_factor_compute(source: str = "tech", market: str = "us",
                          start: str = "2020-01-01", end: str = "2026-06-03"):

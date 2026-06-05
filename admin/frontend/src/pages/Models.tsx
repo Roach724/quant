@@ -51,6 +51,16 @@ interface VersionDetail {
   training_time: number | null;
 }
 
+interface TrainingHistory {
+  version: string;
+  run_id: string;
+  rmse: number | null;
+  ic: number | null;
+  dataset: string;
+  n_features: number;
+  n_trials: number;
+}
+
 interface CompareVersion extends VersionDetail {
   modelName: string;
 }
@@ -68,6 +78,8 @@ const ModelsTab: React.FC = () => {
   const [versionData, setVersionData] = useState<Record<string, VersionDetail[]>>({});
   const [versionLoading, setVersionLoading] = useState<Record<string, boolean>>({});
   const [versionError, setVersionError] = useState<Record<string, string>>({});
+  const [trainingHistory, setTrainingHistory] = useState<Record<string, TrainingHistory[]>>({});
+  const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
   const [selectedCompare, setSelectedCompare] = useState<CompareVersion[]>([]);
   const [compareOpen, setCompareOpen] = useState(false);
   const [stageLoading, setStageLoading] = useState<string | null>(null);
@@ -105,13 +117,30 @@ const ModelsTab: React.FC = () => {
     }
   }, []);
 
+  const fetchTrainingHistory = useCallback(async (modelName: string) => {
+    setHistoryLoading((prev) => ({ ...prev, [modelName]: true }));
+    try {
+      const data = await api.get(`/api/admin/models/${modelName}/history`);
+      setTrainingHistory((prev) => ({ ...prev, [modelName]: data as TrainingHistory[] }));
+    } catch (err: any) {
+      message.error(`Failed to load history for ${modelName}: ${err.message}`);
+    } finally {
+      setHistoryLoading((prev) => ({ ...prev, [modelName]: false }));
+    }
+  }, []);
+
   const handleExpand = useCallback(
     (expanded: boolean, record: ModelItem) => {
-      if (expanded && !versionData[record.name] && !versionLoading[record.name]) {
-        fetchVersions(record.name);
+      if (expanded) {
+        if (!versionData[record.name] && !versionLoading[record.name]) {
+          fetchVersions(record.name);
+        }
+        if (!trainingHistory[record.name] && !historyLoading[record.name]) {
+          fetchTrainingHistory(record.name);
+        }
       }
     },
-    [versionData, versionLoading, fetchVersions],
+    [versionData, versionLoading, fetchVersions, trainingHistory, historyLoading, fetchTrainingHistory],
   );
 
   const handleCompareToggle = useCallback(
@@ -260,6 +289,8 @@ const ModelsTab: React.FC = () => {
     const versions = versionData[record.name];
     const loading = versionLoading[record.name];
     const err = versionError[record.name];
+    const history = trainingHistory[record.name];
+    const histLoading = historyLoading[record.name];
 
     if (err) {
       return <div style={{ padding: 16, color: '#ff4d4f' }}>加载失败: {err}</div>;
@@ -285,6 +316,36 @@ const ModelsTab: React.FC = () => {
           pagination={false}
           size="small"
           locale={{ emptyText: '暂无版本数据' }}
+        />
+
+        <h4 style={{ margin: '12px 0 8px', fontSize: 14 }}>Training History</h4>
+        <Table<TrainingHistory>
+          dataSource={history || []}
+          loading={histLoading}
+          rowKey="run_id"
+          size="small"
+          pagination={false}
+          locale={{ emptyText: '暂无训练记录' }}
+          columns={[
+            { title: '版本', dataIndex: 'version', width: 60, key: 'version' },
+            {
+              title: 'RMSE',
+              dataIndex: 'rmse',
+              width: 90,
+              key: 'rmse',
+              render: (v: number | null) => (v != null ? v.toFixed(4) : '-'),
+            },
+            {
+              title: 'IC',
+              dataIndex: 'ic',
+              width: 90,
+              key: 'ic',
+              render: (v: number | null) => (v != null ? v.toFixed(4) : '-'),
+            },
+            { title: 'Trials', dataIndex: 'n_trials', width: 70, key: 'n_trials' },
+            { title: 'Features', dataIndex: 'n_features', width: 70, key: 'n_features' },
+            { title: 'Dataset', dataIndex: 'dataset', key: 'dataset', ellipsis: true },
+          ]}
         />
       </div>
     );
