@@ -100,7 +100,7 @@ const LogBrowser: React.FC = () => {
         <Space><Switch checked={live} onChange={setLive} /><Text style={{ fontSize: 12 }}>Live</Text></Space>
         {fileName && <Text type="secondary" style={{ fontSize: 11 }}>{fileName}</Text>}
       </div>
-      <div ref={containerRef} style={{ height: 'calc(100vh - 250px)', overflow: 'auto', background: '#1e1e1e', borderRadius: 6, padding: 12, fontFamily: 'monospace', fontSize: 12, lineHeight: 1.6 }}>
+      <div ref={containerRef} style={{ height: 'calc(100vh - 250px)', overflow: 'auto', background: '#1e1e1e', borderRadius: 6, padding: 12, fontFamily: 'monospace', fontSize: 12, lineHeight: 1.6, textAlign: 'left' }}>
         {lines.map((line, i) => (
           <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
             <span style={{ color: '#888' }}>{extractTime(line.ts)} </span>
@@ -187,7 +187,7 @@ const LogManager: React.FC = () => {
           },
         ]} />
       <Modal title={`预览: ${previewName}`} open={previewOpen} onCancel={() => setPreviewOpen(false)} footer={null} width={900}>
-        <div style={{ maxHeight: 500, overflow: 'auto', background: '#1e1e1e', borderRadius: 6, padding: 12, fontFamily: 'monospace', fontSize: 12, lineHeight: 1.6 }}>
+        <div style={{ maxHeight: 500, overflow: 'auto', background: '#1e1e1e', borderRadius: 6, padding: 12, fontFamily: 'monospace', fontSize: 12, lineHeight: 1.6, textAlign: 'left' }}>
           {previewLines.map((line, i) => (
             <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
               <span style={{ color: '#888' }}>{extractTime(line.ts)} </span>
