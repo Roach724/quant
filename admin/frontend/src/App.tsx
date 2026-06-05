@@ -6,7 +6,7 @@ import {
   DashboardOutlined,
   FunctionOutlined,
 } from '@ant-design/icons';
-import ProLayout, { PageContainer } from '@ant-design/pro-layout';
+import ProLayout from '@ant-design/pro-layout';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import './App.css';
@@ -25,12 +25,6 @@ const menuData = [
   { path: '/models', name: '模型 & 策略', icon: <DashboardOutlined /> },
   { path: '/factors', name: '因子管理', icon: <FunctionOutlined /> },
 ];
-
-const PlaceholderPage = ({ title }: { title: string }) => (
-  <PageContainer header={{ title }}>
-    <div style={{ minHeight: 300 }}>{title}</div>
-  </PageContainer>
-);
 
 function AppLayout() {
   const navigate = useNavigate();

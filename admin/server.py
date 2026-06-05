@@ -475,6 +475,14 @@ def admin_factors():
     except Exception:
         pass
 
+    import math
+
+    def _clean(val):
+        """Convert NaN/Inf to None for JSON serialization."""
+        if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+            return None
+        return val
+
     result = []
     for _, row in active.iterrows():
         fid = row["factor_id"]
@@ -485,7 +493,7 @@ def admin_factors():
             "status": "active" if is_active else "inactive",
             "markets": [c["market"] for c in coverage.get(fid, [])],
             "coverage": coverage.get(fid, []),
-            "latest_ic": row.get("latest_ic_mean"),
+            "latest_ic": _clean(row.get("latest_ic_mean")),
         })
     return result
 
@@ -502,6 +510,16 @@ def admin_factor_compute(source: str = "tech", market: str = "us",
     session.add(task)
     session.commit()
     return {"task_id": task.id}
+
+
+# ── Static file serving (production build, after all API routes) ──────────────
+
+from fastapi.staticfiles import StaticFiles
+import os as _os
+
+DIST = _os.path.join(_os.path.dirname(__file__), "frontend", "dist")
+if _os.path.isdir(DIST):
+    app.mount("/", StaticFiles(directory=DIST, html=True), name="static")
 
 
 if __name__ == "__main__":
