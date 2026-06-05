@@ -1104,6 +1104,15 @@ def admin_model_stage(name: str, version: str = "", stage: str = ""):
         json={"name": name, "version": version, "stage": stage},
         timeout=5,
     )
+    if r.status_code != 200:
+        # Try GET for MLflow 3.x
+        r2 = requests.get(
+            f"{MLFLOW_API}/model-versions/transition-stage",
+            params={"name": name, "version": version, "stage": stage},
+            timeout=5,
+        )
+        if r2.status_code == 200:
+            return r2.json()
     return r.json()
 
 
@@ -1549,10 +1558,29 @@ def admin_ml_center():
             continue
         seen.add(model_name)
         cfg = config_map.get(model_name, {})
+        # Fetch full version details with metrics
         mlflow_versions = []
         try:
             rv = requests.get(f"{MLFLOW_API}/model-versions/search", params={"name": model_name}, timeout=5)
-            mlflow_versions = rv.json().get("model_versions", [])
+            raw_versions = rv.json().get("model_versions", [])
+            for v in raw_versions:
+                vdet = {
+                    "version": v.get("version", ""),
+                    "stage": v.get("current_stage", ""),
+                    "run_id": v.get("run_id", ""),
+                }
+                # Fetch run metrics
+                try:
+                    rr = requests.get(f"{MLFLOW_API}/runs/get", params={"run_id": v["run_id"]}, timeout=5)
+                    run_data = rr.json().get("run", {}).get("data", {})
+                    vdet["rmse"] = next((m["value"] for m in run_data.get("metrics", []) if m["key"] == "rmse"), None)
+                    vdet["ic"] = next((m["value"] for m in run_data.get("metrics", []) if m["key"] == "rank_ic"), None)
+                    vdet["icir"] = next((m["value"] for m in run_data.get("metrics", []) if m["key"] == "icir"), None)
+                    vdet["n_features"] = next((int(p["value"]) for p in run_data.get("params", []) if p["key"] == "n_features"), None)
+                    vdet["dataset"] = next((p["value"] for p in run_data.get("params", []) if p["key"] == "dataset_name"), None)
+                except Exception:
+                    pass
+                mlflow_versions.append(vdet)
         except Exception:
             pass
         result.append({
