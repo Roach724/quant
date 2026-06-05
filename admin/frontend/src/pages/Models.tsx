@@ -28,11 +28,15 @@ const stageColor: Record<string, string> = { Production: 'green', Staging: 'oran
 const ModelsPage: React.FC = () => {
   const [tab, setTab] = useState('center');
   return (
+    <div>
+      <div style={{ fontSize: 11, color: '#bbb', marginBottom: 8 }}>v2 — 模型中心 · ML 配置 · 数据集</div>
     <Tabs activeKey={tab} onChange={setTab} items={[
       { key: 'datasets', label: '数据集', children: <DatasetsTab /> },
       { key: 'configs', label: 'ML 配置', children: <MlConfigsTab /> },
       { key: 'center', label: '模型中心', children: <ModelCenterTab /> },
+      { key: 'mlflow', label: 'MLflow', children: <MlflowTab /> },
     ]} />
+    </div>
   );
 };
 
@@ -195,6 +199,29 @@ const ModelCenterTab: React.FC = () => {
         expandedRowRender: renderVersions,
       }}
     />
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MlflowTab — embedded MLflow Web UI
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const MlflowTab: React.FC = () => {
+  const mlflowUrl = `${window.location.protocol}//${window.location.hostname}:5000`;
+  return (
+    <div>
+      <Space style={{ marginBottom: 12 }}>
+        <Button type="primary" onClick={() => window.open(mlflowUrl, '_blank')}>
+          在新窗口打开 MLflow
+        </Button>
+        <Text type="secondary">内嵌 iframe 可能被浏览器阻止，可点击按钮在新窗口打开</Text>
+      </Space>
+      <iframe
+        src={mlflowUrl}
+        style={{ width: '100%', height: 'calc(100vh - 200px)', border: '1px solid #d9d9d9', borderRadius: 6 }}
+        title="MLflow UI"
+      />
+    </div>
   );
 };
 
