@@ -388,6 +388,18 @@ def admin_experiment_delete(exp_id: str):
                 except Exception as e:
                     results[f"log_{f.name}"] = str(e)[:80]
 
+    # 4.5 Delete experiment config file
+    config_path = Path("/opt/quant-prod") / exp.config_path
+    if config_path.exists():
+        try:
+            # Backup to .del first, then remove
+            backup = config_path.with_suffix(config_path.suffix + ".del")
+            shutil.copy2(config_path, backup)
+            config_path.unlink()
+            results["config_file"] = f"deleted (backup: {backup.name})"
+        except Exception as e:
+            results["config_file"] = str(e)[:80]
+
     # 5. Unregister
     try:
         mgr.delete(exp_id)
