@@ -119,6 +119,41 @@ def admin_experiments():
     } for e in mgr.list()]
 
 
+@app.get("/api/admin/experiments/{exp_id}/runs")
+def admin_experiment_runs(exp_id: str):
+    """Return run history for an experiment."""
+    mgr = ExperimentManager()
+    try:
+        runs = mgr.runs(exp_id)
+        return [{
+            "run_id": r.run_id,
+            "status": r.status,
+            "started_at": r.started_at,
+            "ended_at": r.ended_at,
+        } for r in runs]
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+
+@app.post("/api/admin/experiments/register")
+def admin_experiment_register(data: dict):
+    """Register a new experiment."""
+    mgr = ExperimentManager()
+    try:
+        exp_id = mgr.register(
+            exp_type=data.get("type", "live"),
+            market=data.get("market", "us"),
+            strategy=data.get("strategy", "ml"),
+            version=int(data.get("version", 1)),
+            config_path=data.get("config_path", ""),
+            name=data.get("name", ""),
+        )
+        exp = mgr.get(exp_id)
+        return {"exp_id": exp.id, "status": exp.status}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/api/admin/experiments/{exp_id}/{action}")
 def admin_experiment_action(exp_id: str, action: str):
     """start / stop / restart an experiment via task queue."""
@@ -213,9 +248,26 @@ def admin_collector_action(action: str):
 
 # ── Cron Management ───────────────────────────────────────────────────────────
 
+CRON_REGISTRY = os.environ.get(
+    "CRON_REGISTRY_PATH",
+    os.path.join(os.path.dirname(__file__), "..", "config", "cron_registry.json"),
+)
+
+
 @app.get("/api/admin/cron")
 def admin_cron_list():
-    """Read system crontab, parse into structured jobs."""
+    """Read cron job registry; fall back to system crontab."""
+    # Try cron registry first
+    resolved = os.path.abspath(CRON_REGISTRY)
+    if os.path.isfile(resolved):
+        try:
+            with open(resolved) as f:
+                data = _json.load(f)
+            return data.get("jobs", [])
+        except Exception:
+            pass  # Fall through to system crontab
+
+    # Fallback to system crontab
     r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
     lines = r.stdout.strip().split("\n") if r.stdout.strip() else []
     jobs = []
@@ -225,7 +277,8 @@ def admin_cron_list():
             if line.startswith("#"):
                 jobs.append({
                     "index": i, "raw": line, "enabled": False,
-                    "schedule": "", "command": "", "comment": line.lstrip("# ")
+                    "schedule": "", "command": "", "comment": line.lstrip("# "),
+                    "name": "", "description": "",
                 })
             continue
         parts = line.split(None, 5)
@@ -234,13 +287,31 @@ def admin_cron_list():
                 "index": i, "raw": line, "enabled": True,
                 "schedule": " ".join(parts[:5]),
                 "command": parts[5], "comment": "",
+                "name": "", "description": "",
             })
     return jobs
 
 
 @app.post("/api/admin/cron")
 def admin_cron_save(jobs: list[dict]):
-    """Save updated crontab."""
+    """Save updated cron jobs — write back to registry if it exists, else crontab."""
+    resolved = os.path.abspath(CRON_REGISTRY)
+
+    # If registry exists, save back to it
+    if os.path.isfile(resolved):
+        out = [{
+            "name": j.get("name", ""),
+            "description": j.get("description", ""),
+            "schedule": j.get("schedule", ""),
+            "command": j.get("command", ""),
+            "enabled": j.get("enabled", False),
+        } for j in jobs]
+        os.makedirs(os.path.dirname(resolved), exist_ok=True)
+        with open(resolved, "w") as f:
+            _json.dump({"jobs": out}, f, ensure_ascii=False, indent=2)
+        return {"status": "ok"}
+
+    # Fallback: system crontab
     lines = []
     for j in jobs:
         if j.get("raw"):
@@ -456,9 +527,11 @@ def admin_factors():
     try:
         cov_rows = client.query("""
             SELECT factor_id,
-              CASE WHEN STARTS_WITH(symbol, 'US.') THEN 'us'
-                   WHEN STARTS_WITH(symbol, 'HK.') THEN 'hk'
-                   ELSE 'crypto' END AS market,
+              CASE
+                WHEN STARTS_WITH(symbol, 'HK.') THEN 'hk'
+                WHEN REGEXP_CONTAINS(symbol, r'^[A-Z]{1,5}([-_][A-Z])?$') THEN 'us'
+                WHEN REGEXP_CONTAINS(symbol, r'^[0-9]+$') THEN 'hk'
+                ELSE 'crypto' END AS market,
               COUNT(DISTINCT symbol) AS symbols,
               MIN(date) AS min_date, MAX(date) AS max_date, COUNT(*) AS total_rows
             FROM quant.factor_values

@@ -6,12 +6,14 @@ import { useRef } from 'react';
 import { api } from '../api';
 
 interface CronJob {
-  index: number;
-  raw: string;
+  index?: number;
+  raw?: string;
   enabled: boolean;
   schedule: string;
   command: string;
-  comment: string;
+  comment?: string;
+  name?: string;
+  description?: string;
 }
 
 const CronJobs: React.FC = () => {
@@ -54,9 +56,33 @@ const CronJobs: React.FC = () => {
 
   const columns: ProColumns<CronJob>[] = [
     {
+      title: 'Name',
+      dataIndex: 'name',
+      width: 180,
+      key: 'name',
+      ellipsis: true,
+      render: (_, r) => (
+        <span style={{ fontWeight: 600, fontSize: 13 }}>
+          {r.name || r.command || r.comment || '—'}
+        </span>
+      ),
+    },
+    {
+      title: 'Description',
+      dataIndex: 'description',
+      key: 'description',
+      ellipsis: true,
+      render: (_, r) =>
+        r.description ? (
+          <span style={{ color: '#666', fontSize: 13 }}>{r.description}</span>
+        ) : (
+          <span style={{ color: '#bbb' }}>—</span>
+        ),
+    },
+    {
       title: 'Schedule',
       dataIndex: 'schedule',
-      width: 150,
+      width: 130,
       key: 'schedule',
       ellipsis: true,
       render: (_, r) => (
@@ -69,27 +95,34 @@ const CronJobs: React.FC = () => {
       title: 'Command',
       dataIndex: 'command',
       key: 'command',
+      width: 260,
       ellipsis: true,
-      render: (_, r) => (
-        <span style={{ fontFamily: 'monospace', fontSize: 13 }}>
-          {r.command || r.comment || '—'}
-        </span>
-      ),
+      render: (_, r) => {
+        const text = r.command || '—';
+        return (
+          <span
+            title={text}
+            style={{ fontFamily: 'monospace', fontSize: 12, color: '#555' }}
+          >
+            {text}
+          </span>
+        );
+      },
     },
     {
-      title: 'Status',
+      title: 'Enabled',
       dataIndex: 'enabled',
-      width: 80,
-      key: 'status',
+      width: 90,
+      key: 'enabled',
       render: (_, r) =>
         r.enabled ? (
           <Tag color="green">Enabled</Tag>
         ) : (
-          <Tag>Disabled</Tag>
+          <Tag color="red">Disabled</Tag>
         ),
     },
     {
-      title: 'Enabled',
+      title: 'Toggle',
       dataIndex: 'enabled',
       width: 80,
       key: 'toggle',
@@ -131,9 +164,9 @@ const CronJobs: React.FC = () => {
       columns={columns}
       request={async () => {
         const allJobs: CronJob[] = await api.get('/api/admin/cron');
-        // Filter: show active jobs + comment lines that describe the job
+        // Show enabled jobs, or jobs with names (registry entries), or comment lines
         const filtered = allJobs.filter(
-          (j) => j.enabled || (j.comment && !j.schedule && !j.command)
+          (j) => j.enabled || j.name || (j.comment && !j.schedule && !j.command)
         );
         return { data: filtered, success: true, total: filtered.length };
       }}
