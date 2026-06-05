@@ -171,6 +171,67 @@ def admin_experiment_action(exp_id: str, action: str):
     return {"task_id": task.id, "status": "pending"}
 
 
+@app.post("/api/admin/experiments/{exp_id}/clear")
+def admin_experiment_clear(exp_id: str):
+    """Clear all experiment data: BQ + state files + registry runs."""
+    from google.cloud import bigquery as _bq
+
+    mgr = ExperimentManager()
+
+    # Make sure experiment exists
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+    results: dict[str, str] = {}
+
+    # 1. Clear BQ data
+    client = _bq.Client(project="deductive-notch-495015-c2")
+    for table in ["experiment_equity", "experiment_trades", "experiment_runs"]:
+        try:
+            client.query(
+                f"DELETE FROM quant.{table} WHERE exp_id='{exp_id}'"
+            ).result()
+            results[table] = "cleared"
+        except Exception as e:
+            results[table] = str(e)[:80]
+
+    # 2. Clear state files
+    strategy = exp.strategy
+    state_dirs = [
+        f"/var/quant/state/{strategy}/",
+        f"/var/quant/state/{strategy}_hk/",
+    ]
+    shared_state_file = f"/var/quant/state/{strategy}.json"
+    for d in state_dirs:
+        if not os.path.isdir(d):
+            continue
+        for f in glob.glob(os.path.join(d, "*.json")):
+            try:
+                os.remove(f)
+                results[f"state_{os.path.basename(f)}"] = "deleted"
+            except Exception as e:
+                results[f"state_{os.path.basename(f)}"] = str(e)[:80]
+
+    # Also remove shared state file if it exists
+    if os.path.isfile(shared_state_file):
+        try:
+            os.remove(shared_state_file)
+            results[f"state_{strategy}.json"] = "deleted"
+        except Exception as e:
+            results[f"state_{strategy}.json"] = str(e)[:80]
+
+    # 3. Reset registry runs
+    mgr._data[exp_id]["runs"] = []
+    mgr._data[exp_id]["current_run"] = None
+    mgr._data[exp_id]["status"] = "pending"
+    mgr._save()
+    results["registry"] = "reset to pending"
+
+    return {"status": "ok", "details": results}
+
+
 # ── Data Map + Collector status ──────────────────────────────────────────────
 
 @app.get("/api/admin/data/tables")
@@ -232,6 +293,19 @@ def admin_data_collectors():
     except Exception:
         pass
     return {"ws_collector": status, "last_heartbeat": heartbeat}
+
+
+@app.post("/api/admin/data/backfill")
+def admin_data_backfill(market: str = "us", start: str = "2020-01-01", end: str = "2026-06-03"):
+    """Trigger data backfill via worker."""
+    cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+           f".venv/bin/python3 collectors/backfill.py "
+           f"--market {market} --start {start} --end {end}")
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id}
 
 
 @app.post("/api/admin/data/collector/{action}")
@@ -323,6 +397,48 @@ def admin_cron_save(jobs: list[dict]):
     if proc.returncode != 0:
         return {"error": proc.stderr}, 400
     return {"status": "ok"}
+
+
+@app.post("/api/admin/cron/add")
+def admin_cron_add(job: dict = Body(...)):
+    """Add a new cron job to the registry."""
+    resolved = os.path.abspath(CRON_REGISTRY)
+    os.makedirs(os.path.dirname(resolved), exist_ok=True)
+    if os.path.isfile(resolved):
+        with open(resolved) as f:
+            data = _json.load(f)
+    else:
+        data = {"jobs": []}
+    data.setdefault("jobs", []).append({
+        "name": job.get("name", ""),
+        "description": job.get("description", ""),
+        "schedule": job.get("schedule", ""),
+        "command": job.get("command", ""),
+        "enabled": job.get("enabled", True),
+    })
+    with open(resolved, "w") as f:
+        _json.dump(data, f, indent=2, ensure_ascii=False)
+    return {"status": "ok"}
+
+
+@app.put("/api/admin/cron/{index}")
+def admin_cron_update(index: int, job: dict = Body(...)):
+    """Update a cron job (full or partial — e.g. toggle enabled)."""
+    resolved = os.path.abspath(CRON_REGISTRY)
+    if not os.path.isfile(resolved):
+        return {"error": "Cron registry not found"}, 404
+    with open(resolved) as f:
+        data = _json.load(f)
+    if not (0 <= index < len(data.get("jobs", []))):
+        return {"error": "Invalid index"}, 400
+    target = data["jobs"][index]
+    # Partial update: only overwrite fields present in request
+    for key in ("name", "description", "schedule", "command", "enabled"):
+        if key in job:
+            target[key] = job[key]
+    with open(resolved, "w") as f:
+        _json.dump(data, f, indent=2, ensure_ascii=False)
+    return {"status": "ok", "job": target}
 
 
 @app.post("/api/admin/cron/run")
@@ -474,6 +590,58 @@ def admin_train_model(model_name: str, market: str = "us"):
     return {"task_id": task.id}
 
 
+@app.get("/api/admin/models/{name}/versions")
+def admin_model_versions(name: str):
+    """Get all versions of a model with metrics."""
+    rv = requests.post(
+        f"{MLFLOW_API}/model-versions/search",
+        json={"filter": f"name='{name}'"},
+        timeout=5,
+    )
+    versions = rv.json().get("model_versions", [])
+    result = []
+    for v in versions:
+        try:
+            run_r = requests.get(
+                f"{MLFLOW_API}/runs/get",
+                json={"run_id": v["run_id"]},
+                timeout=5,
+            )
+            run_data = run_r.json().get("run", {}).get("data", {})
+            metrics = {m["key"]: m["value"] for m in run_data.get("metrics", [])}
+            params = {p["key"]: p["value"] for p in run_data.get("params", [])}
+            run_info = run_r.json().get("run", {}).get("info", {})
+            start_time = run_info.get("start_time", 0)
+            end_time = run_info.get("end_time", 0)
+            training_time = round((end_time - start_time) / 1000, 1) if end_time and start_time else None
+        except Exception:
+            metrics = {}
+            params = {}
+            training_time = None
+        result.append({
+            "version": v["version"],
+            "stage": v.get("current_stage", ""),
+            "run_id": v.get("run_id", ""),
+            "rmse": metrics.get("rmse"),
+            "ic": metrics.get("ic"),
+            "n_features": int(params.get("n_features", 0)),
+            "dataset": params.get("dataset", ""),
+            "training_time": training_time,
+        })
+    return result
+
+
+@app.post("/api/admin/models/{name}/stage")
+def admin_model_stage(name: str, version: str = "", stage: str = ""):
+    """Transition a model version to a new stage."""
+    r = requests.post(
+        f"{MLFLOW_API}/model-versions/transition-stage",
+        json={"name": name, "version": version, "stage": stage},
+        timeout=5,
+    )
+    return r.json()
+
+
 @app.get("/api/admin/strategies")
 def admin_strategies():
     """List strategy files in strategies/ directory."""
@@ -569,6 +737,18 @@ def admin_factors():
             "latest_ic": _clean(row.get("latest_ic_mean")),
         })
     return result
+
+
+@app.post("/api/admin/factors/{factor_id}/toggle")
+def admin_factor_toggle(factor_id: str, active: bool = True):
+    """Activate or deactivate a factor."""
+    from factors.registry import FactorRegistry
+    reg = FactorRegistry()
+    if active:
+        reg.activate(factor_id)
+    else:
+        reg.deactivate(factor_id)
+    return {"status": "ok", "factor_id": factor_id, "active": active}
 
 
 @app.post("/api/admin/factors/compute")

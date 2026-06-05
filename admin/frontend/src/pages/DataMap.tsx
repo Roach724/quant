@@ -3,10 +3,11 @@ import {
   PlayCircleOutlined,
   PauseCircleOutlined,
   ReloadOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
-import { Tag, Button, Space, message, Tooltip, Card, Drawer, Table, Typography } from 'antd';
+import { Tag, Button, Space, message, Tooltip, Card, Drawer, Table, Typography, Select, DatePicker } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { api } from '../api';
@@ -64,6 +65,32 @@ const DataMap: React.FC = () => {
     tableName: string;
     columns: TableSchema[];
   }>({ open: false, tableName: '', columns: [] });
+
+  // ── Backfill state ──
+  const [backfillMarket, setBackfillMarket] = useState('us');
+  const [backfillDates, setBackfillDates] = useState<[string, string] | null>(null);
+  const [backfilling, setBackfilling] = useState(false);
+
+  const handleBackfill = async () => {
+    if (!backfillDates) {
+      message.warning('请选择日期范围');
+      return;
+    }
+    setBackfilling(true);
+    try {
+      const params = new URLSearchParams({
+        market: backfillMarket,
+        start: backfillDates[0],
+        end: backfillDates[1],
+      });
+      const data = await api.post(`/api/admin/data/backfill?${params.toString()}`);
+      message.success(`回填任务已创建 #${data.task_id}`);
+    } catch (err: any) {
+      message.error(`回填失败: ${err.message}`);
+    } finally {
+      setBackfilling(false);
+    }
+  };
 
   const loadCollector = () => {
     api.get('/api/admin/data/collectors').then(setCollector).catch(() => {});
@@ -208,6 +235,55 @@ const DataMap: React.FC = () => {
                 : 'N/A'}
             </Text>
           </Space>
+        </Space>
+      </Card>
+
+      {/* ── Data Backfill Card ────────────────────────────────────────────── */}
+      <Card
+        title={
+          <Space>
+            <HistoryOutlined />
+            <span>数据回填</span>
+          </Space>
+        }
+        style={{ marginBottom: 16 }}
+      >
+        <Space wrap>
+          <Space>
+            <Text strong>市场:</Text>
+            <Select
+              value={backfillMarket}
+              onChange={setBackfillMarket}
+              style={{ width: 100 }}
+              options={[
+                { value: 'us', label: 'US' },
+                { value: 'hk', label: 'HK' },
+              ]}
+            />
+          </Space>
+          <Space>
+            <Text strong>日期范围:</Text>
+            <DatePicker.RangePicker
+              onChange={(dates) => {
+                if (dates && dates[0] && dates[1]) {
+                  setBackfillDates([
+                    dates[0].format('YYYY-MM-DD'),
+                    dates[1].format('YYYY-MM-DD'),
+                  ]);
+                } else {
+                  setBackfillDates(null);
+                }
+              }}
+            />
+          </Space>
+          <Button
+            type="primary"
+            icon={<HistoryOutlined />}
+            onClick={handleBackfill}
+            loading={backfilling}
+          >
+            开始回填
+          </Button>
         </Space>
       </Card>
 

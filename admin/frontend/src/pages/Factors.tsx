@@ -1,7 +1,7 @@
-import { EyeOutlined } from '@ant-design/icons';
+import { EyeOutlined, PauseCircleOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
-import { Tag, Button, Drawer, Select, DatePicker, Space, message, Table, Descriptions } from 'antd';
+import { Tag, Button, Drawer, Select, DatePicker, Space, message, Table, Descriptions, Tooltip, Popconfirm } from 'antd';
 import { useRef, useState } from 'react';
 import { api } from '../api';
 
@@ -61,6 +61,18 @@ const Factors: React.FC = () => {
       message.error(`Failed: ${err.message}`);
     } finally {
       setComputing(false);
+    }
+  };
+
+  const handleToggle = async (factorId: string, currentActive: boolean) => {
+    const newActive = !currentActive;
+    try {
+      const params = new URLSearchParams({ active: String(newActive) });
+      await api.post(`/api/admin/factors/${factorId}/toggle?${params.toString()}`);
+      message.success(`${factorId}: ${newActive ? '已启用' : '已暂停'}`);
+      actionRef.current?.reload();
+    } catch (err: any) {
+      message.error(`Toggle failed: ${err.message}`);
     }
   };
 
@@ -131,6 +143,35 @@ const Factors: React.FC = () => {
       key: 'latest_ic',
       render: (_, r) =>
         r.latest_ic != null ? r.latest_ic.toFixed(4) : '-',
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 120,
+      render: (_, r) => {
+        const isActive = r.status === 'active';
+        return (
+          <Space size={4}>
+            <Tooltip title={isActive ? '暂停' : '启用'}>
+              <Popconfirm
+                title={isActive ? `确定暂停 ${r.factor_id}?` : `确定启用 ${r.factor_id}?`}
+                onConfirm={() => handleToggle(r.factor_id, isActive)}
+                okText="确定"
+                cancelText="取消"
+              >
+                <Button
+                  size="small"
+                  type={isActive ? 'default' : 'primary'}
+                  icon={isActive ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+                  danger={isActive}
+                >
+                  {isActive ? '暂停' : '启用'}
+                </Button>
+              </Popconfirm>
+            </Tooltip>
+          </Space>
+        );
+      },
     },
     {
       title: 'Detail',
