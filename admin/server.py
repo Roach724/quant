@@ -1144,6 +1144,19 @@ def admin_strategy_save(name: str, body: dict = Body(...)):
     return {"status": "saved"}
 
 
+@app.delete("/api/admin/strategies/{name}")
+def admin_strategy_delete(name: str):
+    """Delete a strategy file (backup to .del)."""
+    import shutil
+    path = f"/opt/quant-prod/strategies/{name}"
+    if not name.endswith(".py") or name == "__init__.py":
+        return {"error": "Cannot delete this file"}, 400
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
+    shutil.move(path, path + ".del")
+    return {"status": "ok", "backup": name + ".del"}
+
+
 # ── Factor Management ──────────────────────────────────────────────────────────
 
 @app.get("/api/admin/factors")

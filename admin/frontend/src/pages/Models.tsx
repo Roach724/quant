@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  PlusOutlined, DeleteOutlined, SettingOutlined,
+  PlusOutlined, DeleteOutlined, SettingOutlined, EyeOutlined,
   ThunderboltOutlined, ExperimentOutlined, CheckCircleOutlined,
 } from '@ant-design/icons';
 import {
@@ -34,6 +34,7 @@ const ModelsPage: React.FC = () => {
       { key: 'datasets', label: '数据集', children: <DatasetsTab /> },
       { key: 'configs', label: 'ML 配置', children: <MlConfigsTab /> },
       { key: 'center', label: '模型中心', children: <ModelCenterTab /> },
+      { key: 'strategies', label: '策略', children: <StrategiesTab /> },
       { key: 'mlflow', label: 'MLflow', children: <MlflowTab /> },
     ]} />
     </div>
@@ -224,6 +225,62 @@ const ModelCenterTab: React.FC = () => {
         expandedRowRender: renderVersions,
       }}
     />
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// StrategiesTab — browse/edit strategy files
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const StrategiesTab: React.FC = () => {
+  const [strategies, setStrategies] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorName, setEditorName] = useState('');
+  const [editorSource, setEditorSource] = useState('');
+  const [viewOpen, setViewOpen] = useState(false);
+  const [viewName, setViewName] = useState('');
+  const [viewSource, setViewSource] = useState('');
+
+  const load = async () => { setLoading(true); try { setStrategies(await api.get('/api/admin/strategies')); } catch { } finally { setLoading(false); } };
+  useEffect(() => { load(); }, []);
+
+  const openView = async (name: string) => {
+    try { const d = await api.get(`/api/admin/strategies/${name}`); setViewName(name); setViewSource(d.source || ''); setViewOpen(true); } catch { }
+  };
+  const openEdit = async (name: string) => {
+    try { const d = await api.get(`/api/admin/strategies/${name}`); setEditorName(name); setEditorSource(d.source || ''); setEditorOpen(true); } catch { }
+  };
+  const saveEdit = async () => {
+    try { await api.put(`/api/admin/strategies/${editorName}`, { source: editorSource }); message.success('Saved'); setEditorOpen(false); load(); } catch (e: any) { message.error(e.message); }
+  };
+  const doDelete = async (name: string) => {
+    try { await api.del(`/api/admin/strategies/${name}`); message.success(`Deleted ${name}`); load(); } catch (e: any) { message.error(e.message); }
+  };
+
+  return (
+    <>
+      <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditorName(''); setEditorSource(''); setEditorOpen(true); }} style={{ marginBottom: 16 }}>新建策略</Button>
+      <Table dataSource={strategies} rowKey="name" loading={loading} size="small"
+        columns={[
+          { title: '文件', dataIndex: 'name', width: 220 },
+          { title: '路径', dataIndex: 'path', ellipsis: true },
+          { title: '操作', width: 200, render: (_, r) => (<Space>
+            <Button size="small" icon={<EyeOutlined />} onClick={() => openView(r.name)}>查看</Button>
+            <Button size="small" icon={<SettingOutlined />} onClick={() => openEdit(r.name)}>编辑</Button>
+            {r.name !== '__init__.py' && <Popconfirm title={`删除 ${r.name}？`} onConfirm={() => doDelete(r.name)} okButtonProps={{ danger: true }}>
+              <Button size="small" danger icon={<DeleteOutlined />} /></Popconfirm>}
+          </Space>) },
+        ]} />
+      <Drawer title={`查看: ${viewName}`} open={viewOpen} onClose={() => setViewOpen(false)} width={700}>
+        <pre style={{ fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre-wrap', background: '#fafafa', padding: 16, borderRadius: 6 }}>{viewSource}</pre>
+      </Drawer>
+      <Drawer title={editorName ? `编辑: ${editorName}` : '新建策略'} open={editorOpen} onClose={() => setEditorOpen(false)} width={700}
+        extra={<Button type="primary" onClick={saveEdit}>保存</Button>}>
+        {!editorName && <Input placeholder="策略文件名 (e.g. my_strat.py)" onChange={e => setEditorName(e.target.value + '.py')} style={{ marginBottom: 12 }} />}
+        <Input.TextArea value={editorSource} onChange={e => setEditorSource(e.target.value)} rows={30} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+      </Drawer>
+    </>
   );
 };
 
