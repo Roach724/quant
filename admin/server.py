@@ -555,7 +555,9 @@ def admin_logs(
         return {"module": module, "lines": [], "file": None, "files": []}
     # If file param given, find matching file; else default to most recent
     if file:
-        log_file = file if os.path.isfile(file) else files[0]
+        # file could be a basename or full path — find the matching one
+        match = [f for f in files if f.endswith("/" + file) or f == file]
+        log_file = match[0] if match else files[0]
     else:
         log_file = files[0]
     # Parse optional time range filter
