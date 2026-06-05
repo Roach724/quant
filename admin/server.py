@@ -927,6 +927,48 @@ async def ws_logs(websocket: WebSocket, module: str = "collector"):
         await websocket.close()
 
 
+# ── Log File Management ───────────────────────────────────────────────────────
+
+@app.get("/api/admin/logs/files")
+def admin_log_files(module: str = Query("collector")):
+    """List all log files for a module with size and mtime."""
+    import os as _os_stat
+    files = []
+    for fpath in _module_log_files(module):
+        try:
+            st = _os_stat.stat(fpath)
+            files.append({
+                "name": _os_stat.path.basename(fpath),
+                "path": fpath,
+                "size": st.st_size,
+                "mtime": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+            })
+        except OSError:
+            pass
+    return files
+
+
+@app.delete("/api/admin/logs/files")
+def admin_log_delete(module: str = Query("collector"), file: str = Query("")):
+    """Delete a log file. Safe: running services continue writing to inode."""
+    if not file:
+        raise HTTPException(status_code=400, detail="Missing 'file' parameter")
+    # Resolve basename to full path
+    all_files = _module_log_files(module)
+    target = None
+    for f in all_files:
+        if _os.path.basename(f) == file or f == file:
+            target = f
+            break
+    if not target or not _os.path.isfile(target):
+        raise HTTPException(status_code=404, detail=f"File '{file}' not found")
+    try:
+        _os.remove(target)
+        return {"status": "ok", "deleted": file}
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Model & Strategy Management ──────────────────────────────────────────────
 
 MLFLOW_API = "http://localhost:5000/api/2.0/mlflow"
