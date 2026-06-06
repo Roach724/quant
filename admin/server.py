@@ -612,9 +612,13 @@ def admin_data_backfill(
             continue
         # Auto source: yfinance for US, yfinancehk for HK
         src = resolved_source if resolved_source != "auto" else ("yfinance" if mkt == "us" else "futu_stock")
-        cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+        mkdir_log = f"mkdir -p /var/log/quant/prod/backfill"
+        log_file = f"/var/log/quant/prod/backfill/{mkt}_{freq}.log"
+        cmd = (f"{mkdir_log} && cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
                f".venv/bin/python3 collectors/backfill.py "
-               f"--market {mkt} --frequency {freq} --source {src} --start {start} --end {end}")
+               f"--market {mkt} --frequency {freq} --source {src} --start {start} --end {end} "
+               f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
+               f"| tee -a {log_file}")
         session = get_session()
         task = Task(type="shell", params={"cmd": cmd}, status="pending")
         session.add(task)
@@ -647,6 +651,41 @@ def admin_data_backfill_options():
             {"key": "alpaca", "label": "Alpaca (US, 需auth)"},
         ],
     }
+
+
+@app.get("/api/admin/data/backfill/progress")
+def admin_data_backfill_progress(
+    task_id: int = Query(0),
+    market: str = Query("us"),
+    freq: str = Query("1d"),
+):
+    """Read backfill progress from the log file."""
+    import re as _re
+    log_file = f"/var/log/quant/prod/backfill/{market}_{freq}.log"
+    try:
+        with open(log_file) as f:
+            lines = f.readlines()
+    except Exception:
+        return {"progress": None, "lines": []}
+
+    # Extract last progress line
+    progress = None
+    recent = []
+    for line in lines[-20:]:
+        recent.append(line.rstrip())
+        m = _re.search(r"Progress: (\d+)/(\d+) symbols", line)
+        if m:
+            progress = {"done": int(m.group(1)), "total": int(m.group(2))}
+
+    # Also check if task completed
+    task_status = None
+    if task_id:
+        session = get_session()
+        t = session.query(Task).filter(Task.id == task_id).first()
+        if t:
+            task_status = t.status
+
+    return {"progress": progress, "task_status": task_status, "lines": recent[-5:]}
 
 
 @app.post("/api/admin/data/collector/{action}")

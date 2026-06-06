@@ -7,7 +7,7 @@ import {
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
-import { Tag, Button, Space, message, Tooltip, Card, Drawer, Table, Typography, Select, DatePicker, Popconfirm, Checkbox } from 'antd';
+import { Tag, Button, Space, message, Tooltip, Card, Drawer, Table, Typography, Select, DatePicker, Popconfirm, Checkbox, Progress } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { api } from '../api';
@@ -87,6 +87,8 @@ const DataMap: React.FC = () => {
   const [backfilling, setBackfilling] = useState(false);
   const [backfillSources, setBackfillSources] = useState<{key: string; label: string}[]>([]);
   const [backfillSource, setBackfillSource] = useState('auto');
+  const [backfillProgress, setBackfillProgress] = useState<{ done: number; total: number } | null>(null);
+  const [_bfTaskId, setBackfillTaskId] = useState<number | null>(null);
 
   // ── Collector action state (survives page refresh) ──
   const [collectorAction, setCollectorAction] = useState<string | null>(null);
@@ -107,6 +109,12 @@ const DataMap: React.FC = () => {
       });
       const data = await api.post(`/api/admin/data/backfill?${params.toString()}`);
       message.success(`${data.count || 0} 个回填任务已创建`);
+      if (data.task_ids?.[0]) {
+        setBackfillTaskId(data.task_ids[0]);
+        setBackfillProgress(null);
+        // Start polling progress
+        pollBackfillProgress(data.task_ids[0], params.get('tables')?.split(',')[0] || '');
+      }
       actionRef.current?.reload();
     } catch (err: any) {
       message.error(`回填失败: ${err.message}`);
@@ -158,6 +166,34 @@ const DataMap: React.FC = () => {
       } catch {}
     })();
   }, []);
+
+  const pollBackfillProgress = async (tid: number, tableKey: string) => {
+    const parts = tableKey.split('_bars_');
+    const mkt = parts[0] || 'us';
+    const freq = parts[1] || '1d';
+    const check = async () => {
+      try {
+        const d = await api.get(`/api/admin/data/backfill/progress?task_id=${tid}&market=${mkt}&freq=${freq}`);
+        if (d.progress) setBackfillProgress(d.progress);
+        if (d.task_status === 'completed') {
+          setBackfillProgress(null); setBackfillTaskId(null); setBackfilling(false);
+          message.success('回填完成');
+          actionRef.current?.reload();
+          return;
+        }
+        if (d.task_status === 'failed') {
+          setBackfillProgress(null); setBackfillTaskId(null); setBackfilling(false);
+          message.error('回填失败');
+          actionRef.current?.reload();
+          return;
+        }
+        setTimeout(check, 3000);
+      } catch {
+        setBackfillProgress(null); setBackfillTaskId(null); setBackfilling(false);
+      }
+    };
+    check();
+  };
 
   const handleCollectorAction = async (action: string) => {
     setCollectorAction(action);
@@ -364,6 +400,11 @@ const DataMap: React.FC = () => {
               </Button>
             </Popconfirm>
           </Space>
+          {backfillProgress && (
+            <Progress percent={Math.round(backfillProgress.done / backfillProgress.total * 100)}
+              format={() => `${backfillProgress.done}/${backfillProgress.total}`}
+              status="active" style={{ maxWidth: 400, marginTop: 8 }} />
+          )}
           {availableTables.length > 0 && (
             <Checkbox.Group
               options={availableTables.map((t) => ({ label: t.label, value: t.key }))}
