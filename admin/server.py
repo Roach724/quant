@@ -1962,7 +1962,8 @@ async def dash_trades(exp_id: str, limit: int = 200, run_id: str = ""):
             d = _db_row_to_dict(r, ["ts", "bar", "symbol", "side",
                                      "qty", "price", "commission"])
             if "hk" in exp_id and d.get("symbol"):
-                d["symbol"] = d["symbol"].zfill(5)
+                from common.normalize import normalize_symbol
+                d["symbol"] = normalize_symbol(d["symbol"], "hk")
             result.append(d)
         return result
     except Exception as exc:
@@ -2036,10 +2037,8 @@ async def dash_experiment_positions(exp_id: str, run_id: str = ""):
         else:
             market = "hk" if "hk" in exp_id else "us"
             bare = sym
-        prefix = "US." if market == "us" else "HK."
-        if market == "hk":
-            bare = bare.zfill(5)
-        bq_sym = f"{prefix}{bare}"
+        from common.normalize import normalize_symbol, queryize_symbol
+        bq_sym = queryize_symbol(bare, market)
         table = _DB_TABLE(f"{market}_bars_5m")
         try:
             price_q = f"""
@@ -2177,7 +2176,8 @@ async def dash_paper_run_detail(run_id: str):
             if run.get("market", "").lower() == "hk":
                 for t in trades:
                     if t.get("symbol"):
-                        t["symbol"] = t["symbol"].zfill(5)
+                        from common.normalize import normalize_symbol
+                        t["symbol"] = normalize_symbol(t["symbol"], "hk")
         except Exception:
             pass
 

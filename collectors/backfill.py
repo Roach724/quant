@@ -171,14 +171,20 @@ def _backfill_hk(
     failed_symbols = []
 
     def _prefix_symbols(df):
+        df = df.copy()
         if market == "us" and frequency == "5m":
-            df = df.copy()
             mask = ~df["symbol"].astype(str).str.startswith("US.")
             df.loc[mask, "symbol"] = "US." + df.loc[mask, "symbol"].astype(str)
+        elif market == "hk":
+            mask = ~df["symbol"].astype(str).str.startswith("HK.")
+            df.loc[mask, "symbol"] = "HK." + df.loc[mask, "symbol"].astype(str).str.zfill(5)
         return df
 
     for idx, sym in enumerate(symbols):
-        yf_sym = f"{sym}.HK"
+        # Convert SSOT format (HK.00001) to yfinance format (0001.HK)
+        from common.normalize import normalize_symbol
+        bare = normalize_symbol(sym, market)
+        yf_sym = f"{bare}.HK"
         sym_rows = 0
 
         for attempt in range(1 + HK_MAX_RETRIES):
