@@ -102,3 +102,39 @@ Step 0 → Step 1-4 (代码) → Step 5-8 (修复) → Step 11-12 (数据清洗)
 ```
 
 预计改动 12 处，约 4 个文件内部改动 + 1 个新文件。
+
+## 补充：BQ 清洗时的去重
+
+4 个表归一化后存在大量重复（同一 symbol 以不同格式写入过相同 timestamp）：
+
+| 表 | 重复对数 | 重复行数 |
+|-----|:--:|:--:|
+| `us_bars_5m` | 170,944 | 379,915 |
+| `hk_bars_1d` | 16,926 | 33,873 |
+| `us_bars_1d` | 48 | 96 |
+| `hk_bars_5m` | 0 | 0 |
+
+### 清洗 + 去重策略
+
+```sql
+CREATE OR REPLACE TABLE `${table}_clean` AS
+SELECT 
+  CONCAT('${market}.', REGEXP_REPLACE(REPLACE(symbol, '${market}.', ''), r'^0+', LPAD('', 5, '0'))) AS symbol,
+  timestamp, open, high, low, close, volume,
+  _ingest_time
+FROM (
+  SELECT *, ROW_NUMBER() OVER (
+    PARTITION BY 
+      REGEXP_REPLACE(REPLACE(symbol, '${market}.', ''), r'^0+', ''),
+      timestamp
+    ORDER BY _ingest_time DESC
+  ) as rn
+  FROM `${table}`
+)
+WHERE rn = 1
+```
+
+- 归一化 symbol → 按 (symbol, timestamp) 分组 → `ROW_NUMBER()` 去重，保留最新 `_ingest_time`
+- US/hk_bars_1d 没有 `_ingest_time` 列 → 用 `MAX(close)` 或任意聚合
+
+### 已纳入 Step 6 的 4 个表清洗
