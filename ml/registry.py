@@ -16,7 +16,7 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import yaml
 
@@ -110,6 +110,7 @@ class ModelRegistry:
         features: list[str],
         dataset_name: str,
         artifacts: dict | None = None,
+        tuned_params: dict | None = None,
     ) -> int:
         """Save a model to the MLflow registry.
 
@@ -121,6 +122,7 @@ class ModelRegistry:
             features: List of feature column names.
             dataset_name: Training dataset identifier.
             artifacts: Optional dict of ``name → local_path`` for extra artifacts.
+            tuned_params: Optional dict of Optuna-tuned hyperparameters.
 
         Returns:
             Registered model version number (int).
@@ -163,6 +165,20 @@ class ModelRegistry:
                 config_path = f.name
             mlflow.log_artifact(config_path, "config")
             os.unlink(config_path)
+
+            # ── Tuned params (from Optuna) ──
+            if tuned_params:
+                mlflow.log_param("has_tuned_params", "true")
+                for k, v in tuned_params.items():
+                    mlflow.log_param(f"tuned_{k}", v)
+                # Also save as artifact for exact type preservation
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".yaml", delete=False
+                ) as f:
+                    yaml.dump(tuned_params, f)
+                    bp_path = f.name
+                mlflow.log_artifact(bp_path, "tuning")
+                os.unlink(bp_path)
 
             # ── Extra artifacts ──
             if artifacts:
@@ -366,6 +382,162 @@ class ModelRegistry:
             if (v.get("stage") or "").lower() == stage.lower():
                 return v["version"]
         return None
+
+    # ── List all models ────────────────────────────────────────────────
+
+    @classmethod
+    def list_all_models(cls) -> list[dict]:
+        """List all registered models with version summaries from MLflow.
+
+        Returns:
+            List of dicts with keys: ``name``, ``versions``.
+            Each version has: ``version``, ``stage``, ``run_id``,
+            ``rmse``, ``rank_ic``, ``icir``, ``n_features``, ``dataset``,
+            ``training_time``.
+        """
+        client = cls._client()
+        result: list[dict] = []
+
+        try:
+            # Fetch all registered models as flat search results
+            all_versions = client.search_model_versions("")
+        except Exception as e:
+            logger.warning("Failed to search model versions: %s", e)
+            return []
+
+        # Group by model name
+        by_name: dict[str, list[dict]] = {}
+        for mv in all_versions:
+            name = mv.name
+            if name not in by_name:
+                by_name[name] = []
+            vdet = {
+                "version": int(mv.version),
+                "stage": mv.current_stage.lower() if mv.current_stage else "",
+                "run_id": mv.run_id or "",
+            }
+            # Enrich with run data
+            if mv.run_id:
+                try:
+                    run = client.get_run(mv.run_id)
+                    rd = run.data
+                    vdet["rmse"] = rd.metrics.get("rmse")
+                    vdet["rank_ic"] = rd.metrics.get("rank_ic")
+                    vdet["icir"] = rd.metrics.get("icir")
+                    vdet["n_features"] = int(rd.params.get("n_features", 0))
+                    vdet["dataset"] = rd.params.get("dataset", "")
+                    # Training time from run info
+                    info = run.info
+                    if info.end_time and info.start_time:
+                        vdet["training_time"] = round(
+                            (info.end_time - info.start_time) / 1000, 1
+                        )
+                except Exception:
+                    pass
+            by_name[name].append(vdet)
+
+        for name, versions in by_name.items():
+            versions.sort(key=lambda v: v["version"], reverse=True)
+            result.append({"name": name, "versions": versions})
+
+        result.sort(key=lambda m: m["name"])
+        return result
+
+    # ── Get model versions detail ───────────────────────────────────────
+
+    @classmethod
+    def get_model_versions(cls, name: str) -> list[dict]:
+        """Get all versions of a model with full run data.
+
+        Returns:
+            List of dicts with keys: ``version``, ``stage``, ``run_id``,
+            ``rmse``, ``rank_ic``, ``icir``, ``n_features``, ``dataset``,
+            ``training_time``.
+        """
+        client = cls._client()
+        try:
+            raw = client.search_model_versions(f"name='{name}'")
+        except Exception:
+            return []
+
+        result: list[dict] = []
+        for mv in raw:
+            vdet = {
+                "version": int(mv.version),
+                "stage": mv.current_stage.lower() if mv.current_stage else "",
+                "run_id": mv.run_id or "",
+            }
+            if mv.run_id:
+                try:
+                    run = client.get_run(mv.run_id)
+                    rd = run.data
+                    vdet["rmse"] = rd.metrics.get("rmse")
+                    vdet["rank_ic"] = rd.metrics.get("rank_ic")
+                    vdet["icir"] = rd.metrics.get("icir")
+                    vdet["n_features"] = int(rd.params.get("n_features", 0))
+                    vdet["dataset"] = rd.params.get("dataset", "")
+                    info = run.info
+                    if info.end_time and info.start_time:
+                        vdet["training_time"] = round(
+                            (info.end_time - info.start_time) / 1000, 1
+                        )
+                except Exception:
+                    pass
+            result.append(vdet)
+
+        result.sort(key=lambda v: v["version"], reverse=True)
+        return result
+
+    # ── Get tuned params ────────────────────────────────────────────────
+
+    @classmethod
+    def get_tuned_params(cls, name: str) -> dict | None:
+        """Load previously tuned best params from the latest Production run.
+
+        Prefers ``tuning/best_params.yaml`` artifact (type-safe);
+        falls back to ``tuned_*`` params from run data.
+
+        Returns:
+            Dict of param_name → value, or None if no tuned params found.
+        """
+        client = cls._client()
+        try:
+            versions = client.get_latest_versions(name, stages=["Production"])
+            if not versions:
+                return None
+            run_id = versions[0].run_id
+
+            # Prefer artifact
+            try:
+                local = client.download_artifacts(run_id, "tuning/best_params.yaml")
+                with open(local) as f:
+                    bp = yaml.safe_load(f)
+                if isinstance(bp, dict) and bp:
+                    logger.info("Loaded tuned params from artifact for '%s'", name)
+                    return bp
+            except Exception:
+                pass
+
+            # Fallback: extract tuned_* params
+            run = client.get_run(run_id)
+            tuned: dict[str, Any] = {}
+            for k, v in run.data.params.items():
+                if not k.startswith("tuned_"):
+                    continue
+                pname = k[6:]
+                try:
+                    tuned[pname] = int(v)
+                except (ValueError, TypeError):
+                    try:
+                        tuned[pname] = float(v)
+                    except (ValueError, TypeError):
+                        tuned[pname] = v
+
+            return tuned if tuned else None
+
+        except Exception as e:
+            logger.warning("Failed to load tuned params for '%s': %s", name, e)
+            return None
 
     # ── Internal ────────────────────────────────────────────────────────
 
