@@ -84,8 +84,10 @@ def load_ohlcv_from_bq(market: str, start: str, end: str) -> pd.DataFrame:
     )
     log.info("Loading OHLCV from %s...", table)
     df = client.query(query, job_config=job_config).to_dataframe()
-    # Strip US. prefix
-    df["symbol"] = df["symbol"].str.replace("US.", "", regex=False)
+
+    # Normalize symbols to canonical bare format
+    from common.normalize import normalize_symbol_series
+    df["symbol"] = normalize_symbol_series(df["symbol"], market)
     log.info("  Loaded %d rows, %d unique symbols", len(df), df["symbol"].nunique())
     # Fix: convert dbdate to datetime64 for TechFactorBuilder compatibility
     df["date"] = pd.to_datetime(df["date"])

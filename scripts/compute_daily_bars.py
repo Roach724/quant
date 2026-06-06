@@ -28,10 +28,21 @@ def compute_1d(market: str, date_str: str) -> int:
 
     client = bigquery.Client(project=PROJECT)
 
+    prefix = market.upper()
+    # Normalize symbol: strip market prefix + (HK only) zero-pad to 5 digits
+    if market == "hk":
+        norm_expr = (
+            f"CONCAT('{prefix}.', "
+            f"LPAD(REGEXP_REPLACE(REGEXP_REPLACE(symbol, r'^{prefix}\\.', ''), r'^0+', ''), 5, '0'))"
+        )
+    else:
+        norm_expr = f"REGEXP_REPLACE(symbol, r'^{prefix}\\.', '')"
+        norm_expr = f"CONCAT('{prefix}.', {norm_expr})"
+
     # Aggregate 5m → 1d
     query = f"""
         SELECT
-          symbol,
+          {norm_expr} as symbol,
           PARSE_TIMESTAMP('%Y-%m-%d', '{date_str}') as timestamp,
           ARRAY_AGG(open ORDER BY bar_ts LIMIT 1)[OFFSET(0)] as open,
           MAX(high) as high,

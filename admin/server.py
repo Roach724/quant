@@ -1439,10 +1439,16 @@ def _generate_dataset_inner(ds_id: int):
         client.query(f"DROP TABLE IF EXISTS deductive-notch-495015-c2.ml_dataset.{table_name}").result()
         print(f"Creating table deductive-notch-495015-c2.ml_dataset.{table_name}...")
 
+        # Normalize symbol expression for CREATE TABLE
+        if ds.market == "hk":
+            norm_sym = f"LPAD(REGEXP_REPLACE(REPLACE(symbol, 'HK.', ''), r'^0+', ''), 5, '0') AS symbol"
+        else:
+            norm_sym = f"REPLACE(symbol, 'US.', '') AS symbol"
+
         create_sql = f"""
             CREATE TABLE deductive-notch-495015-c2.ml_dataset.{table_name} AS
             WITH raw AS (
-                SELECT symbol, date, factor_id, value,
+                SELECT {norm_sym}, date, factor_id, value,
                        CASE
                            WHEN date BETWEEN '{ds.train_start}' AND '{ds.train_end}' THEN 'train'
                            WHEN date BETWEEN '{ds.val_start}' AND '{ds.val_end}' THEN 'val'
@@ -1480,6 +1486,12 @@ def _generate_dataset_inner(ds_id: int):
             bars_end = test_end_dt.strftime("%Y-%m-%d")
             print(f"Computing {label_col} ({n_days}-day forward return) from {bars_table} ({ds.train_start} to {bars_end})...")
 
+            # Build normalized symbol expression: strip prefix + (HK) zero-pad to 5 digits
+            if ds.market == "hk":
+                norm_col = f"LPAD(REGEXP_REPLACE(REPLACE(symbol, '{bars_prefix}', ''), r'^0+', ''), 5, '0')"
+            else:
+                norm_col = f"REPLACE(symbol, '{bars_prefix}', '')"
+
             update_sql = f"""
                 MERGE INTO `{full_table}` t
                 USING (
@@ -1487,15 +1499,15 @@ def _generate_dataset_inner(ds_id: int):
                            LEAD(close, {n_days}) OVER (PARTITION BY symbol ORDER BY date) / close - 1 AS fwd_ret
                     FROM (
                         SELECT
-                            REGEXP_REPLACE(REPLACE(symbol, '{bars_prefix}', ''), r'^0+', '') AS symbol,
+                            {norm_col} AS symbol,
                             DATE(timestamp) AS date,
                             ARRAY_AGG(close ORDER BY _ingest_time DESC LIMIT 1)[OFFSET(0)] AS close
                         FROM `deductive-notch-495015-c2.quant.{bars_table}`
                         WHERE DATE(timestamp) BETWEEN '{ds.train_start}' AND '{bars_end}'
-                        GROUP BY REGEXP_REPLACE(REPLACE(symbol, '{bars_prefix}', ''), r'^0+', ''), DATE(timestamp)
+                        GROUP BY {norm_col}, DATE(timestamp)
                     )
                 ) fwd
-                ON REGEXP_REPLACE(REPLACE(t.symbol, '{bars_prefix}', ''), r'^0+', '') = fwd.symbol
+                ON {norm_col.replace('symbol', 't.symbol')} = fwd.symbol
                    AND t.date = fwd.date
                 WHEN MATCHED THEN UPDATE SET `{label_col}` = fwd.fwd_ret
             """
@@ -1950,7 +1962,8 @@ async def dash_trades(exp_id: str, limit: int = 200, run_id: str = ""):
             d = _db_row_to_dict(r, ["ts", "bar", "symbol", "side",
                                      "qty", "price", "commission"])
             if "hk" in exp_id and d.get("symbol"):
-                d["symbol"] = d["symbol"].zfill(5)
+                from common.normalize import normalize_symbol
+                d["symbol"] = normalize_symbol(d["symbol"], "hk")
             result.append(d)
         return result
     except Exception as exc:
@@ -2024,10 +2037,8 @@ async def dash_experiment_positions(exp_id: str, run_id: str = ""):
         else:
             market = "hk" if "hk" in exp_id else "us"
             bare = sym
-        prefix = "US." if market == "us" else "HK."
-        if market == "hk":
-            bare = bare.zfill(5)
-        bq_sym = f"{prefix}{bare}"
+        from common.normalize import normalize_symbol, queryize_symbol
+        bq_sym = queryize_symbol(bare, market)
         table = _DB_TABLE(f"{market}_bars_5m")
         try:
             price_q = f"""
@@ -2165,7 +2176,8 @@ async def dash_paper_run_detail(run_id: str):
             if run.get("market", "").lower() == "hk":
                 for t in trades:
                     if t.get("symbol"):
-                        t["symbol"] = t["symbol"].zfill(5)
+                        from common.normalize import normalize_symbol
+                        t["symbol"] = normalize_symbol(t["symbol"], "hk")
         except Exception:
             pass
 

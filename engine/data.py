@@ -135,8 +135,9 @@ class BigQuery5mSource:
         ])
         df = self._client.query(query, job_config=job_config).to_dataframe()
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        # Strip US. prefix for PaperRunner/strategy compatibility
-        df["symbol"] = df["symbol"].str.replace("US.", "", regex=False)
+        # Normalize symbols to canonical bare format (handles both US. and HK. prefixes)
+        from common.normalize import normalize_symbol_series
+        df["symbol"] = normalize_symbol_series(df["symbol"], self.market)
 
         close = df.pivot_table(index="timestamp", columns="symbol", values="close").ffill()
         open_df = df.pivot_table(index="timestamp", columns="symbol", values="open").ffill()
