@@ -241,7 +241,11 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
 
   const loadTemplates = async () => {
     const data = await api.get('/api/admin/experiments/configs');
-    setTemplates(data || []);
+    // Filter by type: paper lab only shows paper_* templates
+    const filtered = filterType
+      ? (data || []).filter((c: any) => c.name.startsWith(filterType + '_'))
+      : (data || []);
+    setTemplates(filtered);
   };
 
   // ── Actions ────────────────────────────────────────────────────
