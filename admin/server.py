@@ -593,7 +593,7 @@ def admin_data_backfill(
         if mkt not in ("us", "hk"):
             continue
         # Auto source: yfinance for US, yfinancehk for HK
-        src = resolved_source if resolved_source != "auto" else ("yfinance" if mkt == "us" else "yfinancehk")
+        src = resolved_source if resolved_source != "auto" else ("yfinance" if mkt == "us" else "futu_stock")
         cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
                f".venv/bin/python3 collectors/backfill.py "
                f"--market {mkt} --frequency {freq} --source {src} --start {start} --end {end}")
@@ -622,9 +622,10 @@ def admin_data_backfill_options():
             },
         ],
         "sources": [
-            {"key": "auto", "label": "自动 (US=yfinance, HK=yfinancehk)"},
+            {"key": "auto", "label": "自动 (US=yfinance, HK=futu_stock)"},
             {"key": "yfinance", "label": "yfinance (US)"},
             {"key": "yfinancehk", "label": "yfinance (HK)"},
+            {"key": "futu_stock", "label": "Futu (US/HK 股票)"},
             {"key": "alpaca", "label": "Alpaca (US, 需auth)"},
         ],
     }
