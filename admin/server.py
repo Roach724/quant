@@ -1439,10 +1439,16 @@ def _generate_dataset_inner(ds_id: int):
         client.query(f"DROP TABLE IF EXISTS deductive-notch-495015-c2.ml_dataset.{table_name}").result()
         print(f"Creating table deductive-notch-495015-c2.ml_dataset.{table_name}...")
 
+        # Normalize symbol expression for CREATE TABLE
+        if ds.market == "hk":
+            norm_sym = f"LPAD(REGEXP_REPLACE(REPLACE(symbol, 'HK.', ''), r'^0+', ''), 5, '0') AS symbol"
+        else:
+            norm_sym = f"REPLACE(symbol, 'US.', '') AS symbol"
+
         create_sql = f"""
             CREATE TABLE deductive-notch-495015-c2.ml_dataset.{table_name} AS
             WITH raw AS (
-                SELECT symbol, date, factor_id, value,
+                SELECT {norm_sym}, date, factor_id, value,
                        CASE
                            WHEN date BETWEEN '{ds.train_start}' AND '{ds.train_end}' THEN 'train'
                            WHEN date BETWEEN '{ds.val_start}' AND '{ds.val_end}' THEN 'val'
@@ -1480,6 +1486,12 @@ def _generate_dataset_inner(ds_id: int):
             bars_end = test_end_dt.strftime("%Y-%m-%d")
             print(f"Computing {label_col} ({n_days}-day forward return) from {bars_table} ({ds.train_start} to {bars_end})...")
 
+            # Build normalized symbol expression: strip prefix + (HK) zero-pad to 5 digits
+            if ds.market == "hk":
+                norm_col = f"LPAD(REGEXP_REPLACE(REPLACE(symbol, '{bars_prefix}', ''), r'^0+', ''), 5, '0')"
+            else:
+                norm_col = f"REPLACE(symbol, '{bars_prefix}', '')"
+
             update_sql = f"""
                 MERGE INTO `{full_table}` t
                 USING (
@@ -1487,15 +1499,15 @@ def _generate_dataset_inner(ds_id: int):
                            LEAD(close, {n_days}) OVER (PARTITION BY symbol ORDER BY date) / close - 1 AS fwd_ret
                     FROM (
                         SELECT
-                            REGEXP_REPLACE(REPLACE(symbol, '{bars_prefix}', ''), r'^0+', '') AS symbol,
+                            {norm_col} AS symbol,
                             DATE(timestamp) AS date,
                             ARRAY_AGG(close ORDER BY _ingest_time DESC LIMIT 1)[OFFSET(0)] AS close
                         FROM `deductive-notch-495015-c2.quant.{bars_table}`
                         WHERE DATE(timestamp) BETWEEN '{ds.train_start}' AND '{bars_end}'
-                        GROUP BY REGEXP_REPLACE(REPLACE(symbol, '{bars_prefix}', ''), r'^0+', ''), DATE(timestamp)
+                        GROUP BY {norm_col}, DATE(timestamp)
                     )
                 ) fwd
-                ON REGEXP_REPLACE(REPLACE(t.symbol, '{bars_prefix}', ''), r'^0+', '') = fwd.symbol
+                ON {norm_col.replace('symbol', 't.symbol')} = fwd.symbol
                    AND t.date = fwd.date
                 WHEN MATCHED THEN UPDATE SET `{label_col}` = fwd.fwd_ret
             """

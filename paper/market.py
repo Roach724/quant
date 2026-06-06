@@ -188,7 +188,8 @@ class UniverseBuilder:
         symbols = df["symbol"].tolist()
         log.info("UniverseBuilder.from_bq: %d symbols from factor %s on %s",
                  len(symbols), factor_id, date)
-        return symbols
+        from common.normalize import normalize_symbol
+        return [normalize_symbol(s, market) for s in symbols]
 
 
 class UniverseBuilder:
@@ -196,14 +197,14 @@ class UniverseBuilder:
 
     @staticmethod
     def from_static(market: str) -> list[str]:
-        """Return default symbol pool for a market."""
+        """Return default symbol pool for a market, normalized to bare format."""
+        symbols = []
         if market == "us":
             try:
                 from collectors.adapters.futu_stock_adapter import FutuStockAdapter
                 adapter = FutuStockAdapter()
                 symbols = adapter.fetch_supported_symbols("us")
                 adapter.close()
-                return symbols
             except Exception:
                 pass
         elif market == "hk":
@@ -212,10 +213,12 @@ class UniverseBuilder:
                 adapter = FutuStockAdapter()
                 symbols = adapter.fetch_supported_symbols("hk")
                 adapter.close()
-                return symbols
             except Exception:
                 pass
-        return []
+        if symbols:
+            from common.normalize import normalize_symbol
+            symbols = [normalize_symbol(s, market) for s in symbols]
+        return symbols
 
     @staticmethod
     def from_plate(plate_code: str) -> list[str]:
@@ -254,4 +257,6 @@ class UniverseBuilder:
             bigquery.ScalarQueryParameter("top_k", "INT64", top_k),
         ])
         df = client.query(query, job_config=job_config).to_dataframe()
-        return df["symbol"].tolist()
+        symbols = df["symbol"].tolist()
+        from common.normalize import normalize_symbol
+        return [normalize_symbol(s, market) for s in symbols]

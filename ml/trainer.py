@@ -127,8 +127,8 @@ class ModelTrainer:
 
         # Step 2: Load OHLCV from BQ
         client = bigquery.Client()
-        prefix = "US." if market == "us" else "HK."
-        bq_symbols = [f"{prefix}{s}" for s in symbols]
+        from common.normalize import normalize_symbol, queryize_symbol, normalize_symbol_series
+        bq_symbols = [queryize_symbol(s, market) for s in symbols]
         table = f"{registry.project}.{registry.dataset}.{market}_bars_1d"
 
         query = f"""
@@ -147,7 +147,7 @@ class ModelTrainer:
         )
         ohlcv = client.query(query, job_config=job_config).to_dataframe()
         ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"])
-        ohlcv["symbol"] = ohlcv["symbol"].str.replace(prefix, "")
+        ohlcv["symbol"] = normalize_symbol_series(ohlcv["symbol"], market)
 
         if ohlcv.empty:
             logger.warning("No OHLCV data found for %s, %s-%s", symbols, start, end)
@@ -251,28 +251,27 @@ class ModelTrainer:
         PROJECT = "deductive-notch-495015-c2"
         client = bigquery.Client(project=PROJECT)
 
-        # Load fundamental factors directly from factor_values table
-        prefix = "US." if market == "us" else "HK."
-        # Build both US. and US_ variants for symbol matching
-        bare_syms = symbols  # stripped symbols for factor_values
+        from common.normalize import queryize_symbol, normalize_symbol_series
+
+        # Query factor_values with market-prefixed symbols (HK.00005 format)
+        bq_syms = [queryize_symbol(s, market) for s in symbols]
 
         fv_query = f"""
             SELECT factor_id, symbol, date, value
             FROM `{PROJECT}.quant.factor_values`
             WHERE source_builder = 'fundamental'
-              AND symbol IN UNNEST(@bare_syms)
+              AND symbol IN UNNEST(@bq_syms)
               AND date BETWEEN @start AND @end
             ORDER BY symbol, date, factor_id
         """
         fv_job = bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ArrayQueryParameter("bare_syms", "STRING", symbols),
+            bigquery.ArrayQueryParameter("bq_syms", "STRING", bq_syms),
             bigquery.ScalarQueryParameter("start", "STRING", start),
             bigquery.ScalarQueryParameter("end", "STRING", end),
         ])
         fv_df = client.query(fv_query, job_config=fv_job).to_dataframe()
-        fv_df["symbol"] = fv_df["symbol"].astype(str).str.replace(
-            "US.", "", regex=False
-        ).str.replace("US_", "", regex=False)
+        if not fv_df.empty:
+            fv_df["symbol"] = normalize_symbol_series(fv_df["symbol"], market)
 
         fund_df = pd.DataFrame()
         if not fv_df.empty:
