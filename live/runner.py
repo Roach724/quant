@@ -82,8 +82,6 @@ class LiveRunner:
         self._commission_bps = 1.0
         self._min_commission = 1.0
 
-        self._dashboard_thread = None
-
         # Multi-day state
         self._state_manager: StateManager | None = None
         self._calendar: MarketCalendar | None = None
@@ -227,11 +225,6 @@ class LiveRunner:
         # Strategy
         self._init_strategy()
 
-        # Dashboard (optional)
-        dash_cfg = self.config.get("dashboard", {})
-        if dash_cfg.get("websocket", False):
-            self._start_dashboard(int(dash_cfg.get("port", 8090)))
-
         # Multi-day: init state manager + calendar
         state_cfg = self.config.get("state", {})
         if state_cfg.get("enabled", True):
@@ -308,25 +301,6 @@ class LiveRunner:
             logger.info("Config saved to %s", cfg_path)
         except Exception:
             logger.exception("Failed to save config copy")
-
-    def _start_dashboard(self, port: int):
-        """Start a FastAPI + WebSocket dashboard in a daemon thread."""
-        try:
-            from live.dashboard import app
-            import uvicorn
-
-            def _serve():
-                uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-
-            self._dashboard_thread = threading.Thread(
-                target=_serve, daemon=True, name="dashboard"
-            )
-            self._dashboard_thread.start()
-            logger.info("Dashboard started on port %d", port)
-        except ImportError:
-            logger.warning("Dashboard dependencies not installed; skipping")
-        except Exception:
-            logger.exception("Failed to start dashboard")
 
     # ── Paper trading loop ────────────────────────────────────────────
 
@@ -681,8 +655,11 @@ class LiveRunner:
 
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
 
-        # Strip market prefix (US., HK.) from symbols for engine compatibility
+        # Strip market prefix (US., HK.) from symbols for engine compatibility.
+        # HK symbols also strip leading zeros to match strategy symbol format.
         df["symbol"] = df["symbol"].str.replace(r"^(?:US\.|HK\.)", "", regex=True)
+        if self._market == "hk":
+            df["symbol"] = df["symbol"].str.lstrip("0")
 
         close = df.pivot_table(index="timestamp", columns="symbol", values="close").ffill()
         open_df = df.pivot_table(index="timestamp", columns="symbol", values="open").ffill()
