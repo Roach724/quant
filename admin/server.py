@@ -1450,10 +1450,10 @@ def _generate_dataset_inner(ds_id: int):
                 USING (
                     SELECT
                         REPLACE(symbol, '{bars_prefix}', '') AS symbol,
-                        date,
-                        LEAD(close, {n_days}) OVER (PARTITION BY symbol ORDER BY date) / close - 1 AS fwd_ret
+                        DATE(timestamp) AS date,
+                        LEAD(close, {n_days}) OVER (PARTITION BY symbol ORDER BY timestamp) / close - 1 AS fwd_ret
                     FROM `deductive-notch-495015-c2.quant.{bars_table}`
-                    WHERE date BETWEEN '{ds.train_start}' AND '{bars_end}'
+                    WHERE DATE(timestamp) BETWEEN '{ds.train_start}' AND '{bars_end}'
                 ) fwd
                 ON t.symbol = fwd.symbol AND t.date = fwd.date
                 WHEN MATCHED THEN UPDATE SET `{label_col}` = fwd.fwd_ret
