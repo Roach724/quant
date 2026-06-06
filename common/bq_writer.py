@@ -120,6 +120,11 @@ def write_bars_to_bq(
 ) -> int:
     """Write OHLCV bars DataFrame directly to BigQuery.
 
-    Convenience wrapper for bar tables. Same as write_rows_to_bq().
+    Normalizes symbols to canonical BQ format (HK.XXXXX / US.XXX) before writing.
     """
+    # Defensive: normalize symbols before writing to prevent format contamination
+    market = "hk" if table_id.startswith("hk") else "us"
+    from common.normalize import queryize_symbol_series
+    df = df.copy()
+    df["symbol"] = queryize_symbol_series(df["symbol"], market)
     return write_rows_to_bq(df, table_name=table_id, dataset=dataset, project=project)
