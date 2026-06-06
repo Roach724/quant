@@ -600,6 +600,19 @@ def admin_data_backfill(
     if not selected:
         selected = [f"{market}_bars_5m"]
 
+    # Load symbols from SSOT for the market
+    import yaml as _y2
+    symbols_yaml_path = os.path.join(os.path.dirname(__file__), "..", "config", "symbols.yaml")
+    symbols_list: list[str] = []
+    try:
+        with open(symbols_yaml_path) as sf:
+            ssot = _y2.safe_load(sf)
+        market_syms = ssot.get("markets", {}).get(mkt, {}).get("symbols", [])
+        symbols_list = [s for s in market_syms if isinstance(s, str)]
+    except Exception:
+        pass
+    symbols_str = ",".join(symbols_list) if symbols_list else ""
+
     # Auto-resolve source by market if not explicitly set
     resolved_source = source
     task_ids = []
@@ -610,15 +623,12 @@ def admin_data_backfill(
         mkt, freq = parts
         if mkt not in ("us", "hk"):
             continue
-        # Auto source: yfinance for US, yfinancehk for HK
         src = resolved_source if resolved_source != "auto" else ("yfinance" if mkt == "us" else "futu_stock")
-        # Single-market sources don't need --market filter
         mkdir_log = f"mkdir -p /var/log/quant/prod/backfill"
         log_file = f"/var/log/quant/prod/backfill/{mkt}_{freq}.log"
-        market_flag = "" if src in ("yfinance", "yfinancehk", "alpaca") else f"--market {mkt}"
         cmd = (f"{mkdir_log} && cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
                f".venv/bin/python3 collectors/backfill.py "
-               f"{market_flag} --frequency {freq} --source {src} --start {start} --end {end} --all "
+               f"--symbols \"{symbols_str}\" --frequency {freq} --source {src} --start {start} --end {end} "
                f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
                f"| tee -a {log_file}")
         session = get_session()
