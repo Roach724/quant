@@ -616,7 +616,7 @@ def admin_data_backfill(
         log_file = f"/var/log/quant/prod/backfill/{mkt}_{freq}.log"
         cmd = (f"{mkdir_log} && cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
                f".venv/bin/python3 collectors/backfill.py "
-               f"--market {mkt} --frequency {freq} --source {src} --start {start} --end {end} "
+               f"--market {mkt} --frequency {freq} --source {src} --start {start} --end {end} --all "
                f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
                f"| tee -a {log_file}")
         session = get_session()
