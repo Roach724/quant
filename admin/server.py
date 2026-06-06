@@ -574,26 +574,29 @@ def admin_data_backfill(
     tables: str = Query("", description="Comma-separated table keys to backfill"),
     start: str = "2020-01-01",
     end: str = "2026-06-03",
+    source: str = "auto",
 ):
     """Trigger data backfill via worker. Supports multiple tables, serial execution."""
     # Resolve table keys to (market, frequency) pairs
     selected = [t.strip() for t in tables.split(",") if t.strip()] if tables else []
     if not selected:
-        # Legacy: single market backfill
         selected = [f"{market}_bars_5m"]
 
+    # Auto-resolve source by market if not explicitly set
+    resolved_source = source
     task_ids = []
     for key in selected:
-        # Parse key like "us_bars_5m" -> market=us, freq=5m
         parts = key.split("_bars_")
         if len(parts) != 2:
             continue
         mkt, freq = parts
         if mkt not in ("us", "hk"):
             continue
+        # Auto source: yfinance for US, yfinancehk for HK
+        src = resolved_source if resolved_source != "auto" else ("yfinance" if mkt == "us" else "yfinancehk")
         cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
                f".venv/bin/python3 collectors/backfill.py "
-               f"--market {mkt} --frequency {freq} --start {start} --end {end}")
+               f"--market {mkt} --frequency {freq} --source {src} --start {start} --end {end}")
         session = get_session()
         task = Task(type="shell", params={"cmd": cmd}, status="pending")
         session.add(task)
@@ -617,6 +620,12 @@ def admin_data_backfill_options():
                     {"key": "hk_bars_1d", "label": "HK 日线", "market": "hk"},
                 ],
             },
+        ],
+        "sources": [
+            {"key": "auto", "label": "自动 (US=yfinance, HK=yfinancehk)"},
+            {"key": "yfinance", "label": "yfinance (US)"},
+            {"key": "yfinancehk", "label": "yfinance (HK)"},
+            {"key": "alpaca", "label": "Alpaca (US, 需auth)"},
         ],
     }
 

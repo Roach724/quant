@@ -84,6 +84,8 @@ const DataMap: React.FC = () => {
   const [backfillTables, setBackfillTables] = useState<string[]>([]);
   const [backfillDates, setBackfillDates] = useState<[string, string] | null>(null);
   const [backfilling, setBackfilling] = useState(false);
+  const [backfillSources, setBackfillSources] = useState<{key: string; label: string}[]>([]);
+  const [backfillSource, setBackfillSource] = useState('auto');
 
   // ── Collector action state (survives page refresh) ──
   const [collectorAction, setCollectorAction] = useState<string | null>(null);
@@ -100,6 +102,7 @@ const DataMap: React.FC = () => {
         tables: backfillTables.join(','),
         start: backfillDates[0],
         end: backfillDates[1],
+        source: backfillSource,
       });
       const data = await api.post(`/api/admin/data/backfill?${params.toString()}`);
       message.success(`${data.count || 0} 个回填任务已创建`);
@@ -118,6 +121,7 @@ const DataMap: React.FC = () => {
   const loadBackfillOptions = () => {
     api.get('/api/admin/data/backfill/options').then((data) => {
       if (data?.categories) setBackfillCategories(data.categories);
+      if (data?.sources) setBackfillSources(data.sources);
     }).catch(() => {});
   };
 
@@ -314,6 +318,13 @@ const DataMap: React.FC = () => {
               onChange={(v) => { setBackfillCategory(v); setBackfillTables([]); }}
               style={{ width: 160 }}
               options={backfillCategories.map((c) => ({ value: c.key, label: c.label }))}
+            />
+            <Text strong>数据源:</Text>
+            <Select
+              value={backfillSource}
+              onChange={setBackfillSource}
+              style={{ width: 220 }}
+              options={backfillSources.map((s) => ({ value: s.key, label: s.label }))}
             />
             <Text strong>日期:</Text>
             <DatePicker.RangePicker
