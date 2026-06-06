@@ -83,14 +83,19 @@ const LogBrowser: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+        <Text strong>模块:</Text>
         <Select value={module} onChange={(val) => { setModule(val); setSelectedFile(''); fetchLogs(val, level, search, timeRange); }}
           style={{ width: 140 }} options={modules.map(m => ({ value: m.name, label: `${m.name} (${m.file_count})` }))} />
-        {fileList.length > 1 && (
+        {fileList.length > 1 && <>
+          <Text strong>文件:</Text>
           <Select value={selectedFile} onChange={(val) => { setSelectedFile(val); fetchLogs(module, level, search, timeRange, val); }}
             allowClear placeholder="选择文件" style={{ width: 200 }} options={fileList.map(f => ({ value: f, label: f }))} />
-        )}
-        <Select value={level} onChange={(val) => { setLevel(val); fetchLogs(module, val, search, timeRange); }} allowClear placeholder="Level" style={{ width: 100 }} options={levelOptions} />
-        <Search placeholder="搜索..." allowClear onSearch={(value) => { setSearch(value); fetchLogs(module, level, value, timeRange); }} style={{ width: 200 }} />
+        </>}
+        <Text strong>级别:</Text>
+        <Select value={level} onChange={(val) => { setLevel(val); fetchLogs(module, val, search, timeRange); }} allowClear placeholder="ALL" style={{ width: 100 }} options={levelOptions} />
+        <Text strong>搜索:</Text>
+        <Search placeholder="关键字..." allowClear onSearch={(value) => { setSearch(value); fetchLogs(module, level, value, timeRange); }} style={{ width: 200 }} />
+        <Text strong>时间:</Text>
         <RangePicker showTime onChange={(dates) => {
           if (dates && dates[0] && dates[1]) { const tr: [string, string] = [dates[0].toISOString(), dates[1].toISOString()]; setTimeRange(tr); fetchLogs(module, level, search, tr); }
           else { setTimeRange(null); fetchLogs(module, level, search, null); }

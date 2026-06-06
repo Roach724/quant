@@ -546,7 +546,7 @@ def admin_data_tables():
 
 @app.get("/api/admin/data/collectors")
 def admin_data_collectors():
-    """ws_collector status + last heartbeat."""
+    """ws_collector status + last heartbeat + subscription stats."""
     try:
         r = subprocess.run(
             ["systemctl", "is-active", "ws-collector"],
@@ -556,16 +556,34 @@ def admin_data_collectors():
     except Exception:
         status = "unknown"
     heartbeat = None
+    subscriptions = 0
+    buffer_size = 0
+    bars_received = 0
     try:
         with open("/var/log/quant/prod/collector/ws_collector.log") as f:
             lines = f.readlines()
+            import re as _re
             for line in reversed(lines[-100:]):
                 if "HEARTBEAT" in line:
-                    heartbeat = _json.loads(line).get("ts")
-                    break
+                    entry = _json.loads(line)
+                    if heartbeat is None:
+                        heartbeat = entry.get("ts")
+                    msg = entry.get("msg", "")
+                    m = _re.search(r"subscriptions=(\d+).*buffer=(\d+).*bars_received=(\d+)", msg)
+                    if m:
+                        subscriptions = int(m.group(1))
+                        buffer_size = int(m.group(2))
+                        bars_received = int(m.group(3))
+                        break
     except Exception:
         pass
-    return {"ws_collector": status, "last_heartbeat": heartbeat}
+    return {
+        "ws_collector": status,
+        "last_heartbeat": heartbeat,
+        "subscriptions": subscriptions,
+        "buffer": buffer_size,
+        "bars_received": bars_received,
+    }
 
 
 @app.post("/api/admin/data/backfill")
@@ -574,26 +592,29 @@ def admin_data_backfill(
     tables: str = Query("", description="Comma-separated table keys to backfill"),
     start: str = "2020-01-01",
     end: str = "2026-06-03",
+    source: str = "auto",
 ):
     """Trigger data backfill via worker. Supports multiple tables, serial execution."""
     # Resolve table keys to (market, frequency) pairs
     selected = [t.strip() for t in tables.split(",") if t.strip()] if tables else []
     if not selected:
-        # Legacy: single market backfill
         selected = [f"{market}_bars_5m"]
 
+    # Auto-resolve source by market if not explicitly set
+    resolved_source = source
     task_ids = []
     for key in selected:
-        # Parse key like "us_bars_5m" -> market=us, freq=5m
         parts = key.split("_bars_")
         if len(parts) != 2:
             continue
         mkt, freq = parts
         if mkt not in ("us", "hk"):
             continue
+        # Auto source: yfinance for US, yfinancehk for HK
+        src = resolved_source if resolved_source != "auto" else ("yfinance" if mkt == "us" else "futu_stock")
         cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
                f".venv/bin/python3 collectors/backfill.py "
-               f"--market {mkt} --frequency {freq} --start {start} --end {end}")
+               f"--market {mkt} --frequency {freq} --source {src} --start {start} --end {end}")
         session = get_session()
         task = Task(type="shell", params={"cmd": cmd}, status="pending")
         session.add(task)
@@ -617,6 +638,13 @@ def admin_data_backfill_options():
                     {"key": "hk_bars_1d", "label": "HK 日线", "market": "hk"},
                 ],
             },
+        ],
+        "sources": [
+            {"key": "auto", "label": "自动 (US=yfinance, HK=futu_stock)"},
+            {"key": "yfinance", "label": "yfinance (US)"},
+            {"key": "yfinancehk", "label": "yfinance (HK)"},
+            {"key": "futu_stock", "label": "Futu (US/HK 股票)"},
+            {"key": "alpaca", "label": "Alpaca (US, 需auth)"},
         ],
     }
 

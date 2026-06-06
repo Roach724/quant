@@ -72,6 +72,7 @@ const DataMap: React.FC = () => {
     ws_collector: 'unknown',
     last_heartbeat: null,
   });
+  const [subStats, setSubStats] = useState({ subscriptions: 0, buffer: 0, bars_received: 0 });
   const [schemaDrawer, setSchemaDrawer] = useState<{
     open: boolean;
     tableName: string;
@@ -84,6 +85,8 @@ const DataMap: React.FC = () => {
   const [backfillTables, setBackfillTables] = useState<string[]>([]);
   const [backfillDates, setBackfillDates] = useState<[string, string] | null>(null);
   const [backfilling, setBackfilling] = useState(false);
+  const [backfillSources, setBackfillSources] = useState<{key: string; label: string}[]>([]);
+  const [backfillSource, setBackfillSource] = useState('auto');
 
   // ── Collector action state (survives page refresh) ──
   const [collectorAction, setCollectorAction] = useState<string | null>(null);
@@ -100,6 +103,7 @@ const DataMap: React.FC = () => {
         tables: backfillTables.join(','),
         start: backfillDates[0],
         end: backfillDates[1],
+        source: backfillSource,
       });
       const data = await api.post(`/api/admin/data/backfill?${params.toString()}`);
       message.success(`${data.count || 0} 个回填任务已创建`);
@@ -112,12 +116,16 @@ const DataMap: React.FC = () => {
   };
 
   const loadCollector = () => {
-    api.get('/api/admin/data/collectors').then(setCollector).catch(() => {});
+    api.get('/api/admin/data/collectors').then((data) => {
+      setCollector({ ws_collector: data.ws_collector, last_heartbeat: data.last_heartbeat });
+      setSubStats({ subscriptions: data.subscriptions || 0, buffer: data.buffer || 0, bars_received: data.bars_received || 0 });
+    }).catch(() => {});
   };
 
   const loadBackfillOptions = () => {
     api.get('/api/admin/data/backfill/options').then((data) => {
       if (data?.categories) setBackfillCategories(data.categories);
+      if (data?.sources) setBackfillSources(data.sources);
     }).catch(() => {});
   };
 
@@ -293,6 +301,12 @@ const DataMap: React.FC = () => {
                 : 'N/A'}
             </Text>
           </Space>
+          <Space>
+            <Text strong>订阅配额:</Text>
+            <Text>{subStats.subscriptions} 个实时订阅</Text>
+            <Text type="secondary">| 缓冲: {subStats.buffer}</Text>
+            <Text type="secondary">| 已收: {subStats.bars_received.toLocaleString()} bars</Text>
+          </Space>
         </Space>
       </Card>
 
@@ -314,6 +328,13 @@ const DataMap: React.FC = () => {
               onChange={(v) => { setBackfillCategory(v); setBackfillTables([]); }}
               style={{ width: 160 }}
               options={backfillCategories.map((c) => ({ value: c.key, label: c.label }))}
+            />
+            <Text strong>数据源:</Text>
+            <Select
+              value={backfillSource}
+              onChange={setBackfillSource}
+              style={{ width: 220 }}
+              options={backfillSources.map((s) => ({ value: s.key, label: s.label }))}
             />
             <Text strong>日期:</Text>
             <DatePicker.RangePicker
