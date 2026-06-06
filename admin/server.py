@@ -1392,7 +1392,6 @@ def _generate_dataset_inner(ds_id: int):
     full_table = f"deductive-notch-495015-c2.ml_dataset.{table_name}"
     label_col = ds.label
     market_prefix = ds.market + "_"
-    label_factor_id = market_prefix + ds.label.replace("fwd_", "")
 
     pivot_cols = ",\n                   ".join(
         "MAX(CASE WHEN factor_id = '{}' THEN value END) AS {}".format(
@@ -1420,7 +1419,7 @@ def _generate_dataset_inner(ds_id: int):
             )
             SELECT symbol, date, split,
                    {pivot_cols},
-                   MAX(CASE WHEN factor_id = '{label_factor_id}' THEN value END) AS `{label_col}`
+                   CAST(NULL AS FLOAT64) AS `{label_col}`
             FROM raw
             WHERE split IS NOT NULL
             GROUP BY symbol, date, split
@@ -1430,8 +1429,43 @@ def _generate_dataset_inner(ds_id: int):
         )
         client.query(create_sql, job_config=job_config).result()
 
-        cnt = list(client.query(f"SELECT COUNT(*) AS n FROM deductive-notch-495015-c2.ml_dataset.{table_name}").result())[0].n
-        print(f"Done: {cnt} rows")
+        cnt = list(client.query(f"SELECT COUNT(*) AS n FROM {full_table}").result())[0].n
+        print(f"Feature table created: {cnt} rows")
+
+        # Compute forward-return label from bars data
+        import re as _re
+        fwd_match = _re.match(r"fwd_ret_(\d+)d", label_col)
+        if fwd_match:
+            n_days = int(fwd_match.group(1))
+            bars_table = "us_bars_1d" if ds.market == "us" else "hk_bars_1d"
+            bars_prefix = "US." if ds.market == "us" else "HK."
+            # Extend end date to have forward-looking close prices
+            from datetime import timedelta as _td
+            test_end_dt = datetime.strptime(ds.test_end, "%Y-%m-%d").date() + _td(days=n_days + 14)
+            bars_end = test_end_dt.strftime("%Y-%m-%d")
+            print(f"Computing {label_col} ({n_days}-day forward return) from {bars_table} ({ds.train_start} to {bars_end})...")
+
+            update_sql = f"""
+                MERGE INTO `{full_table}` t
+                USING (
+                    SELECT
+                        REPLACE(symbol, '{bars_prefix}', '') AS symbol,
+                        date,
+                        LEAD(close, {n_days}) OVER (PARTITION BY symbol ORDER BY date) / close - 1 AS fwd_ret
+                    FROM `deductive-notch-495015-c2.quant.{bars_table}`
+                    WHERE date BETWEEN '{ds.train_start}' AND '{bars_end}'
+                ) fwd
+                ON t.symbol = fwd.symbol AND t.date = fwd.date
+                WHEN MATCHED THEN UPDATE SET `{label_col}` = fwd.fwd_ret
+            """
+            client.query(update_sql).result()
+
+            non_null = list(client.query(
+                f"SELECT COUNTIF(`{label_col}` IS NOT NULL) AS n FROM `{full_table}`"
+            ).result())[0].n
+            print(f"Label computed: {non_null}/{cnt} non-null ({(non_null/cnt*100):.1f}%)")
+        else:
+            print(f"Label '{label_col}' is not a fwd_ret_Nd pattern, left as NULL")
 
         ds.bq_table = full_table
         ds.status = "ready"
