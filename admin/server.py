@@ -1448,17 +1448,17 @@ def _generate_dataset_inner(ds_id: int):
             update_sql = f"""
                 MERGE INTO `{full_table}` t
                 USING (
-                    SELECT
-                        REPLACE(symbol, '{bars_prefix}', '') AS symbol,
-                        dt AS date,
-                        LEAD(close, {n_days}) OVER (PARTITION BY symbol ORDER BY dt) / close - 1 AS fwd_ret
+                    SELECT symbol, date,
+                           LEAD(close, {n_days}) OVER (PARTITION BY symbol ORDER BY date) / close - 1 AS fwd_ret
                     FROM (
-                        SELECT symbol, DATE(timestamp) AS dt, close,
-                               ROW_NUMBER() OVER (PARTITION BY symbol, DATE(timestamp) ORDER BY _ingest_time DESC) AS rn
+                        SELECT
+                            REPLACE(symbol, '{bars_prefix}', '') AS symbol,
+                            DATE(timestamp) AS date,
+                            ARRAY_AGG(close ORDER BY _ingest_time DESC LIMIT 1)[OFFSET(0)] AS close
                         FROM `deductive-notch-495015-c2.quant.{bars_table}`
                         WHERE DATE(timestamp) BETWEEN '{ds.train_start}' AND '{bars_end}'
+                        GROUP BY REPLACE(symbol, '{bars_prefix}', ''), DATE(timestamp)
                     )
-                    WHERE rn = 1
                 ) fwd
                 ON t.symbol = fwd.symbol AND t.date = fwd.date
                 WHEN MATCHED THEN UPDATE SET `{label_col}` = fwd.fwd_ret
