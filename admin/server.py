@@ -546,7 +546,7 @@ def admin_data_tables():
 
 @app.get("/api/admin/data/collectors")
 def admin_data_collectors():
-    """ws_collector status + last heartbeat + subscription stats."""
+    """ws_collector status + last heartbeat + subscription stats + Futu quotas."""
     try:
         r = subprocess.run(
             ["systemctl", "is-active", "ws-collector"],
@@ -577,12 +577,33 @@ def admin_data_collectors():
                         break
     except Exception:
         pass
+
+    # Futu API quota (real-time + history)
+    rt_quota = None
+    hist_quota = None
+    try:
+        from futu import OpenQuoteContext
+        ctx = OpenQuoteContext("127.0.0.1", 11111)
+        try:
+            ret, data = ctx.query_subscription()
+            if ret == 0 and isinstance(data, dict):
+                rt_quota = {"used": data.get("total_used", 0), "remain": data.get("remain", 0)}
+            ret2, data2 = ctx.get_history_kl_quota()
+            if ret2 == 0 and isinstance(data2, tuple) and len(data2) >= 2:
+                hist_quota = {"remain": int(data2[0]), "today_used": int(data2[1])}
+        finally:
+            ctx.close()
+    except Exception:
+        pass
+
     return {
         "ws_collector": status,
         "last_heartbeat": heartbeat,
         "subscriptions": subscriptions,
         "buffer": buffer_size,
         "bars_received": bars_received,
+        "rt_quota": rt_quota,
+        "hist_quota": hist_quota,
     }
 
 
@@ -600,6 +621,19 @@ def admin_data_backfill(
     if not selected:
         selected = [f"{market}_bars_5m"]
 
+    # Load symbols from SSOT for the market
+    import yaml as _y2
+    symbols_yaml_path = os.path.join(os.path.dirname(__file__), "..", "config", "symbols.yaml")
+    symbols_list: list[str] = []
+    try:
+        with open(symbols_yaml_path) as sf:
+            ssot = _y2.safe_load(sf)
+        market_syms = ssot.get("markets", {}).get(mkt, {}).get("symbols", [])
+        symbols_list = [s for s in market_syms if isinstance(s, str)]
+    except Exception:
+        pass
+    symbols_str = ",".join(symbols_list) if symbols_list else ""
+
     # Auto-resolve source by market if not explicitly set
     resolved_source = source
     task_ids = []
@@ -610,11 +644,14 @@ def admin_data_backfill(
         mkt, freq = parts
         if mkt not in ("us", "hk"):
             continue
-        # Auto source: yfinance for US, yfinancehk for HK
         src = resolved_source if resolved_source != "auto" else ("yfinance" if mkt == "us" else "futu_stock")
-        cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+        mkdir_log = f"mkdir -p /var/log/quant/prod/backfill"
+        log_file = f"/var/log/quant/prod/backfill/{mkt}_{freq}.log"
+        cmd = (f"{mkdir_log} && cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
                f".venv/bin/python3 collectors/backfill.py "
-               f"--market {mkt} --frequency {freq} --source {src} --start {start} --end {end}")
+               f"--symbols \"{symbols_str}\" --frequency {freq} --source {src} --start {start} --end {end} "
+               f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
+               f"| tee -a {log_file}")
         session = get_session()
         task = Task(type="shell", params={"cmd": cmd}, status="pending")
         session.add(task)
@@ -647,6 +684,41 @@ def admin_data_backfill_options():
             {"key": "alpaca", "label": "Alpaca (US, 需auth)"},
         ],
     }
+
+
+@app.get("/api/admin/data/backfill/progress")
+def admin_data_backfill_progress(
+    task_id: int = Query(0),
+    market: str = Query("us"),
+    freq: str = Query("1d"),
+):
+    """Read backfill progress from the log file."""
+    import re as _re
+    log_file = f"/var/log/quant/prod/backfill/{market}_{freq}.log"
+    try:
+        with open(log_file) as f:
+            lines = f.readlines()
+    except Exception:
+        return {"progress": None, "lines": []}
+
+    # Extract last progress line
+    progress = None
+    recent = []
+    for line in lines[-20:]:
+        recent.append(line.rstrip())
+        m = _re.search(r"Progress: (\d+)/(\d+) symbols", line)
+        if m:
+            progress = {"done": int(m.group(1)), "total": int(m.group(2))}
+
+    # Also check if task completed
+    task_status = None
+    if task_id:
+        session = get_session()
+        t = session.query(Task).filter(Task.id == task_id).first()
+        if t:
+            task_status = t.status
+
+    return {"progress": progress, "task_status": task_status, "lines": recent[-5:]}
 
 
 @app.post("/api/admin/data/collector/{action}")
@@ -1367,10 +1439,16 @@ def _generate_dataset_inner(ds_id: int):
         client.query(f"DROP TABLE IF EXISTS deductive-notch-495015-c2.ml_dataset.{table_name}").result()
         print(f"Creating table deductive-notch-495015-c2.ml_dataset.{table_name}...")
 
+        # Normalize symbol expression for CREATE TABLE
+        if ds.market == "hk":
+            norm_sym = f"LPAD(REGEXP_REPLACE(REPLACE(symbol, 'HK.', ''), r'^0+', ''), 5, '0') AS symbol"
+        else:
+            norm_sym = f"REPLACE(symbol, 'US.', '') AS symbol"
+
         create_sql = f"""
             CREATE TABLE deductive-notch-495015-c2.ml_dataset.{table_name} AS
             WITH raw AS (
-                SELECT symbol, date, factor_id, value,
+                SELECT {norm_sym}, date, factor_id, value,
                        CASE
                            WHEN date BETWEEN '{ds.train_start}' AND '{ds.train_end}' THEN 'train'
                            WHEN date BETWEEN '{ds.val_start}' AND '{ds.val_end}' THEN 'val'
@@ -1408,6 +1486,12 @@ def _generate_dataset_inner(ds_id: int):
             bars_end = test_end_dt.strftime("%Y-%m-%d")
             print(f"Computing {label_col} ({n_days}-day forward return) from {bars_table} ({ds.train_start} to {bars_end})...")
 
+            # Build normalized symbol expression: strip prefix + (HK) zero-pad to 5 digits
+            if ds.market == "hk":
+                norm_col = f"LPAD(REGEXP_REPLACE(REPLACE(symbol, '{bars_prefix}', ''), r'^0+', ''), 5, '0')"
+            else:
+                norm_col = f"REPLACE(symbol, '{bars_prefix}', '')"
+
             update_sql = f"""
                 MERGE INTO `{full_table}` t
                 USING (
@@ -1415,15 +1499,15 @@ def _generate_dataset_inner(ds_id: int):
                            LEAD(close, {n_days}) OVER (PARTITION BY symbol ORDER BY date) / close - 1 AS fwd_ret
                     FROM (
                         SELECT
-                            REGEXP_REPLACE(REPLACE(symbol, '{bars_prefix}', ''), r'^0+', '') AS symbol,
+                            {norm_col} AS symbol,
                             DATE(timestamp) AS date,
                             ARRAY_AGG(close ORDER BY _ingest_time DESC LIMIT 1)[OFFSET(0)] AS close
                         FROM `deductive-notch-495015-c2.quant.{bars_table}`
                         WHERE DATE(timestamp) BETWEEN '{ds.train_start}' AND '{bars_end}'
-                        GROUP BY REGEXP_REPLACE(REPLACE(symbol, '{bars_prefix}', ''), r'^0+', ''), DATE(timestamp)
+                        GROUP BY {norm_col}, DATE(timestamp)
                     )
                 ) fwd
-                ON REGEXP_REPLACE(REPLACE(t.symbol, '{bars_prefix}', ''), r'^0+', '') = fwd.symbol
+                ON {norm_col.replace('symbol', 't.symbol')} = fwd.symbol
                    AND t.date = fwd.date
                 WHEN MATCHED THEN UPDATE SET `{label_col}` = fwd.fwd_ret
             """
@@ -1878,7 +1962,8 @@ async def dash_trades(exp_id: str, limit: int = 200, run_id: str = ""):
             d = _db_row_to_dict(r, ["ts", "bar", "symbol", "side",
                                      "qty", "price", "commission"])
             if "hk" in exp_id and d.get("symbol"):
-                d["symbol"] = d["symbol"].zfill(5)
+                from common.normalize import normalize_symbol
+                d["symbol"] = normalize_symbol(d["symbol"], "hk")
             result.append(d)
         return result
     except Exception as exc:
@@ -1952,10 +2037,8 @@ async def dash_experiment_positions(exp_id: str, run_id: str = ""):
         else:
             market = "hk" if "hk" in exp_id else "us"
             bare = sym
-        prefix = "US." if market == "us" else "HK."
-        if market == "hk":
-            bare = bare.zfill(5)
-        bq_sym = f"{prefix}{bare}"
+        from common.normalize import normalize_symbol, queryize_symbol
+        bq_sym = queryize_symbol(bare, market)
         table = _DB_TABLE(f"{market}_bars_5m")
         try:
             price_q = f"""
@@ -2093,7 +2176,8 @@ async def dash_paper_run_detail(run_id: str):
             if run.get("market", "").lower() == "hk":
                 for t in trades:
                     if t.get("symbol"):
-                        t["symbol"] = t["symbol"].zfill(5)
+                        from common.normalize import normalize_symbol
+                        t["symbol"] = normalize_symbol(t["symbol"], "hk")
         except Exception:
             pass
 

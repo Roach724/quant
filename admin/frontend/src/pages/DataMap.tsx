@@ -7,7 +7,7 @@ import {
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
-import { Tag, Button, Space, message, Tooltip, Card, Drawer, Table, Typography, Select, DatePicker, Popconfirm, Checkbox } from 'antd';
+import { Tag, Button, Space, message, Tooltip, Card, Drawer, Table, Typography, Select, DatePicker, Popconfirm, Checkbox, Progress } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { api } from '../api';
@@ -73,6 +73,8 @@ const DataMap: React.FC = () => {
     last_heartbeat: null,
   });
   const [subStats, setSubStats] = useState({ subscriptions: 0, buffer: 0, bars_received: 0 });
+  const [rtQuota, setRtQuota] = useState<{ used: number; remain: number } | null>(null);
+  const [histQuota, setHistQuota] = useState<{ remain: number; today_used: number } | null>(null);
   const [schemaDrawer, setSchemaDrawer] = useState<{
     open: boolean;
     tableName: string;
@@ -87,6 +89,8 @@ const DataMap: React.FC = () => {
   const [backfilling, setBackfilling] = useState(false);
   const [backfillSources, setBackfillSources] = useState<{key: string; label: string}[]>([]);
   const [backfillSource, setBackfillSource] = useState('auto');
+  const [backfillProgress, setBackfillProgress] = useState<{ done: number; total: number } | null>(null);
+  const [_bfTaskId, setBackfillTaskId] = useState<number | null>(null);
 
   // ── Collector action state (survives page refresh) ──
   const [collectorAction, setCollectorAction] = useState<string | null>(null);
@@ -107,6 +111,12 @@ const DataMap: React.FC = () => {
       });
       const data = await api.post(`/api/admin/data/backfill?${params.toString()}`);
       message.success(`${data.count || 0} 个回填任务已创建`);
+      if (data.task_ids?.[0]) {
+        setBackfillTaskId(data.task_ids[0]);
+        setBackfillProgress(null);
+        // Start polling progress
+        pollBackfillProgress(data.task_ids[0], params.get('tables')?.split(',')[0] || '');
+      }
       actionRef.current?.reload();
     } catch (err: any) {
       message.error(`回填失败: ${err.message}`);
@@ -119,6 +129,8 @@ const DataMap: React.FC = () => {
     api.get('/api/admin/data/collectors').then((data) => {
       setCollector({ ws_collector: data.ws_collector, last_heartbeat: data.last_heartbeat });
       setSubStats({ subscriptions: data.subscriptions || 0, buffer: data.buffer || 0, bars_received: data.bars_received || 0 });
+      setRtQuota(data.rt_quota || null);
+      setHistQuota(data.hist_quota || null);
     }).catch(() => {});
   };
 
@@ -158,6 +170,34 @@ const DataMap: React.FC = () => {
       } catch {}
     })();
   }, []);
+
+  const pollBackfillProgress = async (tid: number, tableKey: string) => {
+    const parts = tableKey.split('_bars_');
+    const mkt = parts[0] || 'us';
+    const freq = parts[1] || '1d';
+    const check = async () => {
+      try {
+        const d = await api.get(`/api/admin/data/backfill/progress?task_id=${tid}&market=${mkt}&freq=${freq}`);
+        if (d.progress) setBackfillProgress(d.progress);
+        if (d.task_status === 'completed') {
+          setBackfillProgress(null); setBackfillTaskId(null); setBackfilling(false);
+          message.success('回填完成');
+          actionRef.current?.reload();
+          return;
+        }
+        if (d.task_status === 'failed') {
+          setBackfillProgress(null); setBackfillTaskId(null); setBackfilling(false);
+          message.error('回填失败');
+          actionRef.current?.reload();
+          return;
+        }
+        setTimeout(check, 3000);
+      } catch {
+        setBackfillProgress(null); setBackfillTaskId(null); setBackfilling(false);
+      }
+    };
+    check();
+  };
 
   const handleCollectorAction = async (action: string) => {
     setCollectorAction(action);
@@ -302,11 +342,19 @@ const DataMap: React.FC = () => {
             </Text>
           </Space>
           <Space>
-            <Text strong>订阅配额:</Text>
-            <Text>{subStats.subscriptions} 个实时订阅</Text>
+            <Text strong>实时订阅:</Text>
+            <Text>{subStats.subscriptions} 个</Text>
+            {rtQuota && <Text type="secondary">(配额: {rtQuota.remain} 剩余)</Text>}
             <Text type="secondary">| 缓冲: {subStats.buffer}</Text>
             <Text type="secondary">| 已收: {subStats.bars_received.toLocaleString()} bars</Text>
           </Space>
+          {histQuota && (
+            <Space>
+              <Text strong>历史K线配额:</Text>
+              <Text type={histQuota.remain < 50 ? 'danger' : undefined}>{histQuota.remain} 剩余</Text>
+              <Text type="secondary">(今日已用: {histQuota.today_used})</Text>
+            </Space>
+          )}
         </Space>
       </Card>
 
@@ -364,6 +412,11 @@ const DataMap: React.FC = () => {
               </Button>
             </Popconfirm>
           </Space>
+          {backfillProgress && (
+            <Progress percent={Math.round(backfillProgress.done / backfillProgress.total * 100)}
+              format={() => `${backfillProgress.done}/${backfillProgress.total}`}
+              status="active" style={{ maxWidth: 400, marginTop: 8 }} />
+          )}
           {availableTables.length > 0 && (
             <Checkbox.Group
               options={availableTables.map((t) => ({ label: t.label, value: t.key }))}

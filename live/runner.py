@@ -253,10 +253,9 @@ class LiveRunner:
                 f"SELECT DISTINCT symbol FROM quant.{table} ORDER BY symbol"
             ).result().to_dataframe()
             symbols = df["symbol"].tolist()
-            # Normalize: strip market prefix + leading zeros; harmless for US (AAPL → AAPL)
-            _pre = market.upper() + "."
-            symbols = [s.replace(_pre, "").lstrip("0") for s in symbols]
-            # Dedup after normalization (HK 0005 + HK.00005 → both become "5")
+            # Normalize to canonical bare format (handles prefix + padding for both markets)
+            from common.normalize import normalize_symbol
+            symbols = [normalize_symbol(s, market) for s in symbols]
             symbols = list(dict.fromkeys(symbols))
         self._symbols = symbols
         if symbols:
@@ -655,11 +654,9 @@ class LiveRunner:
 
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
 
-        # Strip market prefix (US., HK.) from symbols for engine compatibility.
-        # HK symbols also strip leading zeros to match strategy symbol format.
-        df["symbol"] = df["symbol"].str.replace(r"^(?:US\.|HK\.)", "", regex=True)
-        if self._market == "hk":
-            df["symbol"] = df["symbol"].str.lstrip("0")
+        # Normalize symbols to canonical bare format for engine compatibility
+        from common.normalize import normalize_symbol_series
+        df["symbol"] = normalize_symbol_series(df["symbol"], self._market)
 
         close = df.pivot_table(index="timestamp", columns="symbol", values="close").ffill()
         open_df = df.pivot_table(index="timestamp", columns="symbol", values="open").ffill()

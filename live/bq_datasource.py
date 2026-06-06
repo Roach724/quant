@@ -187,19 +187,10 @@ class BQDataSource:
             else ("hk_bars_5m" if self.market == "hk" else "crypto_bars_5m")
         )
 
-        # BQ bars use exchange-prefixed symbols (US.AAPL, HK.00001),
-        # while the experiment uses unprefixed symbols (AAPL, 00001).
-        # Prefix symbols for the query, strip prefix in the callback.
-        # HK symbols must be zero-padded to 5 digits (e.g., 0005 → HK.00005).
-        _pre = self.market.upper() + "."
-        query_symbols = []
-        for s in self.symbols:
-            bare = (
-                s.replace(_pre, "").lstrip("0").zfill(5)
-                if self.market == "hk"
-                else s.replace(_pre, "")
-            )  # noqa: E501
-            query_symbols.append(_pre + bare)
+        # BQ bars use exchange-prefixed symbols (US.AAPL, HK.00005).
+        # Convert experiment symbols to BQ query format via canonical normalization.
+        from common.normalize import queryize_symbol, normalize_symbol
+        query_symbols = [queryize_symbol(s, self.market) for s in self.symbols]
 
         query = f"""
             SELECT symbol, timestamp, open, high, low, close, volume
@@ -241,12 +232,7 @@ class BQDataSource:
                 "timestamp": ts,  # keep as datetime for downstream consumers
             }
             for _, row in group.iterrows():
-                sym = row["symbol"]
-                # Strip exchange prefix (US.AAPL → AAPL, HK.00005 → 00005)
-                if "." in sym:
-                    sym = sym.split(".", 1)[1]
-                # Normalize: strip leading zeros (HK 00005 → 5)
-                sym = sym.lstrip("0")
+                sym = normalize_symbol(str(row["symbol"]), self.market)
                 bar_data["close"][sym] = float(row["close"])
                 bar_data["open"][sym] = float(row["open"])
                 bar_data["high"][sym] = float(row["high"])
