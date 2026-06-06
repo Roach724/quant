@@ -85,6 +85,9 @@ const DataMap: React.FC = () => {
   const [backfillDates, setBackfillDates] = useState<[string, string] | null>(null);
   const [backfilling, setBackfilling] = useState(false);
 
+  // ── Collector action state (survives page refresh) ──
+  const [collectorAction, setCollectorAction] = useState<string | null>(null);
+
   const currentCategory = backfillCategories.find((c) => c.key === backfillCategory);
   const availableTables = currentCategory?.tables || [];
   const filteredTables = availableTables.filter((t) => backfillTables.includes(t.key));
@@ -121,23 +124,49 @@ const DataMap: React.FC = () => {
   useEffect(() => {
     loadCollector();
     loadBackfillOptions();
+    // Resume in-flight tasks on page refresh
+    (async () => {
+      try {
+        const d = await api.get('/api/tasks');
+        for (const t of (d.tasks || [])) {
+          if (t.status === 'pending' || t.status === 'running') {
+            const cmd = t.params?.cmd || '';
+            if (cmd.includes('ws_collector')) {
+              const action = cmd.includes('stop') ? 'stop' : cmd.includes('restart') ? 'restart' : cmd.includes('start') ? 'start' : null;
+              if (action) {
+                setCollectorAction(action);
+                try { await pollTask(t.id); } catch {}
+                setCollectorAction(null);
+                loadCollector();
+              }
+            }
+            if (cmd.includes('backfill')) {
+              setBackfilling(true);
+              try { await pollTask(t.id); } catch {}
+              setBackfilling(false);
+            }
+          }
+        }
+      } catch {}
+    })();
   }, []);
 
   const handleCollectorAction = async (action: string) => {
+    setCollectorAction(action);
     try {
       const data = await api.post(`/api/admin/data/collector/${action}`);
-      const hide = message.loading(`Task #${data.task_id}: ${action}ing ws-collector...`, 0);
+      message.loading(`Task #${data.task_id}: ${action}ing ws-collector...`, 1);
       try {
         await pollTask(data.task_id);
-        hide();
         message.success(`${action} ws-collector completed`);
         loadCollector();
       } catch (err: any) {
-        hide();
         message.error(`${action} ws-collector: ${err.message}`);
       }
     } catch (err: any) {
       message.error(`${action} ws-collector failed: ${err.message}`);
+    } finally {
+      setCollectorAction(null);
     }
   };
 
@@ -216,6 +245,8 @@ const DataMap: React.FC = () => {
                   size="small"
                   icon={<PlayCircleOutlined />}
                   onClick={() => handleCollectorAction('start')}
+                  loading={collectorAction === 'start'}
+                  disabled={collectorAction !== null}
                 >
                   Start
                 </Button>
@@ -227,6 +258,8 @@ const DataMap: React.FC = () => {
                   size="small"
                   icon={<PauseCircleOutlined />}
                   onClick={() => handleCollectorAction('stop')}
+                  loading={collectorAction === 'stop'}
+                  disabled={collectorAction !== null}
                 >
                   Stop
                 </Button>
@@ -237,6 +270,8 @@ const DataMap: React.FC = () => {
                 size="small"
                 icon={<ReloadOutlined />}
                 onClick={() => handleCollectorAction('restart')}
+                loading={collectorAction === 'restart'}
+                disabled={collectorAction !== null}
               >
                 Restart
               </Button>
