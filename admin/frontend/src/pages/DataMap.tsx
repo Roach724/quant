@@ -73,6 +73,8 @@ const DataMap: React.FC = () => {
     last_heartbeat: null,
   });
   const [subStats, setSubStats] = useState({ subscriptions: 0, buffer: 0, bars_received: 0 });
+  const [rtQuota, setRtQuota] = useState<{ used: number; remain: number } | null>(null);
+  const [histQuota, setHistQuota] = useState<{ remain: number; today_used: number } | null>(null);
   const [schemaDrawer, setSchemaDrawer] = useState<{
     open: boolean;
     tableName: string;
@@ -127,6 +129,8 @@ const DataMap: React.FC = () => {
     api.get('/api/admin/data/collectors').then((data) => {
       setCollector({ ws_collector: data.ws_collector, last_heartbeat: data.last_heartbeat });
       setSubStats({ subscriptions: data.subscriptions || 0, buffer: data.buffer || 0, bars_received: data.bars_received || 0 });
+      setRtQuota(data.rt_quota || null);
+      setHistQuota(data.hist_quota || null);
     }).catch(() => {});
   };
 
@@ -338,11 +342,19 @@ const DataMap: React.FC = () => {
             </Text>
           </Space>
           <Space>
-            <Text strong>订阅配额:</Text>
-            <Text>{subStats.subscriptions} 个实时订阅</Text>
+            <Text strong>实时订阅:</Text>
+            <Text>{subStats.subscriptions} 个</Text>
+            {rtQuota && <Text type="secondary">(配额: {rtQuota.remain} 剩余)</Text>}
             <Text type="secondary">| 缓冲: {subStats.buffer}</Text>
             <Text type="secondary">| 已收: {subStats.bars_received.toLocaleString()} bars</Text>
           </Space>
+          {histQuota && (
+            <Space>
+              <Text strong>历史K线配额:</Text>
+              <Text type={histQuota.remain < 50 ? 'danger' : undefined}>{histQuota.remain} 剩余</Text>
+              <Text type="secondary">(今日已用: {histQuota.today_used})</Text>
+            </Space>
+          )}
         </Space>
       </Card>
 

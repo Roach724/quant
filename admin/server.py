@@ -546,7 +546,7 @@ def admin_data_tables():
 
 @app.get("/api/admin/data/collectors")
 def admin_data_collectors():
-    """ws_collector status + last heartbeat + subscription stats."""
+    """ws_collector status + last heartbeat + subscription stats + Futu quotas."""
     try:
         r = subprocess.run(
             ["systemctl", "is-active", "ws-collector"],
@@ -577,12 +577,33 @@ def admin_data_collectors():
                         break
     except Exception:
         pass
+
+    # Futu API quota (real-time + history)
+    rt_quota = None
+    hist_quota = None
+    try:
+        from futu import OpenQuoteContext
+        ctx = OpenQuoteContext("127.0.0.1", 11111)
+        try:
+            ret, data = ctx.query_subscription()
+            if ret == 0 and isinstance(data, dict):
+                rt_quota = {"used": data.get("total_used", 0), "remain": data.get("remain", 0)}
+            ret2, data2 = ctx.get_history_kl_quota()
+            if ret2 == 0 and isinstance(data2, tuple) and len(data2) >= 2:
+                hist_quota = {"remain": int(data2[0]), "today_used": int(data2[1])}
+        finally:
+            ctx.close()
+    except Exception:
+        pass
+
     return {
         "ws_collector": status,
         "last_heartbeat": heartbeat,
         "subscriptions": subscriptions,
         "buffer": buffer_size,
         "bars_received": bars_received,
+        "rt_quota": rt_quota,
+        "hist_quota": hist_quota,
     }
 
 
