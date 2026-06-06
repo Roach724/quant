@@ -73,13 +73,24 @@ class TrainPipeline:
         model_type = model_cfg.get("type", "lightgbm")
         params = model_cfg.get("params", {})
 
-        if tuning_cfg.get("enabled") and not skip_tuning:
+        tuned_params = None  # type: dict | None
+
+        if skip_tuning:
+            # Try loading previously tuned params from MLflow
+            model_name = registry_cfg.get("model_name", dataset_name)
+            loaded = ModelRegistry.get_tuned_params(model_name)
+            if loaded:
+                logger.info("Reusing tuned params from MLflow: %s", loaded)
+                params = {**params, **loaded}
+            else:
+                logger.info("No tuned params found in MLflow, using config defaults")
+        elif tuning_cfg.get("enabled"):
             logger.info("Tuning enabled — running Optuna...")
-            best_params = self._run_tuning(
+            tuned_params = self._run_tuning(
                 train_df, val_df, feature_cols, label,
                 params, tuning_cfg,
             )
-            params = {**params, **best_params}
+            params = {**params, **tuned_params}
 
         trainer = ModelTrainer(factor_path=None)
         trainer.factor_df = df  # set data directly
@@ -126,6 +137,7 @@ class TrainPipeline:
             name=model_name, model=model,
             config=self.config, metrics=metrics,
             features=feature_cols, dataset_name=dataset_name,
+            tuned_params=tuned_params,
         )
         ModelRegistry.promote(model_name, version, "production")
         logger.info("Registered %s v%d to MLflow", model_name, version)
