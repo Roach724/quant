@@ -612,11 +612,13 @@ def admin_data_backfill(
             continue
         # Auto source: yfinance for US, yfinancehk for HK
         src = resolved_source if resolved_source != "auto" else ("yfinance" if mkt == "us" else "futu_stock")
+        # Single-market sources don't need --market filter
         mkdir_log = f"mkdir -p /var/log/quant/prod/backfill"
         log_file = f"/var/log/quant/prod/backfill/{mkt}_{freq}.log"
+        market_flag = "" if src in ("yfinance", "yfinancehk", "alpaca") else f"--market {mkt}"
         cmd = (f"{mkdir_log} && cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
                f".venv/bin/python3 collectors/backfill.py "
-               f"--market {mkt} --frequency {freq} --source {src} --start {start} --end {end} --all "
+               f"{market_flag} --frequency {freq} --source {src} --start {start} --end {end} --all "
                f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
                f"| tee -a {log_file}")
         session = get_session()
