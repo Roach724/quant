@@ -980,32 +980,21 @@ def admin_log_delete(module: str = Query("collector"), file: str = Query("")):
 
 # ── Model & Strategy Management ──────────────────────────────────────────────
 
-MLFLOW_API = "http://localhost:5000/api/2.0/mlflow"
 
 @app.get("/api/admin/models")
 def admin_models():
     """List registered models with versions from MLflow."""
     try:
-        r = requests.get(f"{MLFLOW_API}/registered-models/search", timeout=5)
-        models = r.json().get("registered_models", []) or []
-        result = []
-        for m in models:
-            name = m["name"]
-            rv = requests.get(
-                f"{MLFLOW_API}/model-versions/search",
-                params={"name": name},
-                timeout=5,
-            )
-            versions = rv.json().get("model_versions", []) or []
-            result.append({
-                "name": name,
-                "versions": [{
-                    "version": v["version"],
-                    "stage": v.get("current_stage", ""),
-                    "run_id": v.get("run_id", ""),
-                } for v in versions],
-            })
-        return result
+        models = ModelRegistry.list_all_models()
+        # Return only name + basic version info (no metrics needed here)
+        return [{
+            "name": m["name"],
+            "versions": [{
+                "version": v["version"],
+                "stage": v["stage"],
+                "run_id": v["run_id"],
+            } for v in m["versions"]],
+        } for m in models]
     except Exception as e:
         return {"error": str(e)}
 
@@ -1013,36 +1002,16 @@ def admin_models():
 @app.get("/api/admin/models/{name}/history")
 def admin_model_history(name: str):
     """Return training run history for a model with key metrics."""
-    rv = requests.get(
-        f"{MLFLOW_API}/model-versions/search",
-        params={"name": name},
-        timeout=5,
-    )
-    versions = rv.json().get("model_versions", []) or []
-    history = []
-    for v in versions:
-        try:
-            run_r = requests.get(
-                f"{MLFLOW_API}/runs/get",
-                json={"run_id": v["run_id"]},
-                timeout=5,
-            )
-            run_data = run_r.json().get("run", {}).get("data", {})
-            metrics = {m["key"]: m["value"] for m in run_data.get("metrics", [])}
-            params = {p["key"]: p["value"] for p in run_data.get("params", [])}
-        except Exception:
-            metrics = {}
-            params = {}
-        history.append({
-            "version": v["version"],
-            "run_id": v["run_id"],
-            "rmse": metrics.get("rmse"),
-            "ic": metrics.get("ic"),
-            "dataset": params.get("dataset", ""),
-            "n_features": int(params.get("n_features", 0)),
-            "n_trials": int(params.get("n_trials", 0)),
-        })
-    return history
+    versions = ModelRegistry.get_model_versions(name)
+    return [{
+        "version": v["version"],
+        "run_id": v["run_id"],
+        "rmse": v.get("rmse"),
+        "ic": v.get("rank_ic"),
+        "dataset": v.get("dataset", ""),
+        "n_features": v.get("n_features", 0),
+        "n_trials": 0,
+    } for v in versions]
 
 
 @app.post("/api/admin/models/train")
@@ -1066,62 +1035,27 @@ def admin_train_model(model_name: str, market: str = "us"):
 @app.get("/api/admin/models/{name}/versions")
 def admin_model_versions(name: str):
     """Get all versions of a model with metrics."""
-    rv = requests.get(
-        f"{MLFLOW_API}/model-versions/search",
-        params={"name": name},
-        timeout=5,
-    )
-    versions = rv.json().get("model_versions", [])
-    result = []
-    for v in versions:
-        try:
-            run_r = requests.get(
-                f"{MLFLOW_API}/runs/get",
-                json={"run_id": v["run_id"]},
-                timeout=5,
-            )
-            run_data = run_r.json().get("run", {}).get("data", {})
-            metrics = {m["key"]: m["value"] for m in run_data.get("metrics", [])}
-            params = {p["key"]: p["value"] for p in run_data.get("params", [])}
-            run_info = run_r.json().get("run", {}).get("info", {})
-            start_time = run_info.get("start_time", 0)
-            end_time = run_info.get("end_time", 0)
-            training_time = round((end_time - start_time) / 1000, 1) if end_time and start_time else None
-        except Exception:
-            metrics = {}
-            params = {}
-            training_time = None
-        result.append({
-            "version": v["version"],
-            "stage": v.get("current_stage", ""),
-            "run_id": v.get("run_id", ""),
-            "rmse": metrics.get("rmse"),
-            "ic": metrics.get("ic"),
-            "n_features": int(params.get("n_features", 0)),
-            "dataset": params.get("dataset", ""),
-            "training_time": training_time,
-        })
-    return result
+    versions = ModelRegistry.get_model_versions(name)
+    return [{
+        "version": v["version"],
+        "stage": v["stage"],
+        "run_id": v["run_id"],
+        "rmse": v.get("rmse"),
+        "ic": v.get("rank_ic"),
+        "n_features": v.get("n_features", 0),
+        "dataset": v.get("dataset", ""),
+        "training_time": v.get("training_time"),
+    } for v in versions]
 
 
 @app.post("/api/admin/models/{name}/stage")
 def admin_model_stage(name: str, version: str = "", stage: str = ""):
     """Transition a model version to a new stage."""
-    r = requests.post(
-        f"{MLFLOW_API}/model-versions/transition-stage",
-        json={"name": name, "version": version, "stage": stage},
-        timeout=5,
-    )
-    if r.status_code != 200:
-        # Try GET for MLflow 3.x
-        r2 = requests.get(
-            f"{MLFLOW_API}/model-versions/transition-stage",
-            params={"name": name, "version": version, "stage": stage},
-            timeout=5,
-        )
-        if r2.status_code == 200:
-            return r2.json()
-    return r.json()
+    try:
+        ModelRegistry.promote(name, int(version), stage)
+        return {"status": "ok", "name": name, "version": version, "stage": stage}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/admin/strategies")
@@ -1279,6 +1213,7 @@ def admin_factor_compute(source: str = "tech", market: str = "us",
 
 import yaml as _yaml
 from admin.models import MlDataset as _MlDataset, MlConfig as _MlConfig
+from ml.registry import ModelRegistry
 from google.cloud import bigquery as _bq
 
 _ML_CONFIG_DIR = Path(__file__).resolve().parent.parent / "ml" / "configs"
@@ -1567,11 +1502,7 @@ def admin_ml_config_delete(name: str):
     # Check MLflow for registered models
     if cfg.registry_model_name:
         try:
-            r = requests.get(
-                f"{MLFLOW_API}/model-versions/search",
-                params={"name": cfg.registry_model_name}, timeout=5,
-            )
-            versions = r.json().get("model_versions", [])
+            versions = ModelRegistry.list_versions(cfg.registry_model_name)
             if versions:
                 raise HTTPException(409, detail=f"模型 '{cfg.registry_model_name}' 下有 {len(versions)} 个版本，请先在 MLflow 删除所有版本")
         except HTTPException:
@@ -1606,60 +1537,61 @@ def admin_ml_config_register(name: str):
 def admin_ml_center():
     """Model center list: MLflow models + config info."""
     session = get_session()
-    # Load configs for dataset_name lookup
+    # Load configs for dataset_name / config_name lookup
     config_map: dict[str, dict] = {}
     for cfg in session.query(_MlConfig).all():
         key = cfg.registry_model_name or cfg.name.replace(".yaml", "")
         config_map[key] = {"dataset_name": cfg.dataset_name or "", "config_name": cfg.name}
 
-    result = []
-    # Fetch ALL MLflow registered models
-    try:
-        r = requests.get(f"{MLFLOW_API}/registered-models/search", timeout=5)
-        mlflow_models = r.json().get("registered_models", [])
-    except Exception:
-        mlflow_models = []
+    # ── Models from MLflow (via unified entry) ──
+    mlflow_models = ModelRegistry.list_all_models()
 
-    seen = set()
+    result = []
+    seen: set[str] = set()
     for m in mlflow_models:
-        model_name = m.get("name", "")
-        if not model_name or model_name in seen:
+        model_name = m["name"]
+        if model_name in seen:
             continue
         seen.add(model_name)
         cfg = config_map.get(model_name, {})
-        # Fetch full version details with metrics
-        mlflow_versions = []
-        try:
-            rv = requests.get(f"{MLFLOW_API}/model-versions/search", params={"name": model_name}, timeout=5)
-            raw_versions = rv.json().get("model_versions", [])
-            for v in raw_versions:
-                vdet = {
-                    "version": v.get("version", ""),
-                    "stage": v.get("current_stage", ""),
-                    "run_id": v.get("run_id", ""),
-                }
-                # Fetch run metrics
-                try:
-                    rr = requests.get(f"{MLFLOW_API}/runs/get", params={"run_id": v["run_id"]}, timeout=5)
-                    run_data = rr.json().get("run", {}).get("data", {})
-                    vdet["rmse"] = next((m["value"] for m in run_data.get("metrics", []) if m["key"] == "rmse"), None)
-                    vdet["ic"] = next((m["value"] for m in run_data.get("metrics", []) if m["key"] == "rank_ic"), None)
-                    vdet["icir"] = next((m["value"] for m in run_data.get("metrics", []) if m["key"] == "icir"), None)
-                    vdet["n_features"] = next((int(p["value"]) for p in run_data.get("params", []) if p["key"] == "n_features"), None)
-                    vdet["dataset"] = next((p["value"] for p in run_data.get("params", []) if p["key"] == "dataset_name"), None)
-                except Exception:
-                    pass
-                mlflow_versions.append(vdet)
-        except Exception:
-            pass
+
+        # 🆕 Auto-sync: if MLflow model exists but no ml_configs row, create one
+        if not cfg:
+            dataset_name = ""
+            for v in m["versions"]:
+                ds = v.get("dataset", "")
+                if ds:
+                    dataset_name = ds
+                    break
+            fname = f"{model_name}.yaml"
+            existing = session.query(_MlConfig).filter(_MlConfig.name == fname).first()
+            if not existing:
+                session.add(_MlConfig(
+                    name=fname,
+                    config_path=str(_ML_CONFIG_DIR / fname),
+                    dataset_name=dataset_name,
+                    registry_model_name=model_name,
+                    status="trained",
+                ))
+                session.commit()
+            cfg = {"dataset_name": dataset_name, "config_name": fname}
         result.append({
             "model_name": model_name,
             "dataset_name": cfg.get("dataset_name", "—"),
             "config_name": cfg.get("config_name", "—"),
-            "versions": mlflow_versions,
+            "versions": [{
+                "version": v["version"],
+                "stage": v["stage"],
+                "run_id": v["run_id"],
+                "rmse": v.get("rmse"),
+                "ic": v.get("rank_ic"),
+                "icir": v.get("icir"),
+                "n_features": v.get("n_features"),
+                "dataset": v.get("dataset"),
+            } for v in m["versions"]],
         })
 
-    # Also include registered configs that don't have MLflow models yet
+    # ── Configs registered but not yet trained ──
     for cfg in session.query(_MlConfig).filter(_MlConfig.status == "registered").all():
         model_name = cfg.registry_model_name or cfg.name.replace(".yaml", "")
         if model_name not in seen:
@@ -1699,7 +1631,20 @@ def admin_ml_train(body: dict = Body(...)):
 
 @app.delete("/api/admin/ml/center/{model_name}")
 def admin_ml_center_delete(model_name: str):
-    """Unregister from model center. Does NOT delete the config template."""
+    """Unregister from model center. Blocks if MLflow has trained versions."""
+    # Check MLflow first — don't allow unregister if trained models exist
+    try:
+        mlflow_versions = ModelRegistry.list_versions(model_name)
+        if mlflow_versions:
+            raise HTTPException(
+                409,
+                detail=f"模型 '{model_name}' 在 MLflow 中有 {len(mlflow_versions)} 个版本。请先在 MLflow 删除所有版本后再取消注册。"
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # MLflow unreachable — allow unregister anyway
+
     session = get_session()
     configs = session.query(_MlConfig).filter(
         (_MlConfig.registry_model_name == model_name) |
