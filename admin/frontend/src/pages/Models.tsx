@@ -9,6 +9,8 @@ import {
 } from 'antd';
 import { api } from '../api';
 
+const stripYaml = (name: string) => (name || '').replace(/\.yaml$/, '');
+
 const { Text } = Typography;
 const { RangePicker } = DatePicker;
 
@@ -147,26 +149,40 @@ const MlConfigsTab: React.FC = () => {
   const [editorName, setEditorName] = useState('');
   const [editorContent, setEditorContent] = useState('');
   const [newConfigName, setNewConfigName] = useState('');
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameOld, setRenameOld] = useState('');
+  const [renameNew, setRenameNew] = useState('');
 
   useEffect(() => { (async () => { setLoading(true); try { setConfigs(await api.get('/api/admin/ml/configs')); } catch { } finally { setLoading(false); } })(); }, []);
 
   const openEditor = async (name: string) => { try { const d = await api.get(`/api/admin/ml/configs/${name}`); setEditorName(name); setEditorContent(d.content || ''); setEditorOpen(true); } catch { message.error('Failed'); } };
   const saveEditor = async () => { try { await api.put(`/api/admin/ml/configs/${editorName}`, { content: editorContent, description: '' }); message.success('Saved'); setEditorOpen(false); (async () => { setConfigs(await api.get('/api/admin/ml/configs')); })(); } catch (e: any) { message.error(e.message); } };
 
+  const doRename = async () => {
+    if (!renameNew) return;
+    try {
+      await api.post(`/api/admin/ml/configs/${renameOld}/rename`, { new_name: renameNew });
+      message.success(`Renamed to ${stripYaml(renameNew)}`);
+      setRenameOpen(false);
+      (async () => { setConfigs(await api.get('/api/admin/ml/configs')); })();
+    } catch (e: any) { message.error(`Rename failed: ${e.message}`); }
+  };
+
   return (
     <>
 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}><Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditorName(""); setEditorContent(""); setEditorOpen(true); }}>新建配置</Button><Tooltip title="刷新"><Button icon={<ReloadOutlined />} onClick={() => { (async () => { setConfigs(await api.get("/api/admin/ml/configs")); })(); }} /></Tooltip></div>
       <Table dataSource={configs} rowKey="id" loading={loading} size="small" columns={[
-        { title: '配置名', dataIndex: 'name', width: 180 },
+        { title: '配置名', dataIndex: 'name', width: 180, render: (_, r) => stripYaml(r.name) },
         { title: '数据集', dataIndex: 'dataset_name', width: 140 },
         { title: '模型名', dataIndex: 'registry_model_name', width: 140 },
         { title: '状态', dataIndex: 'status', width: 100, render: (v) => v === 'registered' ? <Tag color="green">已注册</Tag> : <Tag>草稿</Tag> },
-        { title: '操作', width: 200, render: (_, r) => (<Space>
+        { title: '操作', width: 240, render: (_, r) => (<Space>
+          <Button size="small" onClick={() => { setRenameOld(r.name); setRenameNew(stripYaml(r.name)); setRenameOpen(true); }}>重命名</Button>
           <Button size="small" icon={<SettingOutlined />} onClick={() => openEditor(r.name)}>编辑</Button>
-          <Popconfirm title="删除？" onConfirm={async () => { try { await api.del(`/api/admin/ml/configs/${r.name}`); (async () => { setConfigs(await api.get('/api/admin/ml/configs')); })(); } catch (e: any) { message.error(e.message); } }} okButtonProps={{ danger: true }}><Button size="small" danger icon={<DeleteOutlined />} /></Popconfirm>
+          <Popconfirm title={`删除 ${stripYaml(r.name)}？`} onConfirm={async () => { try { await api.del(`/api/admin/ml/configs/${r.name}`); (async () => { setConfigs(await api.get('/api/admin/ml/configs')); })(); } catch (e: any) { message.error(e.message); } }} okButtonProps={{ danger: true }}><Button size="small" danger icon={<DeleteOutlined />} /></Popconfirm>
         </Space>) },
       ]} />
-      <Drawer title={editorName ? `编辑: ${editorName}` : '新建配置'} open={editorOpen} onClose={() => setEditorOpen(false)} width={700} extra={<Button type="primary" onClick={saveEditor}>保存</Button>}>
+      <Drawer title={editorName ? `编辑: ${stripYaml(editorName)}` : '新建配置'} open={editorOpen} onClose={() => setEditorOpen(false)} width={700} extra={<Button type="primary" onClick={saveEditor}>保存</Button>}>
         {!editorName && (
           <Space style={{ marginBottom: 12 }}>
             <Input placeholder="配置文件名" value={newConfigName} onChange={e => setNewConfigName(e.target.value)} style={{ width: 200 }} />
@@ -178,6 +194,12 @@ const MlConfigsTab: React.FC = () => {
           <Input.TextArea value={editorContent} onChange={e => setEditorContent(e.target.value)} rows={30} style={{ fontFamily: 'monospace', fontSize: 12 }} placeholder={`data:\n  dataset: us_tech_v1\n  label: fwd_ret_5d\n\nmodel:\n  type: lightgbm\n...`} />
         )}
       </Drawer>
+
+      <Modal title={`重命名: ${stripYaml(renameOld)}`} open={renameOpen} onCancel={() => setRenameOpen(false)}
+        onOk={doRename} okText="确认">
+        <Input value={renameNew} onChange={e => setRenameNew(e.target.value)}
+          addonAfter=".yaml" placeholder="新名称" style={{ marginTop: 8 }} />
+      </Modal>
     </>
   );
 };
@@ -266,7 +288,7 @@ const ModelCenterTab: React.FC = () => {
   const columns = [
     { title: '模型名', dataIndex: 'model_name', width: 160 },
     { title: '数据集', dataIndex: 'dataset_name', width: 140 },
-    { title: '配置', dataIndex: 'config_name', width: 160, ellipsis: true },
+    { title: '模板', dataIndex: 'config_name', width: 160, ellipsis: true, render: (_: any, r: CenterItem) => <Text>{stripYaml(r.config_name)}</Text> },
     { title: '版本', width: 70, render: (_: any, r: CenterItem) => (r.versions || []).length },
     { title: '最新', width: 120, render: (_: any, r: CenterItem) => {
       const prod = (r.versions || []).find(v => v.stage === 'Production');
@@ -327,7 +349,7 @@ const ModelCenterTab: React.FC = () => {
         <Space direction="vertical" style={{ width: '100%' }}>
           <Text strong>选择配置模板:</Text>
           <Select value={createTemplate} onChange={setCreateTemplate} style={{ width: '100%' }}
-            options={templateList.map((c: any) => ({ value: c.name, label: `${c.name} (${c.registry_model_name || '—'})` }))} />
+            options={templateList.map((c: any) => ({ value: c.name, label: `${stripYaml(c.name)} (${c.registry_model_name || '—'})` }))} />
           {templateList.length === 0 && <Text type="secondary">暂无配置，请先在 ML 配置中新建</Text>}
         </Space>
       </Modal>

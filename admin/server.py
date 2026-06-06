@@ -249,6 +249,26 @@ def admin_experiment_config_put(name: str, body: dict = Body(...)):
     return {"status": "ok", "name": name}
 
 
+@app.post("/api/admin/experiments/configs/{name}/rename")
+def admin_experiment_config_rename(name: str, body: dict = Body(...)):
+    """Rename a config template. Returns error if target already exists."""
+    import shutil as _sh
+    new_name = body.get("new_name", "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Missing 'new_name'")
+    if not new_name.endswith(".yaml"):
+        new_name += ".yaml"
+    base_dir = Path("/opt/quant-prod/live/configs")
+    old_path = base_dir / name
+    new_path = base_dir / new_name
+    if not old_path.exists():
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    if new_path.exists():
+        raise HTTPException(status_code=409, detail=f"Config '{new_name}' already exists")
+    _sh.move(str(old_path), str(new_path))
+    return {"status": "ok", "old_name": name, "new_name": new_name}
+
+
 @app.post("/api/admin/experiments/{exp_id}/clear")
 def admin_experiment_clear(exp_id: str):
     """Clear all experiment data: BQ + state files + registry runs."""
@@ -578,21 +598,29 @@ def admin_data_collectors():
     except Exception:
         pass
 
-    # Futu API quota (real-time + history)
+    # Futu API quota (real-time + history) — with 5s timeout
     rt_quota = None
     hist_quota = None
     try:
-        from futu import OpenQuoteContext
-        ctx = OpenQuoteContext("127.0.0.1", 11111)
-        try:
-            ret, data = ctx.query_subscription()
-            if ret == 0 and isinstance(data, dict):
-                rt_quota = {"used": data.get("total_used", 0), "remain": data.get("remain", 0)}
-            ret2, data2 = ctx.get_history_kl_quota()
-            if ret2 == 0 and isinstance(data2, tuple) and len(data2) >= 2:
-                hist_quota = {"remain": int(data2[0]), "today_used": int(data2[1])}
-        finally:
-            ctx.close()
+        r = subprocess.run(
+            [
+                "/opt/quant-prod/.venv/bin/python3", "-c",
+                "from futu import OpenQuoteContext; "
+                "ctx = OpenQuoteContext('127.0.0.1', 11111); "
+                "r1, d1 = ctx.query_subscription(); "
+                "r2, d2 = ctx.get_history_kl_quota(); "
+                "ctx.close(); "
+                "import json; "
+                "print(json.dumps({'rt': {'used': d1.get('total_used',0), 'remain': d1.get('remain',0)} if isinstance(d1,dict) else None, "
+                "'hist': {'remain': int(d2[0]), 'today_used': int(d2[1])} if isinstance(d2,tuple) and len(d2)>=2 else None}))"
+            ],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            import json
+            data = json.loads(r.stdout.strip())
+            rt_quota = data.get("rt")
+            hist_quota = data.get("hist")
     except Exception:
         pass
 
@@ -1629,6 +1657,35 @@ def admin_ml_config_delete(name: str):
     session.delete(cfg)
     session.commit()
     return {"status": "ok"}
+
+
+@app.post("/api/admin/ml/configs/{name}/rename")
+def admin_ml_config_rename(name: str, body: dict = Body(...)):
+    """Rename a ML config template. Updates DB record and file."""
+    import shutil as _sh
+    new_name = body.get("new_name", "").strip()
+    if not new_name:
+        raise HTTPException(400, detail="Missing 'new_name'")
+    if not new_name.endswith(".yaml"):
+        new_name += ".yaml"
+    old_fname = name if name.endswith(".yaml") else f"{name}.yaml"
+    new_fname = new_name if new_name.endswith(".yaml") else f"{new_name}.yaml"
+    old_path = _ML_CONFIG_DIR / old_fname
+    new_path = _ML_CONFIG_DIR / new_fname
+    if not old_path.exists():
+        raise HTTPException(404, detail=f"Config '{old_fname}' not found")
+    if new_path.exists():
+        raise HTTPException(409, detail=f"Config '{new_fname}' already exists")
+    # Rename file
+    _sh.move(str(old_path), str(new_path))
+    # Update DB
+    session = get_session()
+    cfg = session.query(_MlConfig).filter(_MlConfig.name == old_fname).first()
+    if cfg:
+        cfg.name = new_fname
+        cfg.config_path = str(new_path)
+        session.commit()
+    return {"status": "ok", "old_name": old_fname, "new_name": new_fname}
 
 
 @app.post("/api/admin/ml/configs/{name}/register")

@@ -91,6 +91,9 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
   const [viewOpen, setViewOpen] = useState(false);
   const [viewName, setViewName] = useState('');
   const [viewContent, setViewContent] = useState('');
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameOld, setRenameOld] = useState('');
+  const [renameNew, setRenameNew] = useState('');
 
   const openViewer = async (name: string) => {
     try {
@@ -124,6 +127,16 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
     } catch (e: any) { message.error(`Delete failed: ${e.message}`); }
   };
 
+  const doRename = async () => {
+    if (!renameNew) return;
+    try {
+      await api.post(`/api/admin/experiments/configs/${renameOld}/rename`, { new_name: renameNew });
+      message.success(`Renamed to ${stripYaml(renameNew)}`);
+      setRenameOpen(false);
+      actionRef.current?.reload();
+    } catch (e: any) { message.error(`Rename failed: ${e.message}`); }
+  };
+
   const columns: ProColumns<ConfigItem>[] = [
     { title: 'File', dataIndex: 'name', key: 'name', width: 240, render: (_, r) => stripYaml(r.name) },
     {
@@ -131,9 +144,10 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
       render: (_, r) => `${(r.size / 1024).toFixed(1)} KB`,
     },
     {
-      title: 'Actions', key: 'actions', width: 160,
+      title: 'Actions', key: 'actions', width: 200,
       render: (_, r) => (
         <Space>
+          <Tooltip title="Rename"><Button size="small" onClick={() => { setRenameOld(r.name); setRenameNew(stripYaml(r.name)); setRenameOpen(true); }}>重命名</Button></Tooltip>
           <Tooltip title="View"><Button size="small" icon={<EyeOutlined />} onClick={() => openViewer(r.name)} /></Tooltip>
           <Tooltip title="Edit"><Button size="small" icon={<SettingOutlined />} onClick={() => openEditor(r.name)} /></Tooltip>
           <Popconfirm title={`删除 ${stripYaml(r.name)}？`} onConfirm={() => deleteConfig(r.name)} okButtonProps={{ danger: true }}>
@@ -191,6 +205,13 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
         <Input.TextArea value={editorContent} onChange={(e) => setEditorContent(e.target.value)} rows={30}
           style={{ fontFamily: 'monospace', fontSize: 12 }} />
       </Drawer>
+
+      {/* Rename Modal */}
+      <Modal title={`重命名: ${stripYaml(renameOld)}`} open={renameOpen} onCancel={() => setRenameOpen(false)}
+        onOk={doRename} okText="确认">
+        <Input value={renameNew} onChange={e => setRenameNew(e.target.value)}
+          addonAfter=".yaml" placeholder="新名称" style={{ marginTop: 8 }} />
+      </Modal>
 
       {/* View Config Drawer */}
       <Drawer title={`查看: ${stripYaml(viewName)}`} open={viewOpen} onClose={() => setViewOpen(false)} width={700}>
