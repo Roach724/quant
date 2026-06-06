@@ -72,6 +72,7 @@ const DataMap: React.FC = () => {
     ws_collector: 'unknown',
     last_heartbeat: null,
   });
+  const [subStats, setSubStats] = useState({ subscriptions: 0, buffer: 0, bars_received: 0 });
   const [schemaDrawer, setSchemaDrawer] = useState<{
     open: boolean;
     tableName: string;
@@ -115,7 +116,10 @@ const DataMap: React.FC = () => {
   };
 
   const loadCollector = () => {
-    api.get('/api/admin/data/collectors').then(setCollector).catch(() => {});
+    api.get('/api/admin/data/collectors').then((data) => {
+      setCollector({ ws_collector: data.ws_collector, last_heartbeat: data.last_heartbeat });
+      setSubStats({ subscriptions: data.subscriptions || 0, buffer: data.buffer || 0, bars_received: data.bars_received || 0 });
+    }).catch(() => {});
   };
 
   const loadBackfillOptions = () => {
@@ -296,6 +300,12 @@ const DataMap: React.FC = () => {
                 ? dayjs(collector.last_heartbeat).format('YYYY-MM-DD HH:mm:ss')
                 : 'N/A'}
             </Text>
+          </Space>
+          <Space>
+            <Text strong>订阅配额:</Text>
+            <Text>{subStats.subscriptions} 个实时订阅</Text>
+            <Text type="secondary">| 缓冲: {subStats.buffer}</Text>
+            <Text type="secondary">| 已收: {subStats.bars_received.toLocaleString()} bars</Text>
           </Space>
         </Space>
       </Card>

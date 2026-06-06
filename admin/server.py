@@ -546,7 +546,7 @@ def admin_data_tables():
 
 @app.get("/api/admin/data/collectors")
 def admin_data_collectors():
-    """ws_collector status + last heartbeat."""
+    """ws_collector status + last heartbeat + subscription stats."""
     try:
         r = subprocess.run(
             ["systemctl", "is-active", "ws-collector"],
@@ -556,16 +556,34 @@ def admin_data_collectors():
     except Exception:
         status = "unknown"
     heartbeat = None
+    subscriptions = 0
+    buffer_size = 0
+    bars_received = 0
     try:
         with open("/var/log/quant/prod/collector/ws_collector.log") as f:
             lines = f.readlines()
+            import re as _re
             for line in reversed(lines[-100:]):
                 if "HEARTBEAT" in line:
-                    heartbeat = _json.loads(line).get("ts")
-                    break
+                    entry = _json.loads(line)
+                    if heartbeat is None:
+                        heartbeat = entry.get("ts")
+                    msg = entry.get("msg", "")
+                    m = _re.search(r"subscriptions=(\d+).*buffer=(\d+).*bars_received=(\d+)", msg)
+                    if m:
+                        subscriptions = int(m.group(1))
+                        buffer_size = int(m.group(2))
+                        bars_received = int(m.group(3))
+                        break
     except Exception:
         pass
-    return {"ws_collector": status, "last_heartbeat": heartbeat}
+    return {
+        "ws_collector": status,
+        "last_heartbeat": heartbeat,
+        "subscriptions": subscriptions,
+        "buffer": buffer_size,
+        "bars_received": bars_received,
+    }
 
 
 @app.post("/api/admin/data/backfill")
