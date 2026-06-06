@@ -16,6 +16,8 @@ import { api } from '../api';
 
 const { Text } = Typography;
 
+const stripYaml = (name: string) => name.replace(/\.yaml$/, '');
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface ExperimentItem {
@@ -123,7 +125,7 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
   };
 
   const columns: ProColumns<ConfigItem>[] = [
-    { title: 'File', dataIndex: 'name', key: 'name', width: 240 },
+    { title: 'File', dataIndex: 'name', key: 'name', width: 240, render: (_, r) => stripYaml(r.name) },
     {
       title: 'Size', dataIndex: 'size', key: 'size', width: 100,
       render: (_, r) => `${(r.size / 1024).toFixed(1)} KB`,
@@ -134,7 +136,7 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
         <Space>
           <Tooltip title="View"><Button size="small" icon={<EyeOutlined />} onClick={() => openViewer(r.name)} /></Tooltip>
           <Tooltip title="Edit"><Button size="small" icon={<SettingOutlined />} onClick={() => openEditor(r.name)} /></Tooltip>
-          <Popconfirm title={`删除 ${r.name}？`} onConfirm={() => deleteConfig(r.name)} okButtonProps={{ danger: true }}>
+          <Popconfirm title={`删除 ${stripYaml(r.name)}？`} onConfirm={() => deleteConfig(r.name)} okButtonProps={{ danger: true }}>
             <Tooltip title="Delete"><Button size="small" danger icon={<DeleteOutlined />} /></Tooltip>
           </Popconfirm>
         </Space>
@@ -183,7 +185,7 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
       </Modal>
 
       {/* Edit Config Drawer */}
-      <Drawer title={`编辑: ${editorName}`} open={editorOpen} onClose={() => setEditorOpen(false)} width={700}
+      <Drawer title={`编辑: ${stripYaml(editorName)}`} open={editorOpen} onClose={() => setEditorOpen(false)} width={700}
         extra={<Popconfirm title="保存修改？" onConfirm={saveEditor}><Button type="primary">Save</Button></Popconfirm>}
       >
         <Input.TextArea value={editorContent} onChange={(e) => setEditorContent(e.target.value)} rows={30}
@@ -191,7 +193,7 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
       </Drawer>
 
       {/* View Config Drawer */}
-      <Drawer title={`查看: ${viewName}`} open={viewOpen} onClose={() => setViewOpen(false)} width={700}>
+      <Drawer title={`查看: ${stripYaml(viewName)}`} open={viewOpen} onClose={() => setViewOpen(false)} width={700}>
         <pre style={{ fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#fafafa', padding: 16, borderRadius: 6, margin: 0 }}>
           {viewContent}
         </pre>
@@ -387,7 +389,7 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
         <Space direction="vertical" style={{ width: '100%' }}>
           <Space><Text strong>模板:</Text>
             <Select value={createTemplate} onChange={setCreateTemplate} style={{ width: 220 }}
-              options={templates.map(t => ({ value: t.name, label: t.name }))} />
+              options={templates.map(t => ({ value: t.name, label: stripYaml(t.name) }))} />
           </Space>
           <Space><Text strong>exp_id:</Text>
             <Input value={createExpId} onChange={(e) => setCreateExpId(e.target.value)} placeholder="e.g. live_us_ml_v3" style={{ width: 220 }} />

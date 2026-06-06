@@ -35,7 +35,7 @@ const LogBrowser: React.FC = () => {
   const [fileList, setFileList] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<string>('');
   const [loading, setLoading] = useState(false);
-  const [live, setLive] = useState(false);
+  const [live, setLive] = useState(true);
   const [timeRange, setTimeRange] = useState<[string, string] | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -51,7 +51,7 @@ const LogBrowser: React.FC = () => {
       if (tr && tr[0]) params.set('start', tr[0]); if (tr && tr[1]) params.set('end', tr[1]);
       if (f) params.set('file', f);
       const data = await api.get(`/api/admin/logs?${params.toString()}`);
-      if (!data.error) { setLines(data.lines || []); setFileName(data.file || null); if (data.files) setFileList(data.files); }
+      if (!data.error) { setLines(data.lines || []); setFileName(data.file || null); if (data.files) { setFileList(data.files); if (!f && data.files.length > 0) setSelectedFile(data.files[0]); } }
     } catch { } finally { setLoading(false); }
   }, []);
 
