@@ -1,17 +1,32 @@
 import { Card, Table, Spin, Empty, Row, Col, Statistic, Tag, Button } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
 import { api } from '../api';
 
 export default function DashboardPaperRun() {
+  const [searchParams] = useSearchParams();
+  const urlRunId = searchParams.get('run_id') || '';
   const [runs, setRuns] = useState<any[]>([]);
   const [selectedRun, setSelectedRun] = useState<any | null>(null);
   const [detail, setDetail] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
   const [listLoading, setListLoading] = useState(true);
+  const [urlAutoSelected, setUrlAutoSelected] = useState(false);
 
   useEffect(() => { loadRuns(); }, []);
+
+  // Auto-select run from URL param after runs are loaded
+  useEffect(() => {
+    if (!urlRunId || urlAutoSelected || runs.length === 0) return;
+    const match = runs.find((r: any) => r.run_id === urlRunId);
+    if (match) {
+      setSelectedRun(match);
+      loadDetail(urlRunId);
+      setUrlAutoSelected(true);
+    }
+  }, [runs, urlRunId, urlAutoSelected]);
 
   const loadRuns = async () => {
     try {

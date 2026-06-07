@@ -1,6 +1,7 @@
 import { Card, Select, Table, Spin, Empty, Row, Col, Statistic, Button } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
 import { api } from '../api';
 
@@ -10,9 +11,12 @@ interface Props {
 }
 
 export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
+  const [searchParams] = useSearchParams();
+  const urlExpId = searchParams.get('exp_id') || '';
+  const urlRunId = searchParams.get('run_id') || '';
   const [experiments, setExperiments] = useState<any[]>([]);
-  const [selectedExp, setSelectedExp] = useState('');
-  const [selectedRun, setSelectedRun] = useState('');
+  const [selectedExp, setSelectedExp] = useState(urlExpId);
+  const [selectedRun, setSelectedRun] = useState(urlRunId);
   const [runs, setRuns] = useState<any[]>([]);
   const [equity, setEquity] = useState<any[]>([]);
   const [trades, setTrades] = useState<any[]>([]);
@@ -41,7 +45,12 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
         // Filter by type: live → only live_* experiments, etc.
         const filtered = all.filter((e: any) => e.exp_id.startsWith(type + '_'));
         setExperiments(filtered);
-        if (!selectedExp && filtered.length > 0) setSelectedExp(filtered[0].exp_id);
+        // If URL exp_id specified, prefer it; otherwise auto-select first
+        if (urlExpId && filtered.some((e: any) => e.exp_id === urlExpId)) {
+          setSelectedExp(urlExpId);
+        } else if (!selectedExp && filtered.length > 0) {
+          setSelectedExp(filtered[0].exp_id);
+        }
       }
     } catch (e) {
       console.error('load experiments failed', e);
@@ -63,7 +72,12 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
       setPositions(Array.isArray(posData) ? posData : []);
       if (Array.isArray(runData)) {
         setRuns(runData);
-        if (!runId && runData.length > 0) setSelectedRun(runData[0].run_id);
+        // If URL run_id specified and exists in loaded runs, prefer it
+        if (urlRunId && runData.some((r: any) => r.run_id === urlRunId)) {
+          if (!selectedRun || selectedRun !== urlRunId) setSelectedRun(urlRunId);
+        } else if (!runId && runData.length > 0) {
+          setSelectedRun(runData[0].run_id);
+        }
       }
     } catch (e) {
       console.error('load data failed', e);
