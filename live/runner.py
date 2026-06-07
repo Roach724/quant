@@ -105,8 +105,11 @@ class LiveRunner:
             mgr = ExperimentManager()
             try:
                 exp = mgr.get(exp_id)
-                if exp.status == "archived":
-                    logger.warning("Experiment %s is archived, skipping lifecycle", exp_id)
+                if exp.has_active_run:
+                    # Run was pre-created by exp_cli.py — reuse it
+                    run_id = exp.current_run
+                    logger.info("Experiment %s using pre-created run %s", exp_id, run_id)
+                    self.config["_run_id"] = run_id
                 else:
                     run_id = mgr.start(exp_id)
                     logger.info("Experiment %s started -> run %s", exp_id, run_id)
@@ -123,6 +126,13 @@ class LiveRunner:
                 run_id = mgr.start(exp_id)
                 logger.info("Auto-registered %s -> run %s", exp_id, run_id)
                 self.config["_run_id"] = run_id
+
+        # ── Per‑run file logging header ──
+        if exp_id and run_id:
+            logger.info("=== Run %s started (mode=%s market=%s) ===",
+                        run_id, mode_label, self._market)
+            strat_name = self.config.get("strategy", {}).get("name", "unknown")
+            logger.info("Config: strategy=%s experiment=%s", strat_name, exp_id)
 
         self._init_components()
 
@@ -156,14 +166,15 @@ class LiveRunner:
         finally:
             # ── Experiment lifecycle cleanup ──
             if exp_id and run_id:
-                from live.experiment_manager import ExperimentManager as EM
+                import logging as _log
                 try:
-                    exp = EM().get(exp_id)
-                    if exp.status == "running":
-                        EM().stop(exp_id)
-                        logger.info("Experiment %s stopped", exp_id)
+                    mgr = EM()
+                    exp = mgr.get(exp_id)
+                    if exp.has_active_run:
+                        mgr.stop_run(exp_id, run_id)
+                        _log.getLogger(__name__).info("Experiment %s run %s cleaned up", exp_id, run_id)
                 except Exception:
-                    pass
+                    _log.getLogger(__name__).exception("Failed to cleanup experiment %s", exp_id)
             self._shutdown()
 
     # ── Component initialisation ─────────────────────────────────────
@@ -228,7 +239,9 @@ class LiveRunner:
         # Multi-day: init state manager + calendar
         state_cfg = self.config.get("state", {})
         if state_cfg.get("enabled", True):
-            state_dir = state_cfg.get("dir", "output/live/state/")
+            exp_id = self.config.get("experiment", {}).get("id", "unknown")
+            run_id = self.config.get("_run_id", "unknown")
+            state_dir = f"/var/quant/state/{exp_id}/{run_id}"
             self._state_manager = StateManager(state_dir)
         self._calendar = MarketCalendar(self._market)
 
@@ -362,9 +375,18 @@ class LiveRunner:
         logger.info("Strategy initialised, entering bar loop (%d bars)", len(src))
 
         # 7. Bar loop
-        for bar_idx in range(len(src)):
+        last_progress_pct = -1
+        total_bars = len(src)
+        for bar_idx in range(total_bars):
             bar_data = src.iloc(bar_idx)
             timestamp = src.timestamp[bar_idx]
+
+            # Progress logging every ~10%
+            if total_bars > 100:
+                pct = (bar_idx * 10) // total_bars
+                if pct > last_progress_pct:
+                    last_progress_pct = pct
+                    logger.info("Paper progress: %d%% (%d/%d bars)", pct*10, bar_idx, total_bars)
 
             # 7a. Mark & record
             equity = portfolio.mark_and_record(timestamp, bar_data)
@@ -385,6 +407,16 @@ class LiveRunner:
             except Exception:
                 logger.exception("Strategy.on_bar failed at bar %d", bar_idx)
                 signals = []
+
+            # Log signals when they fire
+            if signals:
+                buys = [s for s in signals if s.side in ("buy", "target")]
+                sells = [s for s in signals if s.side in ("sell", "close")]
+                logger.info(
+                    "Signals @ bar=%d: %d buy, %d sell — %s",
+                    bar_idx, len(buys), len(sells),
+                    ", ".join(f"{s.symbol}({s.side})" for s in signals[:10])
+                )
 
             # 7d. No signals → record equity and continue
             if not signals:
@@ -455,7 +487,10 @@ class LiveRunner:
 
         # 8. End
         final_equity = portfolio._mark_to_market(bar_data if 'bar_data' in dir() else {})
-        logger.info("Paper loop complete — final equity: %.2f", final_equity)
+        pnl = final_equity - initial_capital
+        pnl_pct = (pnl / initial_capital * 100) if initial_capital else 0
+        logger.info("Paper loop complete — equity=%.2f PnL=%.2f (%.2f%%) positions=%d total_bars=%d",
+                    final_equity, pnl, pnl_pct, len(portfolio.positions), total_bars)
 
     def _process_signal(self, sig, portfolio, bar_data, timestamp, weight: float):
         """Process a single strategy signal: convert → execute → record.
@@ -509,6 +544,8 @@ class LiveRunner:
         qty = max(1, int(qty))
 
         # Submit to broker via OrderManager (async → sync)
+        logger.info("ORDER %s %s %d @ ~%.2f (notional=%.2f commission=%.2f)",
+                    side.upper(), symbol, qty, exec_price, qty * exec_price, commission)
         tracked = asyncio.run(
             self.order_manager.submit(
                 symbol=symbol,
@@ -533,6 +570,8 @@ class LiveRunner:
         if tracked.state in ("FILLED", "filled") and tracked.filled_qty > 0:
             fill_qty = int(tracked.filled_qty)
             fill_price = float(tracked.avg_fill_price or exec_price)
+            logger.info("FILLED %s %s qty=%d price=%.2f (prior fill qty pre-calced=%d)",
+                        side.upper(), symbol, fill_qty, fill_price, qty)
 
             if side == "buy":
                 # Deduct cash
