@@ -7,6 +7,8 @@ git config --global --add safe.directory /opt/quant-prod 2>/dev/null || true
 # Invoked by GitHub Actions CD pipeline via gcloud compute ssh
 
 PROD_ROOT="/opt/quant-prod"
+# Ensure correct ownership (prevents "Permission denied" on non-quant files)
+sudo chown -R quant:quant "$PROD_ROOT" 2>/dev/null || true
 HISTORY_FILE="$PROD_ROOT/.deploy_history"
 VENV_PYTHON="$PROD_ROOT/.venv/bin/python3.12"
 VENV_PIP="$PROD_ROOT/.venv/bin/pip"
