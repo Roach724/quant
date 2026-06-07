@@ -22,9 +22,37 @@ from factors.registry import FactorRegistry
 DB_SESSION_DEP = Depends(get_session)
 
 
+def _startup_auto_heal():
+    """On server startup, scan all experiments and mark dead runs as 'failed'.
+
+    This handles experiments that were killed by node reboot, OOM, or other
+    external forces. Marking them as 'failed' ensures the user sees they need
+    manual attention rather than silently completing.
+    """
+    try:
+        from live.experiment_manager import ExperimentManager
+        mgr = ExperimentManager()
+        exps = mgr.list()
+        healed = 0
+        for exp in exps:
+            if exp.has_active_run:
+                run_ids = mgr.startup_heal(exp.id)
+                if run_ids:
+                    logger.info(
+                        "Startup heal: %s runs=%s marked failed (process dead)",
+                        exp.id, run_ids,
+                    )
+                    healed += len(run_ids)
+        if healed:
+            logger.info("Startup heal complete: %d runs marked failed", healed)
+    except Exception:
+        logger.exception("Startup auto-heal failed (non-fatal)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    _startup_auto_heal()
     yield
 
 
@@ -111,29 +139,83 @@ def get_task(task_id: int, db: Session = DB_SESSION_DEP):
 @app.get("/api/admin/experiments")
 def admin_experiments():
     mgr = ExperimentManager()
+    # Auto-heal all experiments before listing
+    exps = mgr.list()
+    for e in exps:
+        if e.has_active_run:
+            mgr.auto_heal(e.id)
+    # Re-list after healing
+    exps = mgr.list()
     return [{
         "exp_id": e.id, "name": e.name, "type": e.type,
         "market": e.market, "strategy": e.strategy,
         "version": e.version, "status": e.status,
-        "current_run": e.current_run, "config_path": e.config_path,
+        "has_active_run": e.has_active_run,
+        "total_runs": e.total_runs,
+        "current_run": e.current_run,
+        "active_run_id": e.active_run.run_id if e.active_run else None,
+        "config_path": e.config_path,
         "pid": mgr.get_pid(e.id),
     } for e in mgr.list()]
 
 
 @app.get("/api/admin/experiments/{exp_id}/runs")
 def admin_experiment_runs(exp_id: str):
-    """Return run history for an experiment."""
+    """Return run history for an experiment. Auto-heals stale runs."""
     mgr = ExperimentManager()
     try:
+        # Auto-heal: mark dead-PID runs as completed
+        healed = mgr.auto_heal(exp_id)
+        if healed:
+            logger.info("Auto-healed runs for %s: %s", exp_id, healed)
         runs = mgr.runs(exp_id)
         return [{
             "run_id": r.run_id,
             "status": r.status,
             "started_at": r.started_at,
             "ended_at": r.ended_at,
+            "base_run": r.base_run,
         } for r in runs]
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+
+@app.post("/api/admin/experiments/{exp_id}/runs/{run_id}/stop")
+def admin_experiment_run_stop(exp_id: str, run_id: str):
+    """Manually stop a specific run."""
+    mgr = ExperimentManager()
+    try:
+        mgr.stop_run(exp_id, run_id)
+        # Stop the systemd unit if active
+        import subprocess as _sp
+        unit = f"exp-{exp_id}"
+        try:
+            _sp.run(
+                ["sudo", "systemctl", "stop", unit],
+                capture_output=True, timeout=15,
+            )
+        except Exception:
+            pass
+        # Also kill via PID as fallback
+        pid = mgr.get_pid(exp_id)
+        if pid:
+            import os as _os, signal as _sig
+            try:
+                _os.kill(pid, _sig.SIGTERM)
+                import time as _time
+                _time.sleep(1)
+                try:
+                    _os.kill(pid, _sig.SIGKILL)
+                except OSError:
+                    pass
+            except OSError:
+                pass
+            mgr.set_pid(exp_id, None)
+        return {"status": "ok", "run_id": run_id, "new_status": "stopped"}
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/admin/experiments/register")
@@ -333,7 +415,8 @@ def admin_experiment_clear(exp_id: str):
 
 @app.post("/api/admin/experiments/{exp_id}/delete")
 def admin_experiment_delete(exp_id: str):
-    """Delete experiment: BQ + state + output + logs + unregister."""
+    """Delete experiment: BQ + state + output + logs + unregister.
+    Blocked if there is an active run."""
     from google.cloud import bigquery as _bq
     from pathlib import Path
     import shutil, signal, time
@@ -343,6 +426,13 @@ def admin_experiment_delete(exp_id: str):
         exp = mgr.get(exp_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+    # Block if active run
+    if exp.has_active_run:
+        raise HTTPException(
+            status_code=409,
+            detail=f"存在活跃 Run ({exp.active_run.run_id if exp.active_run else '?'})，无法删除实验。请先停止当前 Run。"
+        )
 
     # Kill process if running
     pid = mgr.get_pid(exp_id)
@@ -701,6 +791,10 @@ def admin_data_backfill_options():
                     {"key": "us_bars_1d", "label": "US 日线", "market": "us"},
                     {"key": "hk_bars_5m", "label": "HK 5分钟K线", "market": "hk"},
                     {"key": "hk_bars_1d", "label": "HK 日线", "market": "hk"},
+                    {"key": "hk_bars_index_5m", "label": "HK 指数 5分钟K线", "market": "hk"},
+                    {"key": "hk_bars_index_1d", "label": "HK 指数 日线", "market": "hk"},
+                    {"key": "us_bars_index_5m", "label": "US 指数 5分钟K线", "market": "us"},
+                    {"key": "us_bars_index_1d", "label": "US 指数 日线", "market": "us"},
                 ],
             },
         ],
@@ -898,23 +992,29 @@ def admin_cron_update(index: int, job: dict = Body(...)):
 def admin_cron_run(command: str = Query("")):
     """Manually trigger a cron command via task queue."""
     session = get_session()
-    task = Task(type="shell", params={"cmd": command}, status="pending")
+    task = Task(type="shell", params={"cmd": command, "cron_command": command}, status="pending")
     session.add(task)
     session.commit()
     return {"task_id": task.id}
 
 
 @app.get("/api/admin/cron/{index}/history")
-def admin_cron_history(index: int):
-    """Return recent execution history from task queue."""
+def admin_cron_history(index: int, command: str = Query("")):
+    """Return recent execution history filtered by cron command."""
     session = get_session()
-    tasks = (
-        session.query(Task)
-        .filter(Task.type.in_(["shell", "cron_run"]))
-        .order_by(Task.created_at.desc())
-        .limit(50)
-        .all()
-    )
+    query = session.query(Task).order_by(Task.created_at.desc()).limit(50)
+    if command:
+        # Filter by cron_command stored in params JSON
+        tasks = [
+            t for t in query.all()
+            if t.params and t.params.get("cron_command") == command
+        ]
+    else:
+        # Legacy fallback: only tasks with cron_command set
+        tasks = [
+            t for t in query.all()
+            if t.params and "cron_command" in (t.params or {})
+        ]
     return [{
         "id": t.id,
         "status": t.status,
@@ -1143,21 +1243,42 @@ def admin_model_history(name: str):
 
 
 @app.post("/api/admin/models/train")
-def admin_train_model(model_name: str, market: str = "us"):
-    """Trigger model training via task queue."""
-    script_map = {
-        ("us_tech", "us"): "scripts/train_us_tech_v1_explicit.py",
-        ("hk_tech", "hk"): "scripts/train_hk_tech_v1.py",
-    }
-    script = script_map.get((model_name, market), "")
-    if not script:
-        return {"error": f"No training script for {model_name}/{market}"}, 400
-    cmd = f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 {script}"
+def admin_train_model(model_name: str, market: str = "us", skip_tuning: bool = False,
+                     config_name: str = ""):
+    """Trigger model training via task queue. Logs to separate file per run."""
+    # Use config_name if provided (from frontend ml/configs flow), else script_map
+    if config_name:
+        script = "scripts/train_ml.py"
+    else:
+        script_map = {
+            ("us_tech", "us"): "scripts/train_us_tech_v1_explicit.py",
+            ("hk_tech", "hk"): "scripts/train_hk_tech_v1.py",
+        }
+        script = script_map.get((model_name, market), "")
+        if not script:
+            return {"error": f"No training script for {model_name}/{market}"}, 400
+
+    from datetime import datetime, timezone
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    log_file = f"/var/log/quant/prod/train/{model_name}_{run_id}.log"
+
+    flags = ""
+    if skip_tuning:
+        flags += " --skip-tuning"
+    if config_name:
+        flags += f" --config {config_name}"
+
+    cmd = (
+        f"mkdir -p /var/log/quant/prod/train && "
+        f"cd /opt/quant-prod && "
+        f"PYTHONPATH=/opt/quant-prod .venv/bin/python3 {script}{flags} "
+        f"2>&1 | tee {log_file}"
+    )
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd}, status="pending")
     session.add(task)
     session.commit()
-    return {"task_id": task.id}
+    return {"task_id": task.id, "run_id": run_id}
 
 
 @app.get("/api/admin/models/{name}/versions")
@@ -2270,7 +2391,7 @@ async def dash_pipeline():
             SELECT MAX(
               TIMESTAMP(DATETIME(timestamp), "America/New_York")
             ) AS latest FROM {_DB_TABLE("us_bars_5m")}
-            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
         """
         rows = list(client.query(q).result())
         if rows and rows[0].latest:
@@ -2282,13 +2403,37 @@ async def dash_pipeline():
             SELECT MAX(
               TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)
             ) AS latest FROM {_DB_TABLE("hk_bars_5m")}
-            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
         """
         rows = list(client.query(q).result())
         if rows and rows[0].latest:
             result["hk"] = _db_serialize(rows[0].latest)
     except Exception as exc:
         logging.getLogger(__name__).error("dash_pipeline hk query error: %s", exc)
+    try:
+        # HK index pipeline
+        q = f"""
+            SELECT MAX(timestamp) AS latest
+            FROM {_DB_TABLE("hk_bars_index_5m")}
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+        """
+        rows = list(client.query(q).result())
+        if rows and rows[0].latest:
+            result["hk_index"] = _db_serialize(rows[0].latest)
+    except Exception as exc:
+        logging.getLogger(__name__).error("dash_pipeline hk_index query error: %s", exc)
+    try:
+        # US index pipeline
+        q = f"""
+            SELECT MAX(timestamp) AS latest
+            FROM {_DB_TABLE("us_bars_index_5m")}
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+        """
+        rows = list(client.query(q).result())
+        if rows and rows[0].latest:
+            result["us_index"] = _db_serialize(rows[0].latest)
+    except Exception as exc:
+        logging.getLogger(__name__).error("dash_pipeline us_index query error: %s", exc)
     return result
 
 
@@ -2308,7 +2453,7 @@ async def dash_market_symbols(market: str):
 
 
 @app.get("/api/admin/dashboard/market/{market}/{symbol}")
-async def dash_market_bars(market: str, symbol: str, limit: int = 78):
+async def dash_market_bars(market: str, symbol: str, limit: int = 78, days: int = 2):
     client = _DB_BQ()
     table = _DB_TABLE(f"{market}_bars_5m")
     full_symbol = f"{'US' if market == 'us' else 'HK'}.{symbol}"
@@ -2316,13 +2461,15 @@ async def dash_market_bars(market: str, symbol: str, limit: int = 78):
         ts_expr = "TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)"
     else:
         ts_expr = 'TIMESTAMP(DATETIME(timestamp), "America/New_York")'
+    # Use requested days + 2 extra to handle weekends/holidays
+    window_days = max(days, 2) + 2
     query = f"""
         WITH dedup AS (
           SELECT {ts_expr} AS timestamp, open, high, low, close, volume,
             ROW_NUMBER() OVER (PARTITION BY symbol, timestamp ORDER BY _ingest_time DESC NULLS LAST) AS rn
           FROM `{table}`
           WHERE symbol = '{full_symbol}'
-            AND {ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
+            AND {ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {window_days} DAY)
         )
         SELECT timestamp, open, high, low, close, volume
         FROM dedup WHERE rn = 1
@@ -2335,14 +2482,27 @@ async def dash_market_bars(market: str, symbol: str, limit: int = 78):
              "l": r.low, "c": r.close, "v": r.volume} for r in rows]
 
 
-# ── Static file serving (production build, after all API routes) ──────────────
+# ── Static + SPA fallback (production build, after all API routes) ────────────
 
-from fastapi.staticfiles import StaticFiles
 import os as _os
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 DIST = _os.path.join(_os.path.dirname(__file__), "frontend", "dist")
+
 if _os.path.isdir(DIST):
-    app.mount("/", StaticFiles(directory=DIST, html=True), name="static")
+    # Serve built assets under /assets/
+    assets_dir = _os.path.join(DIST, "assets")
+    if _os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        """SPA fallback: serve file if exists in dist/, else index.html for React Router."""
+        file_path = _os.path.join(DIST, full_path)
+        if _os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(_os.path.join(DIST, "index.html"))
 
 
 if __name__ == "__main__":
