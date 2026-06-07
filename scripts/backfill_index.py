@@ -22,46 +22,55 @@ BQ_PROJECT = "deductive-notch-495015-c2"
 BQ_DATASET = "quant"
 
 def backfill_hk(symbol: str, freq: str, start: str, end: str, client) -> int:
-    """Backfill HK index via Futu API."""
+    """Backfill HK index via Futu API with pagination."""
     from futu import OpenQuoteContext, KLType, RET_OK
 
     ktype_map = {"1m": KLType.K_1M, "5m": KLType.K_5M, "1d": KLType.K_DAY}
     ktype = ktype_map.get(freq)
-
     table = f"{BQ_PROJECT}.{BQ_DATASET}.hk_bars_index_{freq}"
+    total = 0
+    batch_start = start
 
-    q = OpenQuoteContext(host="127.0.0.1", port=11111)
-    written = 0
-    try:
-        ret, data, _ = q.request_history_kline(symbol, ktype=ktype,
-                                                start=start, end=end,
-                                                max_count=1000)
-        if ret != RET_OK:
-            logger.error("Futu K-line failed for %s: %s", symbol, data)
-            return 0
+    for page in range(20):
+        q = OpenQuoteContext(host="127.0.0.1", port=11111)
+        try:
+            ret, data, _ = q.request_history_kline(symbol, ktype=ktype,
+                                                    start=batch_start, end=end,
+                                                    max_count=1000)
+            if ret != 0:  # RET_OK is 0
+                logger.error("Futu K-line failed %s p%d: %s", symbol, page, data)
+                break
+            if data is None or len(data) == 0:
+                break
 
-        rows = []
-        for _, r in data.iterrows():
-            rows.append({
-                "symbol": symbol,
-                "timestamp": r["time_key"],
-                "open": float(r["open"]),
-                "high": float(r["high"]),
-                "low": float(r["low"]),
-                "close": float(r["close"]),
-                "volume": float(r.get("volume", 0) or 0),
-            })
+            rows = []
+            for _, r in data.iterrows():
+                rows.append({
+                    "symbol": symbol,
+                    "timestamp": str(r["time_key"]),
+                    "open": float(r["open"]),
+                    "high": float(r["high"]),
+                    "low": float(r["low"]),
+                    "close": float(r["close"]),
+                    "volume": float(r.get("volume", 0) or 0),
+                })
 
-        errors = client.insert_rows_json(table, rows)
-        if errors:
-            logger.error("BQ insert errors: %s", errors[:3])
-        else:
-            written = len(rows)
-            logger.info("Backfilled %s %s %s: %d bars", symbol, freq, start, written)
-    finally:
-        q.close()
+            errors = client.insert_rows_json(table, rows)
+            if errors:
+                logger.error("BQ insert err p%d: %s", page, errors[:3])
+                break
+            total += len(rows)
+            last_ts = str(data.iloc[-1]["time_key"])
+            print(f"  {symbol} page {page}: {len(rows)} rows, last={last_ts}")
+            logger.info("%s p%d: %d rows last=%s", symbol, page, len(rows), last_ts)
 
-    return written
+            if len(data) < 1000:
+                break
+            batch_start = last_ts
+        finally:
+            q.close()
+
+    return total
 
 def backfill_us(symbol: str, freq: str, start: str, client) -> int:
     """Backfill US index via yfinance."""
@@ -114,12 +123,15 @@ def main():
     total = 0
     for sym in symbols:
         if args.market == "hk":
-            n = backfill_hk(sym, args.freq, args.start, args.end or datetime.now().strftime("%Y-%m-%d"), client)
+            n = backfill_hk(sym, args.freq, args.start,
+                           args.end or datetime.now().strftime("%Y-%m-%d"), client)
         else:
             n = backfill_us(sym, args.freq, args.start, client)
         total += n
+        print(f"  {sym}: {n} bars total")
 
-    logger.info("Backfill complete: %d total bars (%s %s)", total, args.market, args.freq)
+    logger.info("Backfill done: %d bars (%s %s)", total, args.market, args.freq)
+    print(f"Complete: {total} bars ({args.market} {args.freq})")
 
 if __name__ == "__main__":
     main()

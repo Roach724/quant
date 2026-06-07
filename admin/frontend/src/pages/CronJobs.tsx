@@ -78,13 +78,15 @@ const CronJobs: React.FC = () => {
 
   // ── History ────────────────────────────────────────────────────────────────
 
-  const handleHistory = async (index: number, label: string) => {
+  const handleHistory = async (index: number, label: string, command: string) => {
     setHistoryTitle(`Execution History — ${label}`);
     setHistoryOpen(true);
     setHistoryLoading(true);
     setHistoryData([]);
     try {
-      const data: HistoryEntry[] = await api.get(`/api/admin/cron/${index}/history`);
+      const data: HistoryEntry[] = await api.get(
+        `/api/admin/cron/${index}/history?command=${encodeURIComponent(command)}`
+      );
       setHistoryData(data || []);
     } catch (err: any) {
       message.error(`Failed to load history: ${err.message}`);
@@ -283,7 +285,7 @@ const CronJobs: React.FC = () => {
               size="small"
               icon={<HistoryOutlined />}
               onClick={() =>
-                handleHistory(r.index!, r.name || r.command?.slice(0, 40) || `#${r.index}`)
+                handleHistory(r.index!, r.name || r.command?.slice(0, 40) || `#${r.index}`, r.command || '')
               }
             >
               历史

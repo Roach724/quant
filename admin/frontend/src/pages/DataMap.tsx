@@ -7,7 +7,8 @@ import {
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
-import { Tag, Button, Space, message, Tooltip, Card, Drawer, Table, Typography, Select, DatePicker, Popconfirm, Checkbox, Progress } from 'antd';
+import { Tag, Button, Space, message, Tooltip, Card, Drawer, Table, Typography, Select, DatePicker, Popconfirm, Checkbox, Progress, Tabs } from 'antd';
+import DashboardPipeline from './DashboardPipeline';
 import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { api } from '../api';
@@ -274,197 +275,234 @@ const DataMap: React.FC = () => {
     },
   ];
 
-  return (
-    <>
-      {/* ── Collector Status Card ─────────────────────────────────────────── */}
-      <Card
-        title={
-          <Space>
-            <CloudServerOutlined />
-            <span>ws-collector</span>
-          </Space>
-        }
-        extra={
-          <Space>
-            {collector.ws_collector !== 'active' && (
-              <Tooltip title="Start">
-                <Button
-                  type="primary"
-                  size="small"
-                  icon={<PlayCircleOutlined />}
-                  onClick={() => handleCollectorAction('start')}
-                  loading={collectorAction === 'start'}
-                  disabled={collectorAction !== null}
-                >
-                  Start
-                </Button>
-              </Tooltip>
-            )}
-            {collector.ws_collector === 'active' && (
-              <Tooltip title="Stop">
-                <Button
-                  size="small"
-                  icon={<PauseCircleOutlined />}
-                  onClick={() => handleCollectorAction('stop')}
-                  loading={collectorAction === 'stop'}
-                  disabled={collectorAction !== null}
-                >
-                  Stop
-                </Button>
-              </Tooltip>
-            )}
-            <Tooltip title="Restart">
-              <Button
-                size="small"
-                icon={<ReloadOutlined />}
-                onClick={() => handleCollectorAction('restart')}
-                loading={collectorAction === 'restart'}
-                disabled={collectorAction !== null}
-              >
-                Restart
-              </Button>
-            </Tooltip>
-          </Space>
-        }
-        style={{ marginBottom: 16 }}
-      >
-        <Space direction="vertical">
-          <Space>
-            <Text strong>Status:</Text>
-            {statusTag(collector.ws_collector)}
-          </Space>
-          <Space>
-            <Text strong>Last Heartbeat:</Text>
-            <Text>
-              {collector.last_heartbeat
-                ? dayjs(collector.last_heartbeat).format('YYYY-MM-DD HH:mm:ss')
-                : 'N/A'}
-            </Text>
-          </Space>
-          <Space>
-            <Text strong>实时订阅:</Text>
-            <Text>{subStats.subscriptions} 个</Text>
-            {rtQuota && <Text type="secondary">(配额: {rtQuota.remain} 剩余)</Text>}
-            <Text type="secondary">| 缓冲: {subStats.buffer}</Text>
-            <Text type="secondary">| 已收: {subStats.bars_received.toLocaleString()} bars</Text>
-          </Space>
-          {histQuota && (
+  const tabItems = [
+    {
+      key: 'collector',
+      label: 'Collector',
+      children: (
+        <Card
+          title={
             <Space>
-              <Text strong>历史K线配额:</Text>
-              <Text type={histQuota.remain < 50 ? 'danger' : undefined}>{histQuota.remain} 剩余</Text>
-              <Text type="secondary">(今日已用: {histQuota.today_used})</Text>
+              <CloudServerOutlined />
+              <span>ws-collector</span>
             </Space>
-          )}
-        </Space>
-      </Card>
-
-      {/* ── Data Backfill Card ────────────────────────────────────────────── */}
-      <Card
-        title={
-          <Space>
-            <HistoryOutlined />
-            <span>数据回填</span>
+          }
+          extra={
+            <Space>
+              {collector.ws_collector !== 'active' && (
+                <Tooltip title="Start">
+                  <Button
+                    type="primary"
+                    size="small"
+                    icon={<PlayCircleOutlined />}
+                    onClick={() => handleCollectorAction('start')}
+                    loading={collectorAction === 'start'}
+                    disabled={collectorAction !== null}
+                  >
+                    Start
+                  </Button>
+                </Tooltip>
+              )}
+              {collector.ws_collector === 'active' && (
+                <Tooltip title="Stop">
+                  <Button
+                    size="small"
+                    icon={<PauseCircleOutlined />}
+                    onClick={() => handleCollectorAction('stop')}
+                    loading={collectorAction === 'stop'}
+                    disabled={collectorAction !== null}
+                  >
+                    Stop
+                  </Button>
+                </Tooltip>
+              )}
+              <Tooltip title="Restart">
+                <Button
+                  size="small"
+                  icon={<ReloadOutlined />}
+                  onClick={() => handleCollectorAction('restart')}
+                  loading={collectorAction === 'restart'}
+                  disabled={collectorAction !== null}
+                >
+                  Restart
+                </Button>
+              </Tooltip>
+            </Space>
+          }
+        >
+          <Space direction="vertical">
+            <Space>
+              <Text strong>Status:</Text>
+              {statusTag(collector.ws_collector)}
+            </Space>
+            <Space>
+              <Text strong>Last Heartbeat:</Text>
+              <Text>
+                {collector.last_heartbeat
+                  ? dayjs(collector.last_heartbeat).format('YYYY-MM-DD HH:mm:ss')
+                  : 'N/A'}
+              </Text>
+            </Space>
+            <Space>
+              <Text strong>实时订阅:</Text>
+              <Text>{subStats.subscriptions} 个</Text>
+              {rtQuota && (
+                <>
+                  <Text type="secondary">(配额剩余: {rtQuota.remain}, 已用: {rtQuota.used})</Text>
+                </>
+              )}
+              <Text type="secondary">| 缓冲: {subStats.buffer}</Text>
+              <Text type="secondary">| 已收: {subStats.bars_received.toLocaleString()} bars</Text>
+            </Space>
+            {histQuota ? (
+              <Space>
+                <Text strong>历史K线配额:</Text>
+                <Text type={histQuota.remain < 50 ? 'danger' : undefined}>
+                  剩余: {histQuota.remain}, 今日已用: {histQuota.today_used}
+                </Text>
+              </Space>
+            ) : (
+              <Space>
+                <Text strong>历史K线配额:</Text>
+                <Text type="secondary">加载中...</Text>
+              </Space>
+            )}
           </Space>
-        }
-        style={{ marginBottom: 16 }}
-      >
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <Space wrap>
-            <Text strong>数据类别:</Text>
-            <Select
-              value={backfillCategory}
-              onChange={(v) => { setBackfillCategory(v); setBackfillTables([]); }}
-              style={{ width: 160 }}
-              options={backfillCategories.map((c) => ({ value: c.key, label: c.label }))}
-            />
-            <Text strong>数据源:</Text>
-            <Select
-              value={backfillSource}
-              onChange={setBackfillSource}
-              style={{ width: 220 }}
-              options={backfillSources.map((s) => ({ value: s.key, label: s.label }))}
-            />
-            <Text strong>日期:</Text>
-            <DatePicker.RangePicker
-              onChange={(dates) => {
-                if (dates && dates[0] && dates[1]) {
-                  setBackfillDates([dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]);
-                } else {
-                  setBackfillDates(null);
-                }
-              }}
-            />
-            <Popconfirm
-              title={`确认回填 ${filteredTables.length} 个表？`}
-              description={backfillDates ? `${backfillDates[0]} ~ ${backfillDates[1]}` : ''}
-              onConfirm={handleBackfill}
-              okText="确认"
-              cancelText="取消"
-              disabled={backfillTables.length === 0 || !backfillDates}
-            >
-              <Button
-                type="primary"
-                icon={<HistoryOutlined />}
-                loading={backfilling}
+        </Card>
+      ),
+    },
+    {
+      key: 'backfill',
+      label: '数据回填',
+      children: (
+        <Card
+          title={
+            <Space>
+              <HistoryOutlined />
+              <span>数据回填</span>
+            </Space>
+          }
+        >
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Space wrap>
+              <Text strong>数据类别:</Text>
+              <Select
+                value={backfillCategory}
+                onChange={(v) => { setBackfillCategory(v); setBackfillTables([]); }}
+                style={{ width: 160 }}
+                options={backfillCategories.map((c) => ({ value: c.key, label: c.label }))}
+              />
+              <Text strong>数据源:</Text>
+              <Select
+                value={backfillSource}
+                onChange={setBackfillSource}
+                style={{ width: 220 }}
+                options={backfillSources.map((s) => ({ value: s.key, label: s.label }))}
+              />
+              <Text strong>日期:</Text>
+              <DatePicker.RangePicker
+                onChange={(dates) => {
+                  if (dates && dates[0] && dates[1]) {
+                    setBackfillDates([dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]);
+                  } else {
+                    setBackfillDates(null);
+                  }
+                }}
+              />
+              <Popconfirm
+                title={`确认回填 ${filteredTables.length} 个表？`}
+                description={backfillDates ? `${backfillDates[0]} ~ ${backfillDates[1]}` : ''}
+                onConfirm={handleBackfill}
+                okText="确认"
+                cancelText="取消"
                 disabled={backfillTables.length === 0 || !backfillDates}
               >
-                开始回填
-              </Button>
-            </Popconfirm>
+                <Button
+                  type="primary"
+                  icon={<HistoryOutlined />}
+                  loading={backfilling}
+                  disabled={backfillTables.length === 0 || !backfillDates}
+                >
+                  开始回填
+                </Button>
+              </Popconfirm>
+            </Space>
+            {backfillProgress && (
+              <Progress percent={Math.round(backfillProgress.done / backfillProgress.total * 100)}
+                format={() => `${backfillProgress.done}/${backfillProgress.total}`}
+                status="active" style={{ maxWidth: 400, marginTop: 8 }} />
+            )}
+            {availableTables.length > 0 && (
+              <Checkbox.Group
+                options={availableTables.map((t) => ({ label: t.label, value: t.key }))}
+                value={backfillTables}
+                onChange={(v) => setBackfillTables(v as string[])}
+              />
+            )}
           </Space>
-          {backfillProgress && (
-            <Progress percent={Math.round(backfillProgress.done / backfillProgress.total * 100)}
-              format={() => `${backfillProgress.done}/${backfillProgress.total}`}
-              status="active" style={{ maxWidth: 400, marginTop: 8 }} />
-          )}
-          {availableTables.length > 0 && (
-            <Checkbox.Group
-              options={availableTables.map((t) => ({ label: t.label, value: t.key }))}
-              value={backfillTables}
-              onChange={(v) => setBackfillTables(v as string[])}
+        </Card>
+      ),
+    },
+    {
+      key: 'pipeline',
+      label: 'Pipeline',
+      children: <DashboardPipeline />,
+    },
+    {
+      key: 'alert',
+      label: 'Alert',
+      children: (
+        <Card>
+          <Text>Alert — 告警中心（待完善）</Text>
+        </Card>
+      ),
+    },
+    {
+      key: 'overview',
+      label: '数据概览',
+      children: (
+        <>
+          <ProTable<DataTableItem>
+            headerTitle="BQ Tables"
+            actionRef={actionRef}
+            rowKey="table_name"
+            search={false}
+            columns={columns}
+            request={async () => {
+              const data = await api.get('/api/admin/data/tables');
+              return { data, success: true, total: data.length };
+            }}
+            pagination={{ pageSize: 20 }}
+          />
+          <Drawer
+            title={`Schema: ${schemaDrawer.tableName}`}
+            open={schemaDrawer.open}
+            onClose={() => setSchemaDrawer({ open: false, tableName: '', columns: [] })}
+            width={400}
+          >
+            <Table
+              dataSource={schemaDrawer.columns}
+              rowKey="name"
+              pagination={false}
+              size="small"
+              columns={[
+                { title: 'Column', dataIndex: 'name', key: 'name' },
+                {
+                  title: 'Type',
+                  dataIndex: 'type',
+                  key: 'type',
+                  render: (t: string) => <Tag>{t}</Tag>,
+                },
+              ]}
             />
-          )}
-        </Space>
-      </Card>
+          </Drawer>
+        </>
+      ),
+    },
+  ];
 
-      {/* ── Data Map Table ────────────────────────────────────────────────── */}
-      <ProTable<DataTableItem>
-        headerTitle="BQ Tables"
-        actionRef={actionRef}
-        rowKey="table_name"
-        search={false}
-        columns={columns}
-        request={async () => {
-          const data = await api.get('/api/admin/data/tables');
-          return { data, success: true, total: data.length };
-        }}
-        pagination={{ pageSize: 20 }}
-      />
-
-      {/* ── Schema Drawer ─────────────────────────────────────────────────── */}
-      <Drawer
-        title={`Schema: ${schemaDrawer.tableName}`}
-        open={schemaDrawer.open}
-        onClose={() => setSchemaDrawer({ open: false, tableName: '', columns: [] })}
-        width={400}
-      >
-        <Table
-          dataSource={schemaDrawer.columns}
-          rowKey="name"
-          pagination={false}
-          size="small"
-          columns={[
-            { title: 'Column', dataIndex: 'name', key: 'name' },
-            {
-              title: 'Type',
-              dataIndex: 'type',
-              key: 'type',
-              render: (t: string) => <Tag>{t}</Tag>,
-            },
-          ]}
-        />
-      </Drawer>
-    </>
+  return (
+    <Tabs defaultActiveKey="collector" items={tabItems} />
   );
 };
 

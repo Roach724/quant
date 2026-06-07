@@ -667,7 +667,7 @@ class ExperimentManager:
         try:
             from google.cloud import bigquery
             client = bigquery.Client(project=BQ_PROJECT)
-            for table in ["experiment_equity", "experiment_trades"]:
+            for table in ["experiment_equity", "experiment_trades", "experiment_runs"]:
                 q = (
                     f"DELETE FROM `{BQ_PROJECT}.{BQ_DATASET}.{table}` "
                     f"WHERE run_id = @run_id"

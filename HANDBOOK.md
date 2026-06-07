@@ -1,6 +1,6 @@
 # 量化交易系统 — 规范与子系统手册
 
-> 最后更新: 2026-06-05 | 维护者: Jarvis + 老大
+> 最后更新: 2026-06-07 | 维护者: Jarvis + 老大
 >
 > 本文档汇总项目中所有已建立的规范、子系统、约定和使用方式。
 > 新成员或新功能开发前应先阅读本文档。
@@ -283,6 +283,70 @@ python scripts/hk_backfill_1d.py
 - **时间戳**: Futu 返回当地时间，ws_collector **存的是当地时间（未转 UTC）**。Dashboard 读取时做修正
 - **BQ 写入**: 通过 `common/bq_writer.py` → `insert_rows_json`（30s 超时）
 - **GCS 备份**: `scripts/backup_bq_to_gcs.sh` (每日 06:00 UTC)
+
+### 5.6 指数数据采集
+
+**组件**: `collectors/ws_collector.py` (港股指数) + `collectors/index_collector_us.py` (美股指数)
+
+**职责**: 采集港美股大盘指数实时行情（恒生、纳指、标普等），写入 BQ。
+
+**标的范围** (SSOT: `config/symbols.yaml` → `indices`):
+
+| 市场 | 代码 | 名称 | 数据源 |
+|------|------|------|--------|
+| HK | `HK.800000` | 恒生指数 | Futu OpenD WebSocket |
+| HK | `HK.800700` | 恒生科技指数 | Futu OpenD WebSocket |
+| HK | `HK.800100` | 国企指数 | Futu OpenD WebSocket |
+| US | `^IXIC` | 纳斯达克综合指数 | yfinance cron 轮询 |
+| US | `^GSPC` | 标普 500 | yfinance cron 轮询 |
+| US | `^DJI` | 道琼斯工业 | yfinance cron 轮询 |
+| US | `^RUT` | 罗素 2000 | yfinance cron 轮询 |
+
+**架构**:
+
+- **港股指数**: 复用 ws_collector WebSocket 连接，独立长连接订阅（不走轮转），利用现有 BarHandler 去重 + 定时 flush 机制，写入 `hk_bars_index_5m`
+- **美股指数**: 独立 cron 轮询 (`*/5 * * * 1-5`)，通过 yfinance 拉取 5m 数据 → 去重（基于 BQ MAX(timestamp)）→ 写入 `us_bars_index_5m`
+
+```
+港股: Futu OpenD → BarHandler → drain_to_buffer → flush → BQ hk_bars_index_5m
+美股: cron → yfinance → fetch_and_write → BQ us_bars_index_5m
+                     ↓
+              compute_daily_bars → BQ hk_bars_index_1d / us_bars_index_1d
+```
+
+**BQ 表**:
+
+| 表 | 频率 | 来源 | 分区 |
+|----|------|------|------|
+| `hk_bars_index_5m` | 5 分钟 | Futu WebSocket | DATE(timestamp) |
+| `hk_bars_index_1d` | 日线 | 5m → 1d 聚合 | date |
+| `us_bars_index_5m` | 5 分钟 | yfinance cron | DATE(timestamp) |
+| `us_bars_index_1d` | 日线 | 5m → 1d 聚合 | date |
+
+**Schema** (与股票 bars 表一致):
+```sql
+symbol STRING, timestamp TIMESTAMP, open/high/low/close/volume FLOAT64,
+_ingest_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+```
+
+**日线聚合**: 由 `scripts/compute_daily_bars.py` 扩展，从 5m K 线聚合为日线，写入对应的 `_index_1d` 表。
+
+**市场时段保护**: 美股指数采集器仅在美股交易时段 (Mon-Fri 13:30-20:00 UTC) 运行，非交易时段自动 skip。
+
+**运行方式**:
+```bash
+# 港股指数 (ws_collector 自动订阅，无需单独启动)
+sudo systemctl status ws-collector
+
+# 美股指数 cron
+*/5 * * * 1-5 /opt/quant-prod/scripts/cron/us_index_5m.sh
+
+# 数据回填
+python scripts/backfill_index.py --market hk --freq 5m --start 2024-01-01
+python scripts/backfill_index.py --market us --freq 1d --start 2020-01-01
+```
+
+**Dashboard**: 数据地图 (`hk_bars_index_5m` 等 4 张表) + Pipeline 健康监控 (hk_index / us_index 最新数据时间戳)
 
 ---
 
@@ -751,11 +815,11 @@ write_rows_to_bq(df, table_name="factor_values")
 
 统一管理平台，在一个前端页面上操作所有量化系统模块，替代 SSH + 命令行。
 
-- **地址**: `http://localhost:8091`（公网通过 cloudflared tunnel）
+- **地址**: `https://admin.aiworxpace.xyz`（公网） / `http://localhost:8091`（内网）
 - **架构**: React 18 + Ant Design Pro + ECharts (Vite/TypeScript) → FastAPI (:8091) → SQLAlchemy/SQLite + BQ → Worker
-- **认证**: 无（cloudflared 隧道 + 防火墙保护）
-- **部署**: `systemctl [start|stop|restart] quant-admin quant-admin-worker`
-- **前端**：Vite 构建 → `admin/frontend/dist/` → FastAPI StaticFiles 挂载
+- **认证**: Cloudflare Access Email OTP（仅授权邮箱可登录）
+- **部署**: `systemctl [start|stop|restart] quant-admin quant-admin-worker cloudflared`
+- **前端**：Vite 构建 → `admin/frontend/dist/` → FastAPI SPA fallback 挂载
 - **后端**：FastAPI + SQLAlchemy ORM → SQLite (`/var/quant/admin.db`) + BQ Client
 
 ### 12.2 整体架构
@@ -776,7 +840,7 @@ write_rows_to_bq(df, table_name="factor_values")
 │  ├─ WebSocket /ws/logs (实时日志)                    │
 │  ├─ MLflow 反向代理 (/mlflow/*)                      │
 │  ├─ Dashboard 内嵌 API (/api/admin/dashboard/*)      │
-│  └─ StaticFiles (dist/ SPA 单页应用)                 │
+│  └─ SPA fallback (/assets/* 静态 + /{path} → index.html) │
 ├──────────────────────────────────────────────────────┤
 │               Backend                                │
 │  ├─ SQLAlchemy → SQLite /var/quant/admin.db         │
@@ -1256,3 +1320,77 @@ fi
 - 系统配置修改必须先展示改动、等审阅再执行
 - 标的覆盖数量以 `config/symbols.yaml` 为准，不得自设
 - **禁止手动 cp 文件到 prod** — 前端 dist 构建和部署必须走 CI/CD
+
+---
+
+## 16. 公网访问与安全
+
+### 16.1 Cloudflare Tunnel
+
+Admin 管理平台通过 Cloudflare 命名隧道对外暴露，使用持久化域名。
+
+**域名**: `https://admin.aiworxpace.xyz`
+
+**架构**:
+```
+用户 → Cloudflare Access (认证) → cloudflared tunnel → localhost:8091 (Admin)
+```
+
+**服务管理**:
+```bash
+sudo systemctl status cloudflared    # 查看状态
+sudo systemctl restart cloudflared   # 重启隧道
+```
+
+**隧道信息**:
+- 隧道名称: `quant-admin`
+- 协议: QUIC (自动选择，UDP 优先)
+- 配置: Cloudflare Zero Trust Dashboard → Networks → Tunnels
+- Ingress: `admin.aiworxpace.xyz` → `http://localhost:8091`
+
+**安装方式**:
+```bash
+# 创建隧道后获得 token，在服务器上:
+sudo cloudflared service install <token>
+# 自动创建 /etc/cloudflared/ + systemd 服务
+```
+
+### 16.2 Cloudflare Access 认证
+
+在 Tunnel 前端加了 Access 认证，未授权用户无法到达 Admin 服务。
+
+**配置**: Cloudflare Zero Trust → Access → Applications → Self-hosted
+- Application: `Quant Admin`
+- Domain: `admin.aiworxpace.xyz`
+- Policy: `Allow` → `Emails` → 授权邮箱
+- Session Duration: 24 hours
+
+**认证流程**:
+1. 用户访问 `admin.aiworxpace.xyz`
+2. Cloudflare 拦截 → 显示登录页
+3. 输入授权邮箱 → 收到 OTP 验证码
+4. 输入验证码 → 进入 Admin
+
+### 16.3 SPA Fallback 修复
+
+**问题**: Admin 前端在子页面（`/experiments`, `/data` 等）强制刷新时崩溃。
+
+**根因**: FastAPI 原来用 `StaticFiles(html=True)` 挂载，只在目录请求时返回 `index.html`。刷新 `/experiments` 时找不到文件 → 404 → React 无法加载。
+
+**修复** (`admin/server.py`):
+```python
+# 替换原来的 app.mount("/", StaticFiles(...)) 为：
+if _os.path.isdir(DIST):
+    # 1. /assets/* → 静态 JS/CSS
+    app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+    
+    # 2. /{path} → 文件存在就返回，否则返回 index.html (SPA 兜底)
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        file_path = _os.path.join(DIST, full_path)
+        if _os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(_os.path.join(DIST, "index.html"))
+```
+
+**效果**: 任何未知路径都返回 `index.html`，React Router 接手渲染正确页面，刷新不再崩溃。

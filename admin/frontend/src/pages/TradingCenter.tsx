@@ -11,15 +11,14 @@ import {
   Tag, Button, Space, message, Tooltip, Modal,
   Select, Input, Drawer, Descriptions, Table,
   Alert, Divider, Popconfirm, Typography, Tabs,
-  Row, Col, Spin, Empty,
+  Row, Col, Spin, Empty, Card,
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
 import { api } from '../api';
+import DashboardProd from './DashboardProd';
 
 const { Text } = Typography;
-
-const stripYaml = (name: string) => name.replace(/\.yaml$/, '');
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,6 +38,8 @@ const statusColor: Record<string, string> = {
   idle: 'default', pending: 'default', archived: 'default',
 };
 
+const stripYaml = (name: string) => name.replace(/\.yaml$/, '');
+
 // ── Poll helper ──────────────────────────────────────────────────────────────
 
 const pollTask = (taskId: number): Promise<{ status: string; result: string | null }> =>
@@ -53,39 +54,11 @@ const pollTask = (taskId: number): Promise<{ status: string; result: string | nu
     check();
   });
 
-// =============================================================================
-// ExperimentDashboard — parent with two sub-tabs
-// =============================================================================
-
-const ExperimentDashboard: React.FC = () => {
-  const [tab, setTab] = useState('configs');
-  return (
-    <Tabs activeKey={tab} onChange={setTab} items={[
-      { key: 'configs', label: '实验配置', children: <ConfigsTabs /> },
-      { key: 'lab', label: '实验室', children: <LabTabs /> },
-    ]} />
-  );
-};
-
-// =============================================================================
-// ConfigsTabs — Configs with Live/Paper sub-tabs
-// =============================================================================
-
-const ConfigsTabs: React.FC = () => {
-  const [sub, setSub] = useState('live');
-  return (
-    <Tabs activeKey={sub} onChange={setSub} items={[
-      { key: 'live', label: 'Live', children: <ConfigsTab filterPrefix="live_" /> },
-      { key: 'paper', label: 'Paper', children: <ConfigsTab filterPrefix="paper_" /> },
-    ]} />
-  );
-};
-
 // ═══════════════════════════════════════════════════════════════════════════════
-// ConfigsTab — manage YAML config templates
-// =============================================================================
+// ProdConfigsTab — Prod config management
+// ═══════════════════════════════════════════════════════════════════════════════
 
-const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
+const ProdConfigsTab: React.FC = () => {
   const actionRef = useRef<ActionType>(undefined);
   const [createOpen, setCreateOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -164,14 +137,14 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
   return (
     <>
       <ProTable<ConfigItem>
-        headerTitle="实验配置模板"
+        headerTitle="Prod 配置模板"
         actionRef={actionRef}
         rowKey="name"
         search={false}
         columns={columns}
         request={async () => {
           const data = await api.get('/api/admin/experiments/configs');
-          const filtered = filterPrefix ? (data || []).filter((c: any) => c.name.startsWith(filterPrefix)) : (data || []);
+          const filtered = (data || []).filter((c: any) => c.name.startsWith('prod_'));
           return { data: filtered, success: true, total: filtered.length };
         }}
         toolBarRender={() => [
@@ -180,11 +153,10 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
         pagination={false}
       />
 
-      {/* Create Config Modal */}
       <Modal title="新建配置模板" open={createOpen} onCancel={() => setCreateOpen(false)}
         onOk={async () => {
-          const el = document.getElementById('new-config-content') as HTMLTextAreaElement;
-          const nm = (document.getElementById('new-config-name') as HTMLInputElement)?.value || '';
+          const el = document.getElementById('tc-new-config-content') as HTMLTextAreaElement;
+          const nm = (document.getElementById('tc-new-config-name') as HTMLInputElement)?.value || '';
           if (!nm || !el) return;
           try {
             await api.put(`/api/admin/experiments/configs/${nm}.yaml`, { content: el.value });
@@ -196,12 +168,11 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
         width={700}
       >
         <Space direction="vertical" style={{ width: '100%' }}>
-          <Input id="new-config-name" placeholder="config name (e.g. my_strategy_us)" addonAfter=".yaml" />
-          <Input.TextArea id="new-config-content" rows={20} placeholder="YAML content..." style={{ fontFamily: 'monospace', fontSize: 12 }} />
+          <Input id="tc-new-config-name" placeholder="config name (e.g. my_strategy_us)" addonAfter=".yaml" />
+          <Input.TextArea id="tc-new-config-content" rows={20} placeholder="YAML content..." style={{ fontFamily: 'monospace', fontSize: 12 }} />
         </Space>
       </Modal>
 
-      {/* Edit Config Drawer */}
       <Drawer title={`编辑: ${stripYaml(editorName)}`} open={editorOpen} onClose={() => setEditorOpen(false)} width={700}
         extra={<Popconfirm title="保存修改？" onConfirm={saveEditor}><Button type="primary">Save</Button></Popconfirm>}
       >
@@ -209,14 +180,12 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
           style={{ fontFamily: 'monospace', fontSize: 12 }} />
       </Drawer>
 
-      {/* Rename Modal */}
       <Modal title={`重命名: ${stripYaml(renameOld)}`} open={renameOpen} onCancel={() => setRenameOpen(false)}
         onOk={doRename} okText="确认">
         <Input value={renameNew} onChange={e => setRenameNew(e.target.value)}
           addonAfter=".yaml" placeholder="新名称" style={{ marginTop: 8 }} />
       </Modal>
 
-      {/* View Config Drawer */}
       <Drawer title={`查看: ${stripYaml(viewName)}`} open={viewOpen} onClose={() => setViewOpen(false)} width={700}>
         <pre style={{ fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#fafafa', padding: 16, borderRadius: 6, margin: 0 }}>
           {viewContent}
@@ -226,27 +195,11 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
   );
 };
 
-// =============================================================================
 // ═══════════════════════════════════════════════════════════════════════════════
-// LabTabs — Lab with Live/Paper sub-tabs
+// ProdLabTab — Prod experiment management
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const LabTabs: React.FC = () => {
-  const [sub, setSub] = useState('live');
-  return (
-    <Tabs activeKey={sub} onChange={setSub} items={[
-      { key: 'live', label: 'Live', children: <LabTab filterType="live" /> },
-      { key: 'paper', label: 'Paper', children: <LabTab filterType="paper" /> },
-    ]} />
-  );
-};
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// LabTab — experiment instances management
-// ═══════════════════════════════════════════════════════════════════════════════
-// =============================================================================
-
-const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
+const ProdLabTab: React.FC = () => {
   const actionRef = useRef<ActionType>(undefined);
   const navigate = useNavigate();
   const [detailDrawer, setDetailDrawer] = useState(false);
@@ -256,7 +209,6 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   const [expandedRunKeys, setExpandedRunKeys] = useState<Record<string, { equity: any[]; positions: any[]; loading: boolean; error?: boolean }>>({});
   const [configDrawer, setConfigDrawer] = useState<{ open: boolean; expId: string; content: string; loading: boolean }>({ open: false, expId: '', content: '', loading: false });
 
-  // Create from template
   const [createOpen, setCreateOpen] = useState(false);
   const [templates, setTemplates] = useState<ConfigItem[]>([]);
   const [createTemplate, setCreateTemplate] = useState('');
@@ -264,14 +216,10 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
 
   const loadTemplates = async () => {
     const data = await api.get('/api/admin/experiments/configs');
-    // Filter by type: paper lab only shows paper_* templates
-    const filtered = filterType
-      ? (data || []).filter((c: any) => c.name.startsWith(filterType + '_'))
-      : (data || []);
+    const filtered = (data || []).filter((c: any) => c.name.startsWith('prod_'));
     setTemplates(filtered);
   };
 
-  // ── Actions ────────────────────────────────────────────────────
   const handleAction = async (expId: string, action: string) => {
     try {
       const data = await api.post(`/api/admin/experiments/${expId}/${action}`);
@@ -321,7 +269,7 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
     try {
       await api.post('/api/admin/experiments/create-from-config', {
         template: createTemplate, exp_id: createExpId,
-        type: parts[0] || 'live', market: parts[1] || 'us',
+        type: parts[0] || 'prod', market: parts[1] || 'us',
         strategy: parts[2] || 'ml', version: parseInt(parts[3]?.replace('v','') || '1'),
       });
       message.success(`Created ${createExpId}`);
@@ -329,49 +277,9 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
     } catch (e: any) { message.error(`Create failed: ${e.message}`); }
   };
 
-  // ── Columns ────────────────────────────────────────────────────
-  const columns: ProColumns<ExperimentItem>[] = [
-    { title: 'exp_id', dataIndex: 'exp_id', key: 'exp_id', width: 200 },
-    { title: 'Name', dataIndex: 'name', key: 'name' },
-    {
-      title: 'Market', dataIndex: 'market', key: 'market', width: 60,
-      render: (_, r) => <Tag>{r.market?.toUpperCase()}</Tag>,
-    },
-    {
-      title: 'Status', dataIndex: 'has_active_run', key: 'status', width: 100,
-      render: (_, r) => r.has_active_run
-        ? <Tag color="green">🔵 活跃 Run</Tag>
-        : <Tag>⚪ 无活跃 Run</Tag>,
-    },
-    {
-      title: '累计 Run', dataIndex: 'total_runs', key: 'total_runs', width: 50,
-    },
-    {
-      title: 'Actions', key: 'actions', width: 260,
-      render: (_, r) => (
-        <Space>
-          <Tooltip title="Config"><Button size="small" icon={<SettingOutlined />} onClick={() => openConfig(r.exp_id)} /></Tooltip>
-          <Tooltip title="Detail"><Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(r)} /></Tooltip>
-          <Tooltip title={r.has_active_run ? `已有活跃 Run (${r.active_run_id})，请先停止` : '启动新 Run'}>
-            <Popconfirm title={`为 ${r.exp_id} 启动新 Run？`} onConfirm={() => handleAction(r.exp_id, 'start')}
-              disabled={r.has_active_run}>
-              <Button type="primary" size="small" icon={<PlayCircleOutlined />} disabled={r.has_active_run}>启动新 Run</Button>
-            </Popconfirm>
-          </Tooltip>
-          <Tooltip title={r.has_active_run ? `存在活跃 Run，无法删除` : '永久删除'}>
-            <Popconfirm title={`永久删除 ${r.exp_id}？`} description="将删除所有数据" onConfirm={() => handleDelete(r.exp_id)}
-              okText="确认删除" okButtonProps={{ danger: true }} disabled={r.has_active_run}>
-              <Button size="small" danger icon={<DeleteOutlined />} disabled={r.has_active_run} />
-            </Popconfirm>
-          </Tooltip>
-        </Space>
-      ),
-    },
-  ];
-
   const handleViewRunLog = (runId: string) => {
     if (!detailExp) return;
-    const logModule = detailExp.type === 'paper' ? 'paper_run' : 'live';
+    const logModule = 'live';
     const fileName = `${detailExp.exp_id}_${runId}.log`;
     navigate(`/logs?module=${logModule}&file=${encodeURIComponent(fileName)}`);
   };
@@ -380,7 +288,6 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
     try {
       await api.post(`/api/admin/experiments/${expId}/runs/${runId}/stop`);
       message.success(`Run ${runId} stopped`);
-      // Reload runs
       setRunsLoading(true);
       try { const d = await api.get(`/api/admin/experiments/${expId}/runs`); setRuns(d); } catch { setRuns([]); } finally { setRunsLoading(false); }
       actionRef.current?.reload();
@@ -414,7 +321,6 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   };
 
   const loadRunDetails = async (expId: string, runId: string) => {
-    // Skip if already loaded
     if (expandedRunKeys[runId] && !expandedRunKeys[runId].loading) return;
     setExpandedRunKeys(prev => ({ ...prev, [runId]: { equity: [], positions: [], loading: true } }));
     try {
@@ -434,70 +340,6 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
     }
   };
 
-  const runColumns: ColumnsType<RunRecord> = [
-    { title: 'Run ID', dataIndex: 'run_id', key: 'run_id', width: 200 },
-    { title: 'Status', dataIndex: 'status', key: 'status', width: 90, render: (_, r) => <Tag color={statusColor[r.status] || 'default'}>{r.status}</Tag> },
-    { title: 'Started', dataIndex: 'started_at', key: 'started_at', width: 160, render: (_, r) => r.started_at?.slice(0,19) || '-' },
-    { title: 'Ended', dataIndex: 'ended_at', key: 'ended_at', width: 160, render: (_, r) => r.ended_at?.slice(0,19) || '-' },
-    {
-      title: '', key: 'actions', width: 340,
-      render: (_, r) => {
-        const exp = detailExp;
-        const expId = exp?.exp_id || '';
-        return (
-          <Space size={4}>
-            {/* Start — blocked if any run is active */}
-            <Tooltip title={exp?.has_active_run ? '已有活跃 Run' : '启动此 Run'}>
-              <Button size="small" icon={<PlayCircleOutlined />}
-                disabled={exp?.has_active_run || r.status === 'running'}
-                onClick={() => r.status !== 'running' && handleStartRun(expId, r.run_id)} />
-            </Tooltip>
-            {/* Stop — only for running */}
-            {r.status === 'running' && (
-              <Popconfirm title={`停止 Run ${r.run_id}？`}
-                onConfirm={() => handleStopRun(expId, r.run_id)}>
-                <Button size="small" danger icon={<PauseCircleOutlined />} />
-              </Popconfirm>
-            )}
-            {/* Log */}
-            <Tooltip title="查看日志">
-              <Button size="small" icon={<FileTextOutlined />}
-                onClick={() => handleViewRunLog(r.run_id)} />
-            </Tooltip>
-            {/* Detail — jump to Dashboard */}
-            <Tooltip title="实验详情">
-              <Button size="small" icon={<LinkOutlined />}
-                onClick={() => navigate(`/board?tab=${exp?.type === 'paper' ? 'paper' : 'live'}&exp_id=${expId}&run_id=${r.run_id}`)} />
-            </Tooltip>
-            {/* Clear state — blocked if running */}
-            <Popconfirm title={`清除 Run ${r.run_id} 状态？`} description="将删除 checkpoint/state，保留 BQ 数据"
-              onConfirm={() => handleClearRunState(expId, r.run_id)}
-              disabled={r.status === 'running'} okButtonProps={{ danger: true }}>
-              <Tooltip title={r.status === 'running' ? '活跃 Run 无法清除' : '清除状态'}>
-                <Button size="small" icon={<ClearOutlined />} disabled={r.status === 'running'} />
-              </Tooltip>
-            </Popconfirm>
-            {/* Delete — blocked if running */}
-            <Popconfirm title={`永久删除 Run ${r.run_id}？`} description="将删除所有关联数据"
-              onConfirm={() => handleDeleteRun(expId, r.run_id)}
-              disabled={r.status === 'running'} okButtonProps={{ danger: true }}>
-              <Tooltip title={r.status === 'running' ? '活跃 Run 无法删除' : '删除'}>
-                <Button size="small" danger icon={<DeleteOutlined />} disabled={r.status === 'running'} />
-              </Tooltip>
-            </Popconfirm>
-          </Space>
-        );
-      },
-    },
-  ];
-
-  // Position columns for expanded row
-  const posColumns: ColumnsType<any> = [
-    { title: 'Symbol', dataIndex: 'symbol', key: 'symbol', width: 80 },
-    { title: 'Qty', dataIndex: 'qty', key: 'qty', width: 80, render: (v) => Number(v).toFixed(2) },
-    { title: 'Cost', dataIndex: 'cost', key: 'cost', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
-  ];
-
   function buildEquityChart(data: any[]) {
     const bars = data.map((d: any) => d.bar?.toString() ?? '');
     const values = data.map((d: any) => Number(d.equity ?? 0));
@@ -515,17 +357,111 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
     };
   }
 
+  const columns: ProColumns<ExperimentItem>[] = [
+    { title: 'exp_id', dataIndex: 'exp_id', key: 'exp_id', width: 200 },
+    { title: 'Name', dataIndex: 'name', key: 'name' },
+    {
+      title: 'Market', dataIndex: 'market', key: 'market', width: 60,
+      render: (_, r) => <Tag>{r.market?.toUpperCase()}</Tag>,
+    },
+    {
+      title: 'Status', dataIndex: 'has_active_run', key: 'status', width: 100,
+      render: (_, r) => r.has_active_run
+        ? <Tag color="green">🔵 活跃 Run</Tag>
+        : <Tag>⚪ 无活跃 Run</Tag>,
+    },
+    { title: '累计 Run', dataIndex: 'total_runs', key: 'total_runs', width: 50 },
+    {
+      title: 'Actions', key: 'actions', width: 260,
+      render: (_, r) => (
+        <Space>
+          <Tooltip title="Config"><Button size="small" icon={<SettingOutlined />} onClick={() => openConfig(r.exp_id)} /></Tooltip>
+          <Tooltip title="Detail"><Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(r)} /></Tooltip>
+          <Tooltip title={r.has_active_run ? `已有活跃 Run (${r.active_run_id})，请先停止` : '启动新 Run'}>
+            <Popconfirm title={`为 ${r.exp_id} 启动新 Run？`} onConfirm={() => handleAction(r.exp_id, 'start')}
+              disabled={r.has_active_run}>
+              <Button type="primary" size="small" icon={<PlayCircleOutlined />} disabled={r.has_active_run}>启动新 Run</Button>
+            </Popconfirm>
+          </Tooltip>
+          <Tooltip title={r.has_active_run ? `存在活跃 Run，无法删除` : '永久删除'}>
+            <Popconfirm title={`永久删除 ${r.exp_id}？`} description="将删除所有数据" onConfirm={() => handleDelete(r.exp_id)}
+              okText="确认删除" okButtonProps={{ danger: true }} disabled={r.has_active_run}>
+              <Button size="small" danger icon={<DeleteOutlined />} disabled={r.has_active_run} />
+            </Popconfirm>
+          </Tooltip>
+        </Space>
+      ),
+    },
+  ];
+
+  const runColumns: ColumnsType<RunRecord> = [
+    { title: 'Run ID', dataIndex: 'run_id', key: 'run_id', width: 200 },
+    { title: 'Status', dataIndex: 'status', key: 'status', width: 90, render: (_, r) => <Tag color={statusColor[r.status] || 'default'}>{r.status}</Tag> },
+    { title: 'Started', dataIndex: 'started_at', key: 'started_at', width: 160, render: (_, r) => r.started_at?.slice(0,19) || '-' },
+    { title: 'Ended', dataIndex: 'ended_at', key: 'ended_at', width: 160, render: (_, r) => r.ended_at?.slice(0,19) || '-' },
+    {
+      title: '', key: 'actions', width: 340,
+      render: (_, r) => {
+        const exp = detailExp;
+        const expId = exp?.exp_id || '';
+        return (
+          <Space size={4}>
+            <Tooltip title={exp?.has_active_run ? '已有活跃 Run' : '启动此 Run'}>
+              <Button size="small" icon={<PlayCircleOutlined />}
+                disabled={exp?.has_active_run || r.status === 'running'}
+                onClick={() => r.status !== 'running' && handleStartRun(expId, r.run_id)} />
+            </Tooltip>
+            {r.status === 'running' && (
+              <Popconfirm title={`停止 Run ${r.run_id}？`}
+                onConfirm={() => handleStopRun(expId, r.run_id)}>
+                <Button size="small" danger icon={<PauseCircleOutlined />} />
+              </Popconfirm>
+            )}
+            <Tooltip title="查看日志">
+              <Button size="small" icon={<FileTextOutlined />}
+                onClick={() => handleViewRunLog(r.run_id)} />
+            </Tooltip>
+            <Tooltip title="实验详情">
+              <Button size="small" icon={<LinkOutlined />}
+                onClick={() => navigate(`/dashboard?tab=prod&exp_id=${expId}&run_id=${r.run_id}`)} />
+            </Tooltip>
+            <Popconfirm title={`清除 Run ${r.run_id} 状态？`} description="将删除 checkpoint/state，保留 BQ 数据"
+              onConfirm={() => handleClearRunState(expId, r.run_id)}
+              disabled={r.status === 'running'} okButtonProps={{ danger: true }}>
+              <Tooltip title={r.status === 'running' ? '活跃 Run 无法清除' : '清除状态'}>
+                <Button size="small" icon={<ClearOutlined />} disabled={r.status === 'running'} />
+              </Tooltip>
+            </Popconfirm>
+            <Popconfirm title={`永久删除 Run ${r.run_id}？`} description="将删除所有关联数据"
+              onConfirm={() => handleDeleteRun(expId, r.run_id)}
+              disabled={r.status === 'running'} okButtonProps={{ danger: true }}>
+              <Tooltip title={r.status === 'running' ? '活跃 Run 无法删除' : '删除'}>
+                <Button size="small" danger icon={<DeleteOutlined />} disabled={r.status === 'running'} />
+              </Tooltip>
+            </Popconfirm>
+          </Space>
+        );
+      },
+    },
+  ];
+
+  const posColumns: ColumnsType<any> = [
+    { title: 'Symbol', dataIndex: 'symbol', key: 'symbol', width: 80 },
+    { title: 'Qty', dataIndex: 'qty', key: 'qty', width: 80, render: (v) => Number(v).toFixed(2) },
+    { title: 'Cost', dataIndex: 'cost', key: 'cost', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
+  ];
+
   return (
     <>
       <ProTable<ExperimentItem>
-        headerTitle="实验实例"
+        headerTitle="Prod 实验实例"
         actionRef={actionRef}
         rowKey="exp_id"
         search={false}
         columns={columns}
         request={async () => {
           const data = await api.get('/api/admin/experiments');
-          const filtered = filterType ? (data || []).filter((e: any) => e.type === filterType) : (data || []);
+          const filtered = (data || []).filter((e: any) => e.type === 'prod');
           return { data: filtered, success: true, total: filtered.length };
         }}
         toolBarRender={() => [
@@ -535,7 +471,6 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
         pagination={false}
       />
 
-      {/* Create from template Modal */}
       <Modal title="从模板创建实验" open={createOpen} onCancel={() => setCreateOpen(false)} onOk={doCreate}
         okText="创建" okButtonProps={{ disabled: !createTemplate || !createExpId }}>
         <Space direction="vertical" style={{ width: '100%' }}>
@@ -544,12 +479,11 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
               options={templates.map(t => ({ value: t.name, label: stripYaml(t.name) }))} />
           </Space>
           <Space><Text strong>exp_id:</Text>
-            <Input value={createExpId} onChange={(e) => setCreateExpId(e.target.value)} placeholder="e.g. live_us_ml_v3" style={{ width: 220 }} />
+            <Input value={createExpId} onChange={(e) => setCreateExpId(e.target.value)} placeholder="e.g. prod_us_ml_v3" style={{ width: 220 }} />
           </Space>
         </Space>
       </Modal>
 
-      {/* Detail Drawer */}
       <Drawer title={detailExp?.exp_id} open={detailDrawer} onClose={() => setDetailDrawer(false)} width={700}>
         {detailExp && (
           <>
@@ -613,7 +547,6 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
         )}
       </Drawer>
 
-      {/* Config Editor Drawer */}
       <Drawer title={`Config: ${configDrawer.expId}`} open={configDrawer.open}
         onClose={() => setConfigDrawer({ open: false, expId: '', content: '', loading: false })} width={700}
         extra={<Popconfirm title="确认保存？" onConfirm={saveConfig}><Button type="primary">Save</Button></Popconfirm>}>
@@ -625,4 +558,54 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   );
 };
 
-export default ExperimentDashboard;
+// ═══════════════════════════════════════════════════════════════════════════════
+// TradingCenter — top-level page with 5 sub-tabs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const TradingCenter: React.FC = () => {
+  const [tab, setTab] = useState('dashboard');
+
+  return (
+    <Tabs
+      activeKey={tab}
+      onChange={setTab}
+      items={[
+        {
+          key: 'dashboard',
+          label: '量化看板',
+          children: <DashboardProd />,
+        },
+        {
+          key: 'trading',
+          label: '量化交易',
+          children: <ProdLabTab />,
+        },
+        {
+          key: 'config',
+          label: '量化配置',
+          children: <ProdConfigsTab />,
+        },
+        {
+          key: 'manual',
+          label: '手动交易',
+          children: (
+            <Card title="手动交易">
+              <Text type="secondary">手动交易 — 待实盘接入后完善</Text>
+            </Card>
+          ),
+        },
+        {
+          key: 'accounts',
+          label: '交易账户',
+          children: (
+            <Card title="交易账户">
+              <Text type="secondary">交易账户 — 待实盘接入后完善</Text>
+            </Card>
+          ),
+        },
+      ]}
+    />
+  );
+};
+
+export default TradingCenter;

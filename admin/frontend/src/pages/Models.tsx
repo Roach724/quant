@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react';
 import {
   PlusOutlined, DeleteOutlined, SettingOutlined, EyeOutlined,
   ThunderboltOutlined, ExperimentOutlined, ReloadOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
 import {
   Tabs, Table, Button, Space, Modal, Select, Input, DatePicker,
   Tag, Popconfirm, message, Checkbox, Typography, Drawer, Tooltip,
 } from 'antd';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 
 const stripYaml = (name: string) => (name || '').replace(/\.yaml$/, '');
@@ -30,7 +32,6 @@ const ModelsPage: React.FC = () => {
   const [tab, setTab] = useState('datasets');
   return (
     <div>
-      <div style={{ fontSize: 11, color: '#bbb', marginBottom: 8 }}>v2 — 模型中心 · ML 配置 · 数据集</div>
     <Tabs activeKey={tab} onChange={setTab} items={[
       { key: 'datasets', label: '数据集', children: <DatasetsTab /> },
       { key: 'configs', label: 'ML 配置', children: <MlConfigsTab /> },
@@ -209,6 +210,7 @@ const MlConfigsTab: React.FC = () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const ModelCenterTab: React.FC = () => {
+  const navigate = useNavigate();
   const [items, setItems] = useState<CenterItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
@@ -334,7 +336,10 @@ const ModelCenterTab: React.FC = () => {
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>从模板创建</Button>
-        <Tooltip title="刷新"><Button icon={<ReloadOutlined />} onClick={load} /></Tooltip>
+        <Space>
+          <Tooltip title="查看训练日志"><Button icon={<FileTextOutlined />} onClick={() => navigate('/logs?tab=manage&module=train')}>训练日志</Button></Tooltip>
+          <Tooltip title="刷新"><Button icon={<ReloadOutlined />} onClick={load} /></Tooltip>
+        </Space>
       </div>
       <Table dataSource={items} rowKey="model_name" loading={loading} size="small"
       columns={columns}

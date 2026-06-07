@@ -5,10 +5,11 @@ Usage:
     python -m live.run --config live/configs/paper_us.yaml
     python -m live.run --mode paper --config live/configs/paper_us.yaml
     python -m live.run --mode live --config live/configs/live_us.yaml
+    python -m live.run --config ... --run-id 20260607_120000
 
 Logging:
-    JSON lines → /var/log/quant/dev/live/{experiment_id}.log
-    Plain text  → stderr (dev visibility)
+    If --run-id given   → /var/log/quant/prod/{module}/{exp_id}_{run_id}.log
+    Otherwise           → /var/log/quant/dev/live/{exp_id}.log (legacy)
 """
 from __future__ import annotations
 
@@ -29,14 +30,25 @@ def main():
                         help="Path to YAML config file")
     parser.add_argument("--mode", "-m", type=str, choices=["paper", "live"],
                         help="Override config mode")
+    parser.add_argument("--run-id", type=str, default="",
+                        help="Pre-created run_id (from exp_cli)")
     args = parser.parse_args()
 
     # Load config early to determine log file path
     config = load_config(args.config)
     exp_id = config.get("experiment", {}).get("id", Path(args.config).stem)
-    log_file = f"/var/log/quant/dev/live/{exp_id}.log"
+    mode = config.get("live", {}).get("mode", "paper")
+    log_module = "paper_run" if mode == "paper" else "live"
+
+    if args.run_id:
+        log_file = f"/var/log/quant/prod/{log_module}/{exp_id}_{args.run_id}.log"
+    else:
+        log_file = f"/var/log/quant/dev/live/{exp_id}.log"
 
     # Set up root logger: JSON to file + plain text to stderr
+    import os as _os
+    _os.makedirs(_os.path.dirname(log_file), exist_ok=True)
+
     from common.logging_util import QuantJsonFormatter, _ContextFilter
 
     root = logging.getLogger()
@@ -53,13 +65,13 @@ def main():
     )
     root.addHandler(stderr_handler)
 
-    # Attach context filter to handlers (logger filters don't propagate to children)
+    # Attach context filter to handlers
     ctx = _ContextFilter(env="dev", module="live")
     file_handler.addFilter(ctx)
     stderr_handler.addFilter(ctx)
 
     logger = logging.getLogger(__name__)
-    logger.info("Logging to %s (exp=%s)", log_file, exp_id)
+    logger.info("Logging to %s (exp=%s run=%s)", log_file, exp_id, args.run_id or "-")
 
     runner = LiveRunner(args.config, config=config)
     if args.mode:
