@@ -24,6 +24,20 @@ export default function DashboardOverview() {
   const [usDays, setUsDays] = useState(1);
   const [hkDays, setHkDays] = useState(1);
 
+  // Index chart state
+  const INDEX_SYMBOLS: Record<string, string[]> = {
+    us: ['^IXIC', '^GSPC', '^DJI', '^RUT'],
+    hk: ['HK.800000', 'HK.800700', 'HK.800100'],
+  };
+  const [usIndexSymbol, setUsIndexSymbol] = useState('^IXIC');
+  const [hkIndexSymbol, setHkIndexSymbol] = useState('HK.800000');
+  const [usIndexData, setUsIndexData] = useState<any[]>([]);
+  const [hkIndexData, setHkIndexData] = useState<any[]>([]);
+  const [usIndexLoading, setUsIndexLoading] = useState(false);
+  const [hkIndexLoading, setHkIndexLoading] = useState(false);
+  const [usIndexDays, setUsIndexDays] = useState(1);
+  const [hkIndexDays, setHkIndexDays] = useState(1);
+
   useEffect(() => { loadData(); }, []);
   useEffect(() => { if (usSymbol) loadChart('us', usSymbol, usDays); }, [usSymbol, usDays]);
   useEffect(() => { if (hkSymbol) loadChart('hk', hkSymbol, hkDays); }, [hkSymbol, hkDays]);
@@ -63,6 +77,8 @@ export default function DashboardOverview() {
   };
 
   useEffect(() => { loadSymbols('us'); loadSymbols('hk'); }, []);
+  useEffect(() => { if (usIndexSymbol) loadIndexChart('us', usIndexSymbol, usIndexDays); }, [usIndexSymbol, usIndexDays]);
+  useEffect(() => { if (hkIndexSymbol) loadIndexChart('hk', hkIndexSymbol, hkIndexDays); }, [hkIndexSymbol, hkIndexDays]);
 
   const loadChart = useCallback(async (market: 'us' | 'hk', symbol: string, days: number = 1) => {
     if (!symbol) return;
@@ -70,12 +86,26 @@ export default function DashboardOverview() {
     const barsPerDay = market === 'us' ? 78 : 54;  // ~78 5m bars/day US, ~54 HK
     const limit = days * barsPerDay;
     try {
-      const data = await api.get(`/api/admin/dashboard/market/${market}/${symbol}?limit=${limit}`);
+      const data = await api.get(`/api/admin/dashboard/market/${market}/${symbol}?limit=${limit}&days=${days}`);
       if (Array.isArray(data)) {
         if (market === 'us') setUsData(data); else setHkData(data);
       }
     } catch (e) { console.error('load chart failed', e); }
     finally { if (market === 'us') setUsLoading(false); else setHkLoading(false); }
+  }, []);
+
+  const loadIndexChart = useCallback(async (market: 'us' | 'hk', symbol: string, days: number = 1) => {
+    if (!symbol) return;
+    if (market === 'us') setUsIndexLoading(true); else setHkIndexLoading(true);
+    const barsPerDay = market === 'us' ? 78 : 54;
+    const limit = days * barsPerDay;
+    try {
+      const data = await api.get(`/api/admin/dashboard/market/${market}/${symbol}?limit=${limit}&days=${days}`);
+      if (Array.isArray(data)) {
+        if (market === 'us') setUsIndexData(data); else setHkIndexData(data);
+      }
+    } catch (e) { console.error('load index chart failed', e); }
+    finally { if (market === 'us') setUsIndexLoading(false); else setHkIndexLoading(false); }
   }, []);
 
   const filtered = activeOnly
@@ -137,6 +167,28 @@ export default function DashboardOverview() {
             options={hkSymbols.map(s => ({ value: s, label: s }))} />}>
           <Spin spinning={hkLoading}>
             {hkData.length === 0 ? <Empty description="No data" /> : <ReactECharts option={makeCandlestickOption(hkData, hkSymbol)} style={{ height: 350 }} />}
+          </Spin>
+        </Card>
+
+        {/* ── Index Charts ── */}
+        <Text style={{ fontSize: 14, fontWeight: 600, display: 'block', marginBottom: 8, marginTop: 24 }}>🇺🇸 US Indices — 5m K-line</Text>
+        <Card size="small" title={<Space>US Index<Select size="small" value={usIndexDays} onChange={setUsIndexDays} style={{ width: 80, marginLeft: 8 }}
+          options={[{ value: 1, label: '1d' }, { value: 3, label: '3d' }, { value: 7, label: '7d' }]} /></Space>}
+          extra={<Select size="small" value={usIndexSymbol} onChange={setUsIndexSymbol} style={{ width: 130 }}
+            options={INDEX_SYMBOLS.us.map(s => ({ value: s, label: s.replace('^', '') }))} />}
+          style={{ marginBottom: 12 }}>
+          <Spin spinning={usIndexLoading}>
+            {usIndexData.length === 0 ? <Empty description="No data" /> : <ReactECharts option={makeCandlestickOption(usIndexData, usIndexSymbol.replace('^', ''))} style={{ height: 300 }} />}
+          </Spin>
+        </Card>
+
+        <Text style={{ fontSize: 14, fontWeight: 600, display: 'block', marginBottom: 8, marginTop: 24 }}>🇭🇰 HK Indices — 5m K-line</Text>
+        <Card size="small" title={<Space>HK Index<Select size="small" value={hkIndexDays} onChange={setHkIndexDays} style={{ width: 80, marginLeft: 8 }}
+          options={[{ value: 1, label: '1d' }, { value: 3, label: '3d' }, { value: 7, label: '7d' }]} /></Space>}
+          extra={<Select size="small" value={hkIndexSymbol} onChange={setHkIndexSymbol} style={{ width: 150 }}
+            options={INDEX_SYMBOLS.hk.map(s => ({ value: s, label: s }))} />}>
+          <Spin spinning={hkIndexLoading}>
+            {hkIndexData.length === 0 ? <Empty description="No data" /> : <ReactECharts option={makeCandlestickOption(hkIndexData, hkIndexSymbol)} style={{ height: 300 }} />}
           </Spin>
         </Card>
       </div>

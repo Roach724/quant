@@ -2437,6 +2437,14 @@ async def dash_pipeline():
     return result
 
 
+def _load_symbols_config():
+    """Load symbols.yaml once per request (FastAPI module-level cache)."""
+    import yaml as _y
+    _quant_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = Path(_quant_root) / "config/symbols.yaml"
+    return _y.safe_load(config_path.read_text())
+
+
 # ── Market Data API ──
 
 @app.get("/api/admin/dashboard/market/symbols/{market}")
@@ -2455,8 +2463,12 @@ async def dash_market_symbols(market: str):
 @app.get("/api/admin/dashboard/market/{market}/{symbol}")
 async def dash_market_bars(market: str, symbol: str, limit: int = 78, days: int = 2):
     client = _DB_BQ()
-    table = _DB_TABLE(f"{market}_bars_5m")
-    full_symbol = f"{'US' if market == 'us' else 'HK'}.{symbol}"
+    # Detect index symbols → route to _bars_index_5m table
+    cfg = _load_symbols_config()
+    index_syms = cfg.get("indices", {}).get(market, {}).get("symbols", [])
+    is_index = symbol in index_syms or (market == "us" and symbol.startswith("^"))
+    table = _DB_TABLE(f"{market}_bars_index_5m" if is_index else f"{market}_bars_5m")
+    full_symbol = symbol if is_index else f"{'US' if market == 'us' else 'HK'}.{symbol}"
     if market == "hk":
         ts_expr = "TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)"
     else:
