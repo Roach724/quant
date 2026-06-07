@@ -4,13 +4,15 @@
 Usage:
     python live/exp_cli.py register live/us/ml/2 --config path/to/config.yaml
     python live/exp_cli.py start    live_us_ml_v2
-    python live/exp_cli.py pause    live_us_ml_v2
-    python live/exp_cli.py resume   live_us_ml_v2
     python live/exp_cli.py stop     live_us_ml_v2
-    python live/exp_cli.py archive  live_us_ml_v2
     python live/exp_cli.py list  [--type live] [--status running]
     python live/exp_cli.py show     live_us_ml_v2
     python live/exp_cli.py runs     live_us_ml_v2
+
+Process supervision:
+    Live runs are wrapped in systemd transient units (systemd-run)
+    so they survive crashes and node reboots (Restart=on-failure).
+    Units are named: exp-{exp_id}  (e.g. exp-live_us_mom)
 """
 
 from __future__ import annotations
@@ -18,10 +20,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import signal
 import subprocess
 import sys
-import time
 from typing import Sequence
 
 from live.experiment_manager import ExperimentManager
@@ -74,7 +74,183 @@ def _parse_register_id(raw: str) -> dict[str, str | int]:
     )
 
 
-# ── Command handlers ─────────────────────────────────────────────────
+# ── Command helpers ─────────────────────────────────────────────────
+
+SYSTEMD_UNIT_PREFIX = "exp-"
+
+
+def _systemd_unit_name(exp_id: str) -> str:
+    """Generate systemd transient unit name for an experiment."""
+    return f"{SYSTEMD_UNIT_PREFIX}{exp_id}"
+
+
+def _is_unit_active(exp_id: str) -> bool:
+    """Check if the systemd unit for an experiment is active."""
+    unit = _systemd_unit_name(exp_id)
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", unit],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _unit_pid(exp_id: str) -> int | None:
+    """Get the main PID of a systemd unit."""
+    unit = _systemd_unit_name(exp_id)
+    try:
+        result = subprocess.run(
+            ["systemctl", "show", "--property=MainPID", "--value", unit],
+            capture_output=True, text=True, timeout=5,
+        )
+        pid = int(result.stdout.strip())
+        return pid if pid > 0 else None
+    except (ValueError, subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def cmd_start(mgr: ExperimentManager, args: argparse.Namespace) -> None:
+    """Start an experiment: create run record, launch via systemd-run.
+
+    Supports --resume-run to restart an existing run from its saved state
+    without creating a new run record.
+    """
+    exp_id = args.id
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if _is_unit_active(exp_id):
+        print(f"Error: {exp_id} systemd unit is already active", file=sys.stderr)
+        sys.exit(1)
+
+    config_path = exp.config_path
+    if not config_path:
+        print(f"Error: no config_path for {exp_id}", file=sys.stderr)
+        sys.exit(1)
+
+    # Determine run_id: either resume existing or create new
+    if args.resume_run:
+        run_id = args.resume_run
+        # Verify run exists in registry
+        run_found = any(r.run_id == run_id for r in exp.runs)
+        if not run_found:
+            print(f"Error: run {run_id} not found for {exp_id}", file=sys.stderr)
+            sys.exit(1)
+        # Ensure experiment status is idle before launch
+        if exp.status != "idle":
+            mgr._data[exp_id]["status"] = "idle"
+            mgr._save()
+        print(f"Resuming run {run_id} for {exp_id}")
+    else:
+        if exp.has_active_run:
+            active = exp.active_run
+            print(f"Error: {exp_id} already has an active run ({active.run_id if active else '?'})",
+                  file=sys.stderr)
+            sys.exit(1)
+        if exp.status != "idle":
+            mgr._data[exp_id]["status"] = "idle"
+            mgr._save()
+        run_id = mgr.start(exp_id)
+        print(f"Created run {run_id} for {exp_id}")
+
+    # Launch via systemd-run (auto-restart on failure, survives node reboots)
+    project_root = os.environ.get("QUANT_ROOT", "/opt/quant-prod")
+    unit = _systemd_unit_name(exp_id)
+    cmd = [
+        "sudo", "systemd-run",
+        "--unit", unit,
+        "--uid", "quant",
+        "--gid", "quant",
+        "--working-directory", project_root,
+        "--property=Restart=on-failure",
+        "--property=RestartSec=15",
+        f"{project_root}/.venv/bin/python3", f"{project_root}/live/run.py",
+        "--config", config_path,
+        "--run-id", run_id,
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+    except subprocess.CalledProcessError as e:
+        if not args.resume_run:
+            mgr.stop_run(exp_id, run_id)
+        print(f"Error: systemd-run failed: {e.stderr}", file=sys.stderr)
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        if not args.resume_run:
+            mgr.stop_run(exp_id, run_id)
+        print("Error: systemd-run timed out", file=sys.stderr)
+        sys.exit(1)
+
+    # Record PID
+    pid = _unit_pid(exp_id)
+    if pid:
+        mgr.set_pid(exp_id, pid)
+    print(f"Started {exp_id} run {run_id} (unit={unit}, PID={pid or '?'})")
+
+
+def cmd_stop(mgr: ExperimentManager, args: argparse.Namespace) -> None:
+    """Stop the current active run via systemctl."""
+    exp_id = args.id
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not exp.has_active_run:
+        print(f"No active run for {exp_id}", file=sys.stderr)
+        sys.exit(1)
+
+    active = exp.active_run
+    assert active is not None
+
+    # Stop systemd unit
+    unit = _systemd_unit_name(exp_id)
+    try:
+        subprocess.run(
+            ["sudo", "systemctl", "stop", unit],
+            capture_output=True, text=True, timeout=30,
+        )
+        print(f"Stopped unit {unit}")
+    except subprocess.TimeoutExpired:
+        # Force stop
+        subprocess.run(
+            ["sudo", "systemctl", "kill", "--signal=SIGKILL", unit],
+            capture_output=True, timeout=10,
+        )
+        print(f"Force-killed unit {unit}")
+    except subprocess.CalledProcessError:
+        pass  # Unit may already be dead
+
+    mgr.set_pid(exp_id, None)
+    mgr.stop_run(exp_id, active.run_id)
+    print(f"Stopped {exp_id} run {active.run_id}")
+
+
+def cmd_restart(mgr: ExperimentManager, args: argparse.Namespace) -> None:
+    """Restart an experiment: systemctl restart."""
+    exp_id = args.id
+    try:
+        mgr.get(exp_id)
+    except KeyError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    unit = _systemd_unit_name(exp_id)
+    try:
+        subprocess.run(
+            ["sudo", "systemctl", "restart", unit],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+        print(f"Restarted {exp_id} (unit={unit})")
+    except subprocess.CalledProcessError as e:
+        print(f"Error: systemctl restart failed: {e.stderr}", file=sys.stderr)
+        sys.exit(1)
 
 def cmd_register(mgr: ExperimentManager, args: argparse.Namespace) -> None:
     """Handle the 'register' subcommand."""
@@ -96,137 +272,6 @@ def cmd_register(mgr: ExperimentManager, args: argparse.Namespace) -> None:
     except (ValueError, KeyError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-
-
-def _runner_cmd(config_path: str) -> list[str]:
-    """Build the shell command to launch an experiment runner."""
-    return [
-        "nohup", ".venv/bin/python3", "live/run.py",
-        "--config", config_path,
-    ]
-
-
-def _is_pid_alive(pid: int) -> bool:
-    """Check if a process with the given PID is still running."""
-    try:
-        os.kill(pid, 0)
-        return True
-    except (OSError, ProcessLookupError):
-        return False
-
-
-def cmd_start(mgr: ExperimentManager, args: argparse.Namespace) -> None:
-    """Start an experiment: launch daemon process + record PID."""
-    exp_id = args.id
-    try:
-        exp = mgr.get(exp_id)
-    except KeyError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Check if already running
-    existing_pid = mgr.get_pid(exp_id)
-    if existing_pid and _is_pid_alive(existing_pid):
-        print(f"Error: {exp_id} is already running (PID={existing_pid})", file=sys.stderr)
-        sys.exit(1)
-
-    config_path = exp.config_path
-    if not config_path:
-        print(f"Error: no config_path for {exp_id}", file=sys.stderr)
-        sys.exit(1)
-
-    # Set status to paused so Runner can call mgr.start() on its own
-    if exp.status != "paused":
-        mgr._data[exp_id]["status"] = "paused"
-        mgr._save()
-
-    # Launch daemon
-    project_root = os.environ.get("QUANT_ROOT", "/opt/quant-prod")
-    cmd = _runner_cmd(config_path)
-    try:
-        proc = subprocess.Popen(
-            cmd, cwd=project_root,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,  # daemonize
-        )
-    except OSError as e:
-        print(f"Error: failed to start process: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    mgr.set_pid(exp_id, proc.pid)
-    mgr._data[exp_id]["status"] = "running"
-    mgr._save()
-    print(f"Started {exp_id} (PID={proc.pid})")
-
-
-def cmd_stop(mgr: ExperimentManager, args: argparse.Namespace) -> None:
-    """Stop an experiment: kill process + clear PID."""
-    exp_id = args.id
-    try:
-        mgr.get(exp_id)
-    except KeyError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    pid = mgr.get_pid(exp_id)
-    if pid and _is_pid_alive(pid):
-        try:
-            os.kill(pid, signal.SIGTERM)
-            time.sleep(1)
-            if _is_pid_alive(pid):
-                os.kill(pid, signal.SIGKILL)
-                time.sleep(0.5)
-            print(f"Stopped {exp_id} (PID={pid})")
-        except OSError as e:
-            print(f"Error killing PID {pid}: {e}", file=sys.stderr)
-    elif pid:
-        print(f"Stopped {exp_id} (PID={pid} already dead)")
-    else:
-        print(f"Stopped {exp_id} (no PID recorded)")
-
-    mgr.set_pid(exp_id, None)
-    # Runner's cleanup should have set status; if not, mark paused
-    try:
-        exp = mgr.get(exp_id)
-        if exp.status == "running":
-            mgr._data[exp_id]["status"] = "paused"
-            mgr._save()
-    except KeyError:
-        pass
-
-
-def cmd_restart(mgr: ExperimentManager, args: argparse.Namespace) -> None:
-    """Restart an experiment: stop then start."""
-    exp_id = args.id
-    # Stop
-    pid = mgr.get_pid(exp_id)
-    if pid and _is_pid_alive(pid):
-        try:
-            os.kill(pid, signal.SIGTERM)
-            time.sleep(1)
-            if _is_pid_alive(pid):
-                os.kill(pid, signal.SIGKILL)
-                time.sleep(0.5)
-        except OSError:
-            pass
-    mgr.set_pid(exp_id, None)
-
-    # Start
-    exp = mgr.get(exp_id)
-    config_path = exp.config_path
-    mgr._data[exp_id]["status"] = "paused"
-    mgr._save()
-
-    project_root = os.environ.get("QUANT_ROOT", "/opt/quant-prod")
-    proc = subprocess.Popen(
-        _runner_cmd(config_path), cwd=project_root,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    mgr.set_pid(exp_id, proc.pid)
-    mgr._data[exp_id]["status"] = "running"
-    mgr._save()
-    print(f"Restarted {exp_id} (PID={proc.pid})")
 
 
 def cmd_pause(mgr: ExperimentManager, args: argparse.Namespace) -> None:
@@ -364,6 +409,8 @@ def build_parser() -> argparse.ArgumentParser:
     # start
     p_start = sub.add_parser("start", help="Start an experiment")
     p_start.add_argument("id", help="Experiment id (e.g. live_us_ml_v2)")
+    p_start.add_argument("--resume-run", type=str, default="",
+                         help="Resume an existing run_id instead of creating a new one")
     p_start.set_defaults(func=cmd_start)
 
     # pause
