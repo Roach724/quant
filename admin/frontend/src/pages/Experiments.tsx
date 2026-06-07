@@ -11,7 +11,7 @@ import {
   Tag, Button, Space, message, Tooltip, Modal,
   Select, Input, Drawer, Descriptions, Table,
   Alert, Divider, Popconfirm, Typography, Tabs,
-  Row, Col, Spin, Empty,
+  Spin, Empty,
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
@@ -58,11 +58,11 @@ const pollTask = (taskId: number): Promise<{ status: string; result: string | nu
 // =============================================================================
 
 const ExperimentDashboard: React.FC = () => {
-  const [tab, setTab] = useState('configs');
+  const [tab, setTab] = useState('lab');
   return (
     <Tabs activeKey={tab} onChange={setTab} items={[
-      { key: 'configs', label: '实验配置', children: <ConfigsTabs /> },
       { key: 'lab', label: '实验室', children: <LabTabs /> },
+      { key: 'configs', label: '实验配置', children: <ConfigsTabs /> },
     ]} />
   );
 };
@@ -420,7 +420,7 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
     try {
       const [equity, positions] = await Promise.all([
         api.get(`/api/admin/experiments/${expId}/runs/${runId}/equity`),
-        api.get(`/api/admin/experiments/${expId}/runs/${runId}/positions`),
+        api.get(`/api/admin/dashboard/experiments/${expId}/positions?run_id=${runId}`),
       ]);
       setExpandedRunKeys(prev => ({
         ...prev,
@@ -495,7 +495,10 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   const posColumns: ColumnsType<any> = [
     { title: 'Symbol', dataIndex: 'symbol', key: 'symbol', width: 80 },
     { title: 'Qty', dataIndex: 'qty', key: 'qty', width: 80, render: (v) => Number(v).toFixed(2) },
-    { title: 'Cost', dataIndex: 'cost', key: 'cost', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
+    { title: 'Entry Price', dataIndex: 'entry_price', key: 'entry_price', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
+    { title: 'Market Value', dataIndex: 'market_value', key: 'market_value', width: 120, render: (v) => `$${Number(v).toFixed(2)}` },
+    { title: 'Unrealized PnL', dataIndex: 'unrealized_pnl', key: 'unrealized_pnl', width: 120, render: (v) => `$${Number(v).toFixed(2)}` },
+    { title: 'PnL%', dataIndex: 'pnl_pct', key: 'pnl_pct', width: 80, render: (v) => `${Number(v).toFixed(2)}%` },
   ];
 
   function buildEquityChart(data: any[]) {
@@ -582,18 +585,15 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
                   const posEmpty = !details.positions || details.positions.length === 0;
                   if (equityEmpty && posEmpty) return <Text type="secondary">No data for this run</Text>;
                   return (
-                    <Row gutter={16}>
-                      <Col span={16}>
-                        <Text strong style={{ marginBottom: 8, display: 'block' }}>权益曲线</Text>
-                        {equityEmpty ? <Empty description="No equity data" /> :
-                          <ReactECharts option={buildEquityChart(details.equity)} style={{ height: 200 }} />}
-                      </Col>
-                      <Col span={8}>
-                        <Text strong style={{ marginBottom: 8, display: 'block' }}>当前持仓</Text>
-                        {posEmpty ? <Empty description="No positions" /> :
-                          <Table size="small" dataSource={details.positions} columns={posColumns} rowKey="symbol" pagination={false} />}
-                      </Col>
-                    </Row>
+                    <div>
+                      <Text strong style={{ marginBottom: 8, display: 'block' }}>权益曲线</Text>
+                      {equityEmpty ? <Empty description="No equity data" /> :
+                        <ReactECharts option={buildEquityChart(details.equity)} style={{ height: 200 }} />}
+                      <div style={{ marginTop: 16 }} />
+                      <Text strong style={{ marginBottom: 8, display: 'block' }}>当前持仓</Text>
+                      {posEmpty ? <Empty description="No positions" /> :
+                        <Table size="small" dataSource={details.positions} columns={posColumns} rowKey="symbol" pagination={false} />}
+                    </div>
                   );
                 },
                 onExpand: (expanded, record) => {

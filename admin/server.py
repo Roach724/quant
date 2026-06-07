@@ -833,31 +833,28 @@ def admin_data_collectors():
     except Exception:
         pass
 
-    # Futu API quota (real-time + history) — with 5s timeout
+    # Futu API quota (real-time + history)
     rt_quota = None
     hist_quota = None
     try:
         r = subprocess.run(
-            [
-                "/opt/quant-prod/.venv/bin/python3", "-c",
-                "from futu import OpenQuoteContext; "
-                "ctx = OpenQuoteContext('127.0.0.1', 11111); "
-                "r1, d1 = ctx.query_subscription(); "
-                "r2, d2 = ctx.get_history_kl_quota(); "
-                "ctx.close(); "
-                "import json; "
-                "print(json.dumps({'rt': {'used': d1.get('total_used',0), 'remain': d1.get('remain',0)} if isinstance(d1,dict) else None, "
-                "'hist': {'remain': int(d2[0]), 'today_used': int(d2[1])} if isinstance(d2,tuple) and len(d2)>=2 else None}))"
-            ],
-            capture_output=True, text=True, timeout=5,
+            ["/opt/quant-prod/.venv/bin/python3", "/opt/quant-prod/scripts/quota_check.py"],
+            capture_output=True, text=True, timeout=10,
         )
         if r.returncode == 0 and r.stdout.strip():
-            import json
-            data = json.loads(r.stdout.strip())
-            rt_quota = data.get("rt")
-            hist_quota = data.get("hist")
-    except Exception:
-        pass
+            # Futu prints debug logs to stdout mixed with our JSON
+            # Find and extract JSON object from the output
+            for line in r.stdout.strip().split('\n'):
+                idx = line.find('{"rt"')
+                if idx >= 0:
+                    data = _json.loads(line[idx:])
+                    rt_quota = data.get("rt")
+                    hist_quota = data.get("hist")
+                    break
+        else:
+            logging.getLogger(__name__).warning("quota_check failed: rc=%s stderr=%s", r.returncode, r.stderr[:200])
+    except Exception as exc:
+        logging.getLogger(__name__).exception("quota_check error")
 
     return {
         "ws_collector": status,
@@ -2392,19 +2389,20 @@ async def dash_experiment_positions(exp_id: str, run_id: str = ""):
 # ---------------------------------------------------------------------------
 @app.get("/api/admin/dashboard/experiments/{exp_id}/runs")
 async def dash_experiment_runs(exp_id: str):
-    client = _DB_BQ()
-    query = f"""
-        SELECT run_id, status, started_at, ended_at, base_run
-        FROM {_DB_TABLE("experiment_runs")}
-        WHERE exp_id = '{exp_id}'
-        ORDER BY started_at DESC
-    """
+    """Return run history from registry (SSOT, synced with Lab)."""
+    from live.experiment_manager import ExperimentManager
+    mgr = ExperimentManager()
     try:
-        rows = client.query(query).result()
-        return [_db_row_to_dict(r, ["run_id", "status", "started_at", "ended_at", "base_run"])
-                for r in rows]
-    except Exception as exc:
-        logging.getLogger(__name__).error("dash_experiment_runs query error for %s: %s", exp_id, exc)
+        mgr.auto_heal(exp_id)
+        runs = mgr.runs(exp_id)
+        return [{
+            "run_id": r.run_id,
+            "status": r.status,
+            "started_at": r.started_at,
+            "ended_at": r.ended_at,
+            "base_run": r.base_run,
+        } for r in runs]
+    except KeyError:
         return []
 
 
@@ -2412,8 +2410,32 @@ async def dash_experiment_runs(exp_id: str):
 
 @app.get("/api/admin/dashboard/paper-runs")
 async def dash_paper_runs(limit: int = 50):
-    client = _DB_BQ()
+    """List paper runs: BQ completed results + registry active experiments."""
+    results = []
+    
+    # 1. Active paper experiments from registry (source of truth)
     try:
+        from live.experiment_manager import ExperimentManager
+        mgr = ExperimentManager()
+        for exp in mgr.list(exp_type="paper"):
+            if exp.has_active_run and exp.active_run:
+                results.append({
+                    "run_id": exp.active_run.run_id,
+                    "name": exp.name or exp.id,
+                    "strategy": exp.strategy,
+                    "market": exp.market,
+                    "status": "running",
+                    "n_periods": 0,
+                    "created_at": exp.active_run.started_at,
+                    "error_msg": None,
+                    "_source": "registry",
+                })
+    except Exception as e:
+        logging.getLogger(__name__).warning("paper-runs registry query: %s", e)
+
+    # 2. Completed paper runs from BQ
+    try:
+        client = _DB_BQ()
         query = f"""
             SELECT run_id, name, strategy, market, status, n_periods,
                    created_at, error_msg
@@ -2428,10 +2450,16 @@ async def dash_paper_runs(limit: int = 50):
         rows = client.query(query).result()
         names = ["run_id", "name", "strategy", "market", "status",
                  "n_periods", "created_at", "error_msg"]
-        return [_db_row_to_dict(r, names) for r in rows]
+        for r in rows:
+            d = _db_row_to_dict(r, names)
+            d["_source"] = "bq"
+            # Don't duplicate registry runs
+            if not any(e["run_id"] == d["run_id"] for e in results):
+                results.append(d)
     except Exception as e:
         logging.getLogger(__name__).error("dash_paper_runs query failed: %s", e)
-        return []
+
+    return results
 
 
 @app.get("/api/admin/dashboard/paper-runs/{run_id}")

@@ -29,13 +29,13 @@ const stageColor: Record<string, string> = { Production: 'green', Staging: 'oran
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const ModelsPage: React.FC = () => {
-  const [tab, setTab] = useState('datasets');
+  const [tab, setTab] = useState('center');
   return (
     <div>
     <Tabs activeKey={tab} onChange={setTab} items={[
-      { key: 'datasets', label: '数据集', children: <DatasetsTab /> },
-      { key: 'configs', label: 'ML 配置', children: <MlConfigsTab /> },
       { key: 'center', label: '模型中心', children: <ModelCenterTab /> },
+      { key: 'configs', label: 'ML 配置', children: <MlConfigsTab /> },
+      { key: 'datasets', label: '数据集', children: <DatasetsTab /> },
       { key: 'strategies', label: '策略', children: <StrategiesTab /> },
       { key: 'mlflow', label: 'MLflow', children: <MlflowTab /> },
     ]} />
