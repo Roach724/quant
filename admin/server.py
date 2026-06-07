@@ -218,6 +218,151 @@ def admin_experiment_run_stop(exp_id: str, run_id: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ── Run-level endpoints ────────────────────────────────────────────────────────
+
+@app.post("/api/admin/experiments/{exp_id}/runs/{run_id}/start")
+def admin_experiment_run_start(exp_id: str, run_id: str):
+    """Start (or resume) a specific run via task queue."""
+    mgr = ExperimentManager()
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+    if exp.has_active_run:
+        raise HTTPException(status_code=409, detail="已有活跃 Run，请先停止")
+
+    cmd = (
+        f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+        f".venv/bin/python3 live/exp_cli.py start {exp_id} --resume-run {run_id}"
+    )
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd, "cron_command": cmd}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id, "run_id": run_id}
+
+
+@app.delete("/api/admin/experiments/{exp_id}/runs/{run_id}")
+def admin_experiment_run_delete(exp_id: str, run_id: str):
+    """Permanently delete a run and all associated data."""
+    mgr = ExperimentManager()
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+    if exp.has_active_run:
+        raise HTTPException(status_code=409, detail="存在活跃 Run，无法删除")
+
+    result = mgr.delete_run(exp_id, run_id)
+    return {"status": "ok", "run_id": run_id, "details": result}
+
+
+@app.post("/api/admin/experiments/{exp_id}/runs/{run_id}/clear-state")
+def admin_experiment_run_clear_state(exp_id: str, run_id: str):
+    """Clear state & checkpoint for a run (keeps BQ/logs)."""
+    mgr = ExperimentManager()
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+    if exp.has_active_run:
+        raise HTTPException(status_code=409, detail="存在活跃 Run，无法清除状态")
+
+    result = mgr.clear_run_state(exp_id, run_id)
+    return {"status": "ok", "run_id": run_id, "details": result}
+
+
+@app.get("/api/admin/experiments/{exp_id}/runs/{run_id}/equity")
+def admin_experiment_run_equity(exp_id: str, run_id: str):
+    """Return equity curve for a specific run."""
+    client = _DB_BQ()
+    q = f"""
+        SELECT ts, bar, equity, cash, portfolio_value, daily_pnl, drawdown
+        FROM {_DB_TABLE("experiment_equity")}
+        WHERE exp_id='{exp_id}' AND run_id='{run_id}'
+        ORDER BY bar
+    """
+    try:
+        rows = list(client.query(q).result())
+        return [{
+            "ts": _db_serialize(r.ts),
+            "bar": r.bar,
+            "equity": r.equity,
+            "cash": r.cash,
+            "portfolio_value": r.portfolio_value,
+            "daily_pnl": r.daily_pnl,
+            "drawdown": getattr(r, "drawdown", None),
+        } for r in rows]
+    except Exception as exc:
+        logging.getLogger(__name__).error(
+            "admin_experiment_run_equity query error for %s/%s: %s", exp_id, run_id, exc
+        )
+        return []
+
+
+@app.get("/api/admin/experiments/{exp_id}/runs/{run_id}/positions")
+def admin_experiment_run_positions(exp_id: str, run_id: str):
+    """Return current FIFO positions for a specific run."""
+    from collections import defaultdict
+    client = _DB_BQ()
+    trades_q = f"""
+        SELECT symbol, side, qty, price, ts
+        FROM {_DB_TABLE("experiment_trades")}
+        WHERE exp_id='{exp_id}' AND run_id='{run_id}'
+        ORDER BY ts
+    """
+    try:
+        rows = list(client.query(trades_q).result())
+    except Exception as exc:
+        logging.getLogger(__name__).error(
+            "admin_experiment_run_positions query error for %s/%s: %s", exp_id, run_id, exc
+        )
+        return []
+
+    if not rows:
+        return []
+
+    lots = defaultdict(list)
+    for r in rows:
+        sym = r.symbol
+        qty = float(r.qty)
+        price = float(r.price)
+        if r.side == "buy":
+            lots[sym].append({"qty": qty, "price": price})
+        else:
+            remaining = qty
+            while remaining > 0 and lots[sym]:
+                lot = lots[sym][0]
+                if lot["qty"] <= remaining:
+                    remaining -= lot["qty"]
+                    lots[sym].pop(0)
+                else:
+                    lot["qty"] -= remaining
+                    remaining = 0
+
+    if not lots:
+        return []
+
+    result = []
+    for sym, sym_lots in lots.items():
+        total_qty = sum(l["qty"] for l in sym_lots)
+        if total_qty <= 0:
+            continue
+        total_cost = sum(l["qty"] * l["price"] for l in sym_lots)
+        avg_cost = total_cost / total_qty if total_qty > 0 else 0
+        result.append({
+            "symbol": sym,
+            "qty": round(total_qty, 4),
+            "avg_cost": round(avg_cost, 4),
+        })
+    return result
+
+
+# ── Experiment registration ───────────────────────────────────────────────────
+
 @app.post("/api/admin/experiments/register")
 def admin_experiment_register(data: dict):
     """Register a new experiment."""
@@ -2415,7 +2560,7 @@ async def dash_pipeline():
         q = f"""
             SELECT MAX(timestamp) AS latest
             FROM {_DB_TABLE("hk_bars_index_5m")}
-            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
         """
         rows = list(client.query(q).result())
         if rows and rows[0].latest:
@@ -2427,7 +2572,7 @@ async def dash_pipeline():
         q = f"""
             SELECT MAX(timestamp) AS latest
             FROM {_DB_TABLE("us_bars_index_5m")}
-            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
         """
         rows = list(client.query(q).result())
         if rows and rows[0].latest:
