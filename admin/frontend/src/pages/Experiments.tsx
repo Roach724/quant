@@ -1,8 +1,8 @@
 import { useState, useRef } from 'react';
 import {
-  PlayCircleOutlined, PauseCircleOutlined, ReloadOutlined,
+  PlayCircleOutlined, PauseCircleOutlined,
   PlusOutlined, EyeOutlined, DeleteOutlined, SettingOutlined,
-  FileAddOutlined,
+  FileAddOutlined, FileTextOutlined, ClearOutlined, LinkOutlined,
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
@@ -11,7 +11,10 @@ import {
   Tag, Button, Space, message, Tooltip, Modal,
   Select, Input, Drawer, Descriptions, Table,
   Alert, Divider, Popconfirm, Typography, Tabs,
+  Row, Col, Spin, Empty,
 } from 'antd';
+import { useNavigate } from 'react-router-dom';
+import ReactECharts from 'echarts-for-react';
 import { api } from '../api';
 
 const { Text } = Typography;
@@ -23,16 +26,17 @@ const stripYaml = (name: string) => name.replace(/\.yaml$/, '');
 interface ExperimentItem {
   exp_id: string; name: string; type: string; market: string;
   strategy: string; version: number; status: string;
+  has_active_run: boolean; total_runs: number; active_run_id: string | null;
   current_run: string | null; config_path: string; pid: number | null;
 }
 
 interface ConfigItem { name: string; path: string; size: number; }
 
-interface RunRecord { run_id: string; status: string; started_at: string; ended_at: string; }
+interface RunRecord { run_id: string; status: string; started_at: string; ended_at: string; base_run: string | null; }
 
 const statusColor: Record<string, string> = {
-  running: 'green', paused: 'orange', stopped: 'red',
-  pending: 'default', registered: 'default', archived: 'default',
+  running: 'green', stopped: 'orange', completed: 'blue', failed: 'red',
+  idle: 'default', pending: 'default', archived: 'default',
 };
 
 // ── Poll helper ──────────────────────────────────────────────────────────────
@@ -246,14 +250,12 @@ const LabTabs: React.FC = () => {
 
 const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   const actionRef = useRef<ActionType>(undefined);
+  const navigate = useNavigate();
   const [detailDrawer, setDetailDrawer] = useState(false);
   const [detailExp, setDetailExp] = useState<ExperimentItem | null>(null);
   const [runs, setRuns] = useState<RunRecord[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
-  const [equityLatest, setEquityLatest] = useState<Record<string, any> | null>(null);
-  const [equityLoading, setEquityLoading] = useState(false);
-  const [positions, setPositions] = useState<any[]>([]);
-  const [positionsLoading, setPositionsLoading] = useState(false);
+  const [expandedRunKeys, setExpandedRunKeys] = useState<Record<string, { equity: any[]; positions: any[]; loading: boolean; error?: boolean }>>({});
   const [configDrawer, setConfigDrawer] = useState<{ open: boolean; expId: string; content: string; loading: boolean }>({ open: false, expId: '', content: '', loading: false });
 
   // Create from template
@@ -295,17 +297,9 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
 
   const openDetail = async (exp: ExperimentItem) => {
     setDetailExp(exp); setDetailDrawer(true);
-    setRunsLoading(true); setEquityLoading(true); setPositionsLoading(true);
-    setRuns([]); setEquityLatest(null); setPositions([]);
+    setRunsLoading(true);
+    setRuns([]); setExpandedRunKeys({});
     try { const d = await api.get(`/api/admin/experiments/${exp.exp_id}/runs`); setRuns(d); } catch { setRuns([]); } finally { setRunsLoading(false); }
-    try {
-      const eq = await api.get(`/api/admin/dashboard/equity/${exp.exp_id}`);
-      setEquityLatest(Array.isArray(eq) && eq.length > 0 ? eq[eq.length - 1] : eq);
-    } catch { setEquityLatest(null); } finally { setEquityLoading(false); }
-    try {
-      const pos = await api.get(`/api/admin/dashboard/experiments/${exp.exp_id}/positions`);
-      setPositions(Array.isArray(pos) ? pos : []);
-    } catch { setPositions([]); } finally { setPositionsLoading(false); }
   };
 
   const openConfig = async (expId: string) => {
@@ -346,43 +340,182 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
       render: (_, r) => <Tag>{r.market?.toUpperCase()}</Tag>,
     },
     {
-      title: 'Status', dataIndex: 'status', key: 'status', width: 100,
-      render: (_, r) => <Tag color={statusColor[r.status] || 'default'}>{r.status}</Tag>,
+      title: 'Status', dataIndex: 'has_active_run', key: 'status', width: 100,
+      render: (_, r) => r.has_active_run
+        ? <Tag color="green">🔵 活跃 Run</Tag>
+        : <Tag>⚪ 无活跃 Run</Tag>,
     },
     {
-      title: 'Actions', key: 'actions', width: 280,
+      title: '累计 Run', dataIndex: 'total_runs', key: 'total_runs', width: 50,
+    },
+    {
+      title: 'Actions', key: 'actions', width: 260,
       render: (_, r) => (
         <Space>
           <Tooltip title="Config"><Button size="small" icon={<SettingOutlined />} onClick={() => openConfig(r.exp_id)} /></Tooltip>
           <Tooltip title="Detail"><Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(r)} /></Tooltip>
-          {r.status !== 'running' && (
-            <Popconfirm title={`启动 ${r.exp_id}？`} onConfirm={() => handleAction(r.exp_id, 'start')}>
-              <Tooltip title="Start"><Button type="primary" size="small" icon={<PlayCircleOutlined />} /></Tooltip>
+          <Tooltip title={r.has_active_run ? `已有活跃 Run (${r.active_run_id})，请先停止` : '启动新 Run'}>
+            <Popconfirm title={`为 ${r.exp_id} 启动新 Run？`} onConfirm={() => handleAction(r.exp_id, 'start')}
+              disabled={r.has_active_run}>
+              <Button type="primary" size="small" icon={<PlayCircleOutlined />} disabled={r.has_active_run}>启动新 Run</Button>
             </Popconfirm>
-          )}
-          {r.status === 'running' && (
-            <Popconfirm title={`停止 ${r.exp_id}？`} onConfirm={() => handleAction(r.exp_id, 'stop')}>
-              <Tooltip title="Stop"><Button size="small" icon={<PauseCircleOutlined />} /></Tooltip>
+          </Tooltip>
+          <Tooltip title={r.has_active_run ? `存在活跃 Run，无法删除` : '永久删除'}>
+            <Popconfirm title={`永久删除 ${r.exp_id}？`} description="将删除所有数据" onConfirm={() => handleDelete(r.exp_id)}
+              okText="确认删除" okButtonProps={{ danger: true }} disabled={r.has_active_run}>
+              <Button size="small" danger icon={<DeleteOutlined />} disabled={r.has_active_run} />
             </Popconfirm>
-          )}
-          <Popconfirm title={`重启 ${r.exp_id}？`} onConfirm={() => handleAction(r.exp_id, 'restart')}>
-            <Tooltip title="Restart"><Button size="small" icon={<ReloadOutlined />} /></Tooltip>
-          </Popconfirm>
-          <Popconfirm title={`永久删除 ${r.exp_id}？`} description="将删除所有数据" onConfirm={() => handleDelete(r.exp_id)}
-            okText="确认删除" okButtonProps={{ danger: true }}>
-            <Tooltip title="Delete"><Button size="small" danger icon={<DeleteOutlined />} /></Tooltip>
-          </Popconfirm>
+          </Tooltip>
         </Space>
       ),
     },
   ];
 
+  const handleViewRunLog = (runId: string) => {
+    if (!detailExp) return;
+    const logModule = detailExp.type === 'paper' ? 'paper_run' : 'live';
+    const fileName = `${detailExp.exp_id}_${runId}.log`;
+    navigate(`/logs?module=${logModule}&file=${encodeURIComponent(fileName)}`);
+  };
+
+  const handleStopRun = async (expId: string, runId: string) => {
+    try {
+      await api.post(`/api/admin/experiments/${expId}/runs/${runId}/stop`);
+      message.success(`Run ${runId} stopped`);
+      // Reload runs
+      setRunsLoading(true);
+      try { const d = await api.get(`/api/admin/experiments/${expId}/runs`); setRuns(d); } catch { setRuns([]); } finally { setRunsLoading(false); }
+      actionRef.current?.reload();
+    } catch (err: any) { message.error(`Stop run failed: ${err.message}`); }
+  };
+
+  const handleStartRun = async (expId: string, runId: string) => {
+    try {
+      const data = await api.post(`/api/admin/experiments/${expId}/runs/${runId}/start`);
+      const hide = message.loading(`Starting run ${runId}...`, 0);
+      try { await pollTask(data.task_id); hide(); message.success('Run started'); actionRef.current?.reload(); }
+      catch (err: any) { hide(); message.error(`Start failed: ${err.message}`); }
+    } catch (err: any) { message.error(`Start failed: ${err.message}`); }
+  };
+
+  const handleDeleteRun = async (expId: string, runId: string) => {
+    try {
+      await api.del(`/api/admin/experiments/${expId}/runs/${runId}`);
+      message.success(`Run ${runId} deleted`);
+      setRunsLoading(true);
+      try { const d = await api.get(`/api/admin/experiments/${expId}/runs`); setRuns(d); } catch { setRuns([]); } finally { setRunsLoading(false); }
+      actionRef.current?.reload();
+    } catch (err: any) { message.error(`Delete failed: ${err.message}`); }
+  };
+
+  const handleClearRunState = async (expId: string, runId: string) => {
+    try {
+      await api.post(`/api/admin/experiments/${expId}/runs/${runId}/clear-state`);
+      message.success(`State cleared for run ${runId}`);
+    } catch (err: any) { message.error(`Clear state failed: ${err.message}`); }
+  };
+
+  const loadRunDetails = async (expId: string, runId: string) => {
+    // Skip if already loaded
+    if (expandedRunKeys[runId] && !expandedRunKeys[runId].loading) return;
+    setExpandedRunKeys(prev => ({ ...prev, [runId]: { equity: [], positions: [], loading: true } }));
+    try {
+      const [equity, positions] = await Promise.all([
+        api.get(`/api/admin/experiments/${expId}/runs/${runId}/equity`),
+        api.get(`/api/admin/experiments/${expId}/runs/${runId}/positions`),
+      ]);
+      setExpandedRunKeys(prev => ({
+        ...prev,
+        [runId]: { equity: equity || [], positions: positions || [], loading: false },
+      }));
+    } catch {
+      setExpandedRunKeys(prev => ({
+        ...prev,
+        [runId]: { equity: [], positions: [], loading: false, error: true },
+      }));
+    }
+  };
+
   const runColumns: ColumnsType<RunRecord> = [
-    { title: 'Run ID', dataIndex: 'run_id', key: 'run_id', width: 220 },
-    { title: 'Status', dataIndex: 'status', key: 'status', width: 100, render: (_, r) => <Tag color={statusColor[r.status] || 'default'}>{r.status}</Tag> },
-    { title: 'Started', dataIndex: 'started_at', key: 'started_at', width: 200 },
-    { title: 'Ended', dataIndex: 'ended_at', key: 'ended_at', width: 200, render: (_, r) => r.ended_at || '-' },
+    { title: 'Run ID', dataIndex: 'run_id', key: 'run_id', width: 200 },
+    { title: 'Status', dataIndex: 'status', key: 'status', width: 90, render: (_, r) => <Tag color={statusColor[r.status] || 'default'}>{r.status}</Tag> },
+    { title: 'Started', dataIndex: 'started_at', key: 'started_at', width: 160, render: (_, r) => r.started_at?.slice(0,19) || '-' },
+    { title: 'Ended', dataIndex: 'ended_at', key: 'ended_at', width: 160, render: (_, r) => r.ended_at?.slice(0,19) || '-' },
+    {
+      title: '', key: 'actions', width: 340,
+      render: (_, r) => {
+        const exp = detailExp;
+        const expId = exp?.exp_id || '';
+        return (
+          <Space size={4}>
+            {/* Start — blocked if any run is active */}
+            <Tooltip title={exp?.has_active_run ? '已有活跃 Run' : '启动此 Run'}>
+              <Button size="small" icon={<PlayCircleOutlined />}
+                disabled={exp?.has_active_run || r.status === 'running'}
+                onClick={() => r.status !== 'running' && handleStartRun(expId, r.run_id)} />
+            </Tooltip>
+            {/* Stop — only for running */}
+            {r.status === 'running' && (
+              <Popconfirm title={`停止 Run ${r.run_id}？`}
+                onConfirm={() => handleStopRun(expId, r.run_id)}>
+                <Button size="small" danger icon={<PauseCircleOutlined />} />
+              </Popconfirm>
+            )}
+            {/* Delete — blocked if running */}
+            <Popconfirm title={`永久删除 Run ${r.run_id}？`} description="将删除所有关联数据"
+              onConfirm={() => handleDeleteRun(expId, r.run_id)}
+              disabled={r.status === 'running'} okButtonProps={{ danger: true }}>
+              <Tooltip title={r.status === 'running' ? '活跃 Run 无法删除' : '删除'}>
+                <Button size="small" danger icon={<DeleteOutlined />} disabled={r.status === 'running'} />
+              </Tooltip>
+            </Popconfirm>
+            {/* Clear state — blocked if running */}
+            <Popconfirm title={`清除 Run ${r.run_id} 状态？`} description="将删除 checkpoint/state，保留 BQ 数据"
+              onConfirm={() => handleClearRunState(expId, r.run_id)}
+              disabled={r.status === 'running'} okButtonProps={{ danger: true }}>
+              <Tooltip title={r.status === 'running' ? '活跃 Run 无法清除' : '清除状态'}>
+                <Button size="small" icon={<ClearOutlined />} disabled={r.status === 'running'} />
+              </Tooltip>
+            </Popconfirm>
+            {/* Log */}
+            <Tooltip title="查看日志">
+              <Button size="small" icon={<FileTextOutlined />}
+                onClick={() => handleViewRunLog(r.run_id)} />
+            </Tooltip>
+            {/* Detail — jump to Dashboard */}
+            <Tooltip title="实验详情">
+              <Button size="small" icon={<LinkOutlined />}
+                onClick={() => navigate(`/dashboard?tab=${exp?.type === 'paper' ? 'paper' : 'live'}&exp_id=${expId}&run_id=${r.run_id}`)} />
+            </Tooltip>
+          </Space>
+        );
+      },
+    },
   ];
+
+  // Position columns for expanded row
+  const posColumns: ColumnsType<any> = [
+    { title: 'Symbol', dataIndex: 'symbol', key: 'symbol', width: 80 },
+    { title: 'Qty', dataIndex: 'qty', key: 'qty', width: 80, render: (v) => Number(v).toFixed(2) },
+    { title: 'Cost', dataIndex: 'cost', key: 'cost', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
+  ];
+
+  function buildEquityChart(data: any[]) {
+    const bars = data.map((d: any) => d.bar?.toString() ?? '');
+    const values = data.map((d: any) => Number(d.equity ?? 0));
+    return {
+      tooltip: { trigger: 'axis' },
+      grid: { left: 70, right: 20, top: 10, bottom: 30 },
+      xAxis: { type: 'category', data: bars, axisLabel: { show: false } },
+      yAxis: { type: 'value', axisLabel: { fontSize: 10, formatter: (v: number) => `$${(v / 1000).toFixed(0)}k` } },
+      series: [{
+        type: 'line', data: values, smooth: true, showSymbol: false,
+        lineStyle: { color: '#1677ff', width: 1.5 },
+        areaStyle: { color: 'rgba(22, 119, 255, 0.08)' },
+      }],
+      dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+    };
+  }
 
   return (
     <>
@@ -431,32 +564,45 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
               <Descriptions.Item label="Run">{detailExp.current_run || '—'}</Descriptions.Item>
             </Descriptions>
 
-            <Divider>Equity Snapshot</Divider>
-            {equityLoading ? <Alert message="Loading..." type="info" /> :
-              equityLatest ? (
-                <Descriptions size="small" column={3} bordered style={{ marginBottom: 16 }}>
-                  <Descriptions.Item label="Bar">{equityLatest.bar}</Descriptions.Item>
-                  <Descriptions.Item label="Equity">${Math.round(equityLatest.equity || 0).toLocaleString()}</Descriptions.Item>
-                  <Descriptions.Item label="PnL">${Math.round(equityLatest.daily_pnl || 0)}</Descriptions.Item>
-                </Descriptions>
-              ) : <Alert message="No equity data" type="warning" />}
-
-            <Divider>Positions ({positions.length})</Divider>
-            {positionsLoading ? <Alert message="Loading..." type="info" /> :
-              positions.length === 0 ? <Alert message="No open positions" type="info" /> :
-              <Table dataSource={positions} rowKey="symbol" size="small" pagination={false}
-                columns={[
-                  { title: 'Symbol', dataIndex: 'symbol', width: 80 },
-                  { title: 'Qty', dataIndex: 'qty', width: 80, render: (v: any) => Number(v).toFixed(2) },
-                  { title: 'Avg Cost', dataIndex: 'avg_cost', width: 100, render: (v: any) => `$${Number(v).toFixed(2)}` },
-                  { title: 'Price', dataIndex: 'current_price', width: 100, render: (v: any) => `$${Number(v).toFixed(2)}` },
-                  { title: 'PnL', dataIndex: 'pnl', width: 100, render: (v: any) => ({ children: `$${Number(v).toFixed(2)}`, props: { style: { color: Number(v) >= 0 ? '#3f8600' : '#cf1322' } } }) },
-                  { title: 'PnL%', dataIndex: 'pnl_pct', width: 80, render: (v: any) => ({ children: `${Number(v).toFixed(2)}%`, props: { style: { color: Number(v) >= 0 ? '#3f8600' : '#cf1322' } } }) },
-                ]}
-              />}
-
             <Divider>Runs</Divider>
-            <Table dataSource={runs} rowKey="run_id" loading={runsLoading} size="small" columns={runColumns} pagination={false} />
+            <Table<RunRecord>
+              dataSource={runs}
+              rowKey="run_id"
+              loading={runsLoading}
+              size="small"
+              columns={runColumns}
+              pagination={false}
+              expandable={{
+                expandedRowRender: (record) => {
+                  const details = expandedRunKeys[record.run_id];
+                  if (!details || details.loading) {
+                    if (!details) loadRunDetails(detailExp!.exp_id, record.run_id);
+                    return <Spin />;
+                  }
+                  if (details.error) return <Alert message="Failed to load run details" type="error" />;
+                  const equityEmpty = !details.equity || details.equity.length === 0;
+                  const posEmpty = !details.positions || details.positions.length === 0;
+                  if (equityEmpty && posEmpty) return <Text type="secondary">No data for this run</Text>;
+                  return (
+                    <Row gutter={16}>
+                      <Col span={16}>
+                        <Text strong style={{ marginBottom: 8, display: 'block' }}>权益曲线</Text>
+                        {equityEmpty ? <Empty description="No equity data" /> :
+                          <ReactECharts option={buildEquityChart(details.equity)} style={{ height: 200 }} />}
+                      </Col>
+                      <Col span={8}>
+                        <Text strong style={{ marginBottom: 8, display: 'block' }}>当前持仓</Text>
+                        {posEmpty ? <Empty description="No positions" /> :
+                          <Table size="small" dataSource={details.positions} columns={posColumns} rowKey="symbol" pagination={false} />}
+                      </Col>
+                    </Row>
+                  );
+                },
+                onExpand: (expanded, record) => {
+                  if (expanded) loadRunDetails(detailExp!.exp_id, record.run_id);
+                },
+              }}
+            />
 
             <Divider />
             <Popconfirm title={`清除 ${detailExp.exp_id} 所有数据？`} onConfirm={async () => {
