@@ -28,9 +28,10 @@ interface ExperimentItem {
   strategy: string; version: number; status: string;
   has_active_run: boolean; total_runs: number; active_run_id: string | null;
   current_run: string | null; config_path: string; pid: number | null;
+  created_at?: string; latest_run_at?: string;
 }
 
-interface ConfigItem { name: string; path: string; size: number; }
+interface ConfigItem { name: string; path: string; size: number; created_at?: string; updated_at?: string; }
 
 interface RunRecord { run_id: string; status: string; started_at: string; ended_at: string; base_run: string | null; }
 
@@ -146,6 +147,8 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
       title: 'Size', dataIndex: 'size', key: 'size', width: 100,
       render: (_, r) => `${(r.size / 1024).toFixed(1)} KB`,
     },
+    { title: '创建时间', dataIndex: 'created_at', width: 160, render: (_, r) => r.created_at?.slice(0, 10) || '-' },
+    { title: '更新时间', dataIndex: 'updated_at', width: 160, render: (_, r) => r.updated_at?.slice(0, 10) || '-' },
     {
       title: 'Actions', key: 'actions', width: 200,
       render: (_, r) => (
@@ -343,6 +346,8 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
         ? <Tag color="green">🔵 活跃 Run</Tag>
         : <Tag>⚪ 无活跃 Run</Tag>,
     },
+    { title: '创建时间', dataIndex: 'created_at', width: 100, render: (_, r) => r.created_at?.slice(0, 10) || '-' },
+    { title: '最新Run', dataIndex: 'latest_run_at', width: 160, render: (_, r) => r.latest_run_at?.slice(0, 16) || '-' },
     {
       title: '累计 Run', dataIndex: 'total_runs', key: 'total_runs', width: 50,
     },
@@ -495,9 +500,9 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   const posColumns: ColumnsType<any> = [
     { title: 'Symbol', dataIndex: 'symbol', key: 'symbol', width: 80 },
     { title: 'Qty', dataIndex: 'qty', key: 'qty', width: 80, render: (v) => Number(v).toFixed(2) },
-    { title: 'Entry Price', dataIndex: 'entry_price', key: 'entry_price', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
-    { title: 'Market Value', dataIndex: 'market_value', key: 'market_value', width: 120, render: (v) => `$${Number(v).toFixed(2)}` },
-    { title: 'Unrealized PnL', dataIndex: 'unrealized_pnl', key: 'unrealized_pnl', width: 120, render: (v) => `$${Number(v).toFixed(2)}` },
+    { title: 'Avg Cost', dataIndex: 'avg_cost', key: 'avg_cost', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
+    { title: 'Price', dataIndex: 'current_price', key: 'current_price', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
+    { title: 'PnL', dataIndex: 'pnl', key: 'pnl', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
     { title: 'PnL%', dataIndex: 'pnl_pct', key: 'pnl_pct', width: 80, render: (v) => `${Number(v).toFixed(2)}%` },
   ];
 

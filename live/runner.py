@@ -319,14 +319,15 @@ class LiveRunner:
     def _run_paper_loop(self):
         """Run paper trading over historical BigQuery daily bar data.
 
-        Date range: Jan 1 of current year → today (UTC).
-        Data source: quant.us_bars_1d (filtered by symbol list if provided).
+        Date range: from config live.start_date / live.end_date,
+        or fallback to Jan 1 of current year → today.
         """
-        # 1. Date range
+        # 1. Date range (configurable, with fallback)
         today = datetime.now(timezone.utc)
-        year_start = datetime(today.year, 1, 1, tzinfo=timezone.utc)
-        start_str = year_start.strftime("%Y-%m-%d")
-        end_str = today.strftime("%Y-%m-%d")
+        start_str = self.config.get("live", {}).get("start_date") or \
+            datetime(today.year, 1, 1, tzinfo=timezone.utc).strftime("%Y-%m-%d")
+        end_str = self.config.get("live", {}).get("end_date") or \
+            today.strftime("%Y-%m-%d")
         logger.info("Paper loop date range: %s → %s", start_str, end_str)
 
         # 2. Load BQ data

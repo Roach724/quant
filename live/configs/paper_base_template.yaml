@@ -17,6 +17,8 @@ live:
   mode: paper                # paper（历史回测，固定）
   market: us                 # us | hk
   output_dir: output/live/   # 输出目录（CSV/equity_curve 等）
+  start_date: "2026-01-01" # 回测起始日期（YYYY-MM-DD，省略=当年1月1日）
+  end_date: ""              # 回测结束日期（YYYY-MM-DD，省略=今天）
 
 # ── Broker ────────────────────────────────────────────────────────────
 broker:

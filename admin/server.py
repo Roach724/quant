@@ -54,6 +54,8 @@ async def lifespan(app: FastAPI):
     init_db()
     _startup_auto_heal()
     yield
+    from admin.models import cleanup_session
+    cleanup_session()
 
 
 app = FastAPI(title="Quant Admin", version="0.1.0", lifespan=lifespan)
@@ -65,6 +67,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def db_session_cleanup(request, call_next):
+    """Clean up SQLAlchemy scoped session after every request."""
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        from admin.models import cleanup_session
+        cleanup_session()
 
 
 # ── Request / response schemas ────────────────────────────────────────────────
@@ -156,6 +169,8 @@ def admin_experiments():
         "active_run_id": e.active_run.run_id if e.active_run else None,
         "config_path": e.config_path,
         "pid": mgr.get_pid(e.id),
+        "created_at": e.created_at,
+        "latest_run_at": e.runs[0].started_at if e.runs else None,
     } for e in mgr.list()]
 
 
@@ -431,10 +446,15 @@ def admin_experiment_configs():
         return []
     configs = []
     for f in sorted(config_dir.glob("*.yaml")):
+        st = f.stat()
+        mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
+        ctime = datetime.fromtimestamp(st.st_ctime, tz=timezone.utc).isoformat()
         configs.append({
             "name": f.name,
             "path": str(f),
-            "size": f.stat().st_size,
+            "size": st.st_size,
+            "created_at": ctime if ctime < mtime else mtime,  # ensure created ≤ updated
+            "updated_at": mtime,
         })
     return configs
 
@@ -1453,7 +1473,17 @@ def admin_model_stage(name: str, version: str = "", stage: str = ""):
 def admin_strategies():
     """List strategy files in strategies/ directory."""
     files = glob.glob("/opt/quant-prod/strategies/*.py")
-    return [{"name": os.path.basename(f), "path": f} for f in sorted(files)]
+    result = []
+    for f in sorted(files):
+        st = os.stat(f)
+        mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
+        ctime = datetime.fromtimestamp(st.st_ctime, tz=timezone.utc).isoformat()
+        result.append({
+            "name": os.path.basename(f), "path": f,
+            "created_at": ctime if ctime < mtime else mtime,
+            "updated_at": mtime,
+        })
+    return result
 
 
 @app.get("/api/admin/strategies/{name}")
@@ -1848,6 +1878,8 @@ def admin_ml_configs():
         "id": r.id, "name": r.name, "description": r.description,
         "config_path": r.config_path, "dataset_name": r.dataset_name,
         "registry_model_name": r.registry_model_name, "status": r.status,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     } for r in rows]
 
 
@@ -2021,7 +2053,11 @@ def admin_ml_center():
                 "icir": v.get("icir"),
                 "n_features": v.get("n_features"),
                 "dataset": v.get("dataset"),
+                "training_time": v.get("training_time"),
+                "created_at": v.get("created_at"),
+                "completed_at": v.get("completed_at"),
             } for v in m["versions"]],
+            "last_trained_at": m["versions"][0].get("created_at") if m["versions"] else None,
         })
 
     # ── Configs registered but not yet trained ──
@@ -2034,6 +2070,7 @@ def admin_ml_center():
                 "dataset_name": cfg.dataset_name or "",
                 "config_name": cfg.name,
                 "versions": [],
+                "last_trained_at": None,
             })
     return result
 

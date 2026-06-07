@@ -17,10 +17,10 @@ const { Text } = Typography;
 const { RangePicker } = DatePicker;
 
 interface FactorItem { factor_id: string; source: string; label: string; }
-interface DatasetItem { id: number; name: string; market: string; label: string; factor_ids: string[]; train_range: string; val_range: string; test_range: string; bq_table: string | null; status: string; row_count: number; }
-interface ConfigItem { id: number; name: string; description: string; config_path: string; dataset_name: string; registry_model_name: string | null; status: string; }
-interface CenterItem { model_name: string; dataset_name: string; config_name: string; versions: VersionDetail[]; }
-interface VersionDetail { version: string; stage: string; run_id: string; rmse?: number; ic?: number; icir?: number; n_features?: number; dataset?: string; }
+interface DatasetItem { id: number; name: string; market: string; label: string; factor_ids: string[]; train_range: string; val_range: string; test_range: string; bq_table: string | null; status: string; row_count: number; created_at: string; }
+interface ConfigItem { id: number; name: string; description: string; config_path: string; dataset_name: string; registry_model_name: string | null; status: string; created_at?: string; updated_at?: string; }
+interface CenterItem { model_name: string; dataset_name: string; config_name: string; versions: VersionDetail[]; last_trained_at?: string; }
+interface VersionDetail { version: string; stage: string; run_id: string; rmse?: number; ic?: number; icir?: number; n_features?: number; dataset?: string; completed_at?: string; }
 
 const stageColor: Record<string, string> = { Production: 'green', Staging: 'orange', Archived: 'default', None: 'default' };
 
@@ -90,6 +90,7 @@ const DatasetsTab: React.FC = () => {
         { title: '名称', dataIndex: 'name', width: 160 },
         { title: '市场', dataIndex: 'market', width: 60, render: (v: string) => <Tag>{v.toUpperCase()}</Tag> },
         { title: 'Label', dataIndex: 'label', width: 120 },
+        { title: '创建时间', dataIndex: 'created_at', width: 170, render: (_, r) => (r.created_at || '').slice(0, 19) || '-' },
         { title: 'BQ表', dataIndex: 'bq_table', width: 200, ellipsis: true, render: (v: string | null) => v ? <Text style={{ fontFamily: 'monospace', fontSize: 11, color: '#1677ff' }}>{v.split('.').pop()}</Text> : <Text type="secondary">—</Text> },
         { title: '操作', width: 160, render: (_, r) => (<Space>
           <Popconfirm title="生成/覆盖？" onConfirm={() => { void (async () => { try { setDGen(true); const res = await api.post(`/api/admin/ml/datasets/${r.id}/generate`); if (res.task_id) { try { await dPoll(res.task_id); } catch { } } message.success(res.row_count ? `${res.row_count} rows` : "Done"); (async () => { setDatasets(await api.get('/api/admin/ml/datasets')); })(); } catch (e: any) { message.error(e.message); } finally { setDGen(false); } })(); }} disabled={dGen}>
@@ -177,6 +178,8 @@ const MlConfigsTab: React.FC = () => {
         { title: '数据集', dataIndex: 'dataset_name', width: 140 },
         { title: '模型名', dataIndex: 'registry_model_name', width: 140 },
         { title: '状态', dataIndex: 'status', width: 100, render: (v) => v === 'registered' ? <Tag color="green">已注册</Tag> : <Tag>草稿</Tag> },
+        { title: '创建时间', dataIndex: 'created_at', width: 160, render: (_, r) => r.created_at?.slice(0, 10) || '-' },
+        { title: '更新时间', dataIndex: 'updated_at', width: 160, render: (_, r) => r.updated_at?.slice(0, 10) || '-' },
         { title: '操作', width: 240, render: (_, r) => (<Space>
           <Button size="small" onClick={() => { setRenameOld(r.name); setRenameNew(stripYaml(r.name)); setRenameOpen(true); }}>重命名</Button>
           <Button size="small" icon={<SettingOutlined />} onClick={() => openEditor(r.name)}>编辑</Button>
@@ -296,6 +299,7 @@ const ModelCenterTab: React.FC = () => {
       const prod = (r.versions || []).find(v => v.stage === 'Production');
       return prod ? <Tag color="green">v{prod.version} Prod</Tag> : <Text type="secondary">—</Text>;
     }},
+    { title: '最近训练', dataIndex: 'last_trained_at', width: 160, render: (_: any, r: any) => r.last_trained_at?.slice(0, 16) || '—' },
     { title: '操作', width: 240, render: (_: any, r: CenterItem) => (<Space>
       <Popconfirm title="快速训练（无调优）？" onConfirm={() => { void doTrain(r.config_name, true); }} disabled={r.config_name === '—' || training}>
         <Button size="small" icon={<ThunderboltOutlined />} disabled={r.config_name === '—' || training} loading={training}>快速</Button>
@@ -321,6 +325,7 @@ const ModelCenterTab: React.FC = () => {
           { title: 'IC', dataIndex: 'ic', width: 90, render: (v: number) => v != null ? Number(v).toFixed(4) : '—' },
           { title: 'ICIR', dataIndex: 'icir', width: 80, render: (v: number) => v != null ? Number(v).toFixed(3) : '—' },
           { title: 'Feat', dataIndex: 'n_features', width: 60 },
+          { title: 'Completed', dataIndex: 'completed_at', width: 160, render: (v: string) => v?.slice(0, 16) || '—' },
           { title: 'Dataset', dataIndex: 'dataset', width: 120, render: (v: string) => v || '—' },
           { title: '操作', width: 260, render: (_: any, r: VersionDetail) => (<Space size={0}>
             {r.stage !== 'Production' && <Popconfirm title="Promote?" onConfirm={() => doStage(modelName, r.version, 'Production')}><Button size="small" type="link" style={{ color: '#52c41a' }}>Prod</Button></Popconfirm>}
@@ -409,6 +414,8 @@ const StrategiesTab: React.FC = () => {
         columns={[
           { title: '文件', dataIndex: 'name', width: 220 },
           { title: '路径', dataIndex: 'path', ellipsis: true },
+          { title: '创建时间', dataIndex: 'created_at', width: 100, render: (_, r) => r.created_at?.slice(0, 10) || '-' },
+          { title: '更新时间', dataIndex: 'updated_at', width: 100, render: (_, r) => r.updated_at?.slice(0, 10) || '-' },
           { title: '操作', width: 200, render: (_, r) => (<Space>
             <Button size="small" icon={<EyeOutlined />} onClick={() => openView(r.name)}>查看</Button>
             <Button size="small" icon={<SettingOutlined />} onClick={() => openEdit(r.name)}>编辑</Button>

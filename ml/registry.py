@@ -432,6 +432,14 @@ class ModelRegistry:
                         vdet["training_time"] = round(
                             (info.end_time - info.start_time) / 1000, 1
                         )
+                    if info.start_time:
+                        vdet["created_at"] = datetime.fromtimestamp(
+                            info.start_time / 1000, tz=timezone.utc
+                        ).isoformat()
+                    if info.end_time:
+                        vdet["completed_at"] = datetime.fromtimestamp(
+                            info.end_time / 1000, tz=timezone.utc
+                        ).isoformat()
                 except Exception:
                     pass
             by_name[name].append(vdet)

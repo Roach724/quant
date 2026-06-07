@@ -1,11 +1,14 @@
 """SQLAlchemy models for Quant Admin Platform."""
 
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON
-from sqlalchemy.orm import DeclarativeBase, Session
+from sqlalchemy.orm import DeclarativeBase, sessionmaker, scoped_session
 from datetime import datetime, timezone
 
 DB_PATH = "/var/quant/admin.db"
-engine = create_engine(f"sqlite:///{DB_PATH}", echo=False)
+engine = create_engine(f"sqlite:///{DB_PATH}", echo=False, pool_size=5, max_overflow=10)
+
+_session_factory = sessionmaker(bind=engine)
+SessionLocal = scoped_session(_session_factory)
 
 
 class Base(DeclarativeBase):
@@ -64,5 +67,11 @@ def init_db():
     Base.metadata.create_all(engine)
 
 
-def get_session() -> Session:
-    return Session(engine)
+def get_session():
+    """Return a scoped session. Auto-cleaned per-request."""
+    return SessionLocal()
+
+
+def cleanup_session():
+    """Remove scoped session after request (called by middleware/lifespan)."""
+    SessionLocal.remove()
