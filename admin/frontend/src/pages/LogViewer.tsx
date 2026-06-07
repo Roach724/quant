@@ -3,6 +3,7 @@ import {
 } from '@ant-design/icons';
 import { Select, Input, Button, Switch, Tag, Space, Typography, DatePicker, Tabs, Table, Popconfirm, Modal, Tooltip, message } from 'antd';
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api, WS_BASE } from '../api';
 
 const { Search } = Input;
@@ -26,8 +27,11 @@ const extractTime = (ts: string): string => { if (!ts) return ''; const m = ts.m
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const LogBrowser: React.FC = () => {
+  const [searchParams] = useSearchParams();
   const [modules, setModules] = useState<ModuleInfo[]>([]);
-  const [module, setModule] = useState<string>('collector');
+  const urlModule = searchParams.get('module') || '';
+  const urlFile = searchParams.get('file') || '';
+  const [module, setModule] = useState<string>(urlModule || 'collector');
   const [level, setLevel] = useState<string>('');
   const [search, setSearch] = useState<string>('');
   const [lines, setLines] = useState<LogLine[]>([]);
@@ -35,7 +39,7 @@ const LogBrowser: React.FC = () => {
   const [fileList, setFileList] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<string>('');
   const [loading, setLoading] = useState(false);
-  const [live, setLive] = useState(false);
+  const [live, setLive] = useState(true);
   const [timeRange, setTimeRange] = useState<[string, string] | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -51,13 +55,20 @@ const LogBrowser: React.FC = () => {
       if (tr && tr[0]) params.set('start', tr[0]); if (tr && tr[1]) params.set('end', tr[1]);
       if (f) params.set('file', f);
       const data = await api.get(`/api/admin/logs?${params.toString()}`);
-      if (!data.error) { setLines(data.lines || []); setFileName(data.file || null); if (data.files) setFileList(data.files); }
+      if (!data.error) { setLines(data.lines || []); setFileName(data.file || null); if (data.files) { setFileList(data.files); if (!f && data.files.length > 0) setSelectedFile(data.files[0]); } }
     } catch { } finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
     api.get('/api/admin/logs/modules').then((data) => {
-      if (Array.isArray(data)) { setModules(data); if (data.length > 0) { setModule(data[0].name); fetchLogs(data[0].name, '', '', null); } }
+      if (Array.isArray(data)) {
+        setModules(data);
+        // If URL specified a module, use it; otherwise default to first
+        const initModule = urlModule && data.some((m: any) => m.name === urlModule)
+          ? urlModule : (data[0]?.name || 'collector');
+        setModule(initModule);
+        fetchLogs(initModule, '', '', null, urlFile);
+      }
     }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -122,8 +133,10 @@ const LogBrowser: React.FC = () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const LogManager: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const urlModule = searchParams.get('module') || '';
   const [modules, setModules] = useState<ModuleInfo[]>([]);
-  const [module, setModule] = useState('collector');
+  const [module, setModule] = useState(urlModule || 'collector');
   const [files, setFiles] = useState<LogFileInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -210,7 +223,8 @@ const LogManager: React.FC = () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const LogViewer: React.FC = () => {
-  const [tab, setTab] = useState('browse');
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState(searchParams.get('tab') === 'manage' ? 'manage' : 'browse');
   return (
     <div>
       <Typography.Title level={5} style={{ marginBottom: 12 }}>日志</Typography.Title>

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,7 +42,7 @@ BQ_TABLE = "experiment_runs"
 class RunRecord:
     """Captures a single execution run of an experiment."""
     run_id: str
-    status: str                    # running | paused | completed | failed
+    status: str                    # running | stopped | completed | failed
     started_at: str                # ISO-8601 UTC
     ended_at: str | None = None    # ISO-8601 UTC
     base_run: str | None = None    # resume 时的上一轮 run_id
@@ -49,48 +50,60 @@ class RunRecord:
 
 @dataclass
 class Experiment:
-    """Full experiment descriptor backed by the JSON registry."""
+    """Full experiment descriptor backed by the JSON registry.
+
+    Status is now **derived** from runs, not stored:
+      - If any run has status='running' → status='running'
+      - Otherwise → status='idle'
+    """
     id: str
     type: str
     market: str
     strategy: str
     version: int
-    status: str                    # pending | running | paused | completed | archived | failed
+    status: str                    # derived: 'running' | 'idle'
     config_path: str
     created_at: str                # ISO-8601 UTC
     current_run: str | None = None
     name: str = ""
     runs: list[RunRecord] = field(default_factory=list)
 
-    # ── State guards ──────────────────────────────────────────────
+    # ── Derived properties ────────────────────────────────────────
+
+    @property
+    def has_active_run(self) -> bool:
+        """True if any run is currently 'running'."""
+        return any(r.status == "running" for r in self.runs)
+
+    @property
+    def total_runs(self) -> int:
+        """Total number of runs (including completed/failed/stopped)."""
+        return len(self.runs)
+
+    @property
+    def active_run(self) -> RunRecord | None:
+        """The currently active run, or None."""
+        for r in self.runs:
+            if r.status == "running":
+                return r
+        return None
+
+    # ── State guards (simplified) ──────────────────────────────────
 
     @property
     def can_start(self) -> bool:
-        """Ready to start: pending, paused (resume), completed (replay), archived (revive),
-        or running with no current run (migrated experiment)."""
-        if self.status == "running" and not self.current_run:
-            return True
-        return self.status in ("pending", "paused", "completed", "archived")
-
-    @property
-    def can_pause(self) -> bool:
-        """Only a running experiment can be paused."""
-        return self.status == "running"
-
-    @property
-    def can_resume(self) -> bool:
-        """Only a paused experiment can be resumed."""
-        return self.status == "paused"
+        """Can start if no run is currently running."""
+        return not self.has_active_run
 
     @property
     def can_stop(self) -> bool:
-        """Running or paused experiments can be stopped (marked completed)."""
-        return self.status in ("running", "paused")
+        """Can stop if there is an active run."""
+        return self.has_active_run
 
     @property
-    def can_archive(self) -> bool:
-        """Only completed or failed experiments can be archived."""
-        return self.status in ("completed", "failed")
+    def can_delete(self) -> bool:
+        """Can delete only if no active run."""
+        return not self.has_active_run
 
 
 # ── ID helpers ───────────────────────────────────────────────────────
@@ -116,6 +129,31 @@ def _make_run_id() -> str:
             _last_run_id_ts = ts
             return ts
         _t.sleep(0.000001)
+
+
+# ── PID helper ──────────────────────────────────────────────────────
+
+def _is_pid_alive(pid: int) -> bool:
+    """Check if a process with the given PID is still running."""
+    try:
+        import signal
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _is_unit_active(exp_id: str) -> bool:
+    """Check if the systemd transient unit for an experiment is active."""
+    unit = f"exp-{exp_id}"
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", unit],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
 
 
 # ── ExperimentManager ────────────────────────────────────────────────
@@ -312,31 +350,30 @@ class ExperimentManager:
 
     # ── Lifecycle operations ─────────────────────────────────────────
 
-    def start(self, exp_id: str) -> str:
-        """Start an experiment: validate state, create run, mark running.
+    def active_run(self, exp_id: str) -> RunRecord | None:
+        """Return the currently active run for an experiment, or None."""
+        entry = self._get_exp(exp_id)
+        exp = _to_experiment(entry)
+        return exp.active_run
 
+    def start(self, exp_id: str) -> str:
+        """Start a new run for an experiment.
+
+        Refuses if there is already an active run.
         Returns the new run_id.
-        Raises RuntimeError if the experiment cannot be started.
         """
         entry = self._get_exp(exp_id)
         exp = _to_experiment(entry)
 
         if not exp.can_start:
-            prev_run = entry.get("current_run") or "none"
+            active = exp.active_run
             raise RuntimeError(
                 f"Cannot start experiment '{exp_id}': "
-                f"status={exp.status}, current_run={prev_run}"
+                f"already has active run {active.run_id if active else '?'}"
             )
 
         run_id = _make_run_id()
         now_iso = datetime.now(timezone.utc).isoformat()
-
-        # Close any previous run that was left in a non-terminal state
-        runs = entry.setdefault("runs", [])
-        for r in runs:
-            if r.get("status") in ("running",) and not r.get("ended_at"):
-                r["status"] = "paused"
-                r["ended_at"] = now_iso
 
         run_record: dict[str, Any] = {
             "run_id": run_id,
@@ -345,14 +382,124 @@ class ExperimentManager:
             "ended_at": None,
             "base_run": None,
         }
-        runs.append(run_record)
-        entry["status"] = "running"
+        entry.setdefault("runs", []).append(run_record)
         entry["current_run"] = run_id
         self._save()
 
         logger.info("Started experiment %s → run_id=%s", exp_id, run_id)
         self._log_run_to_bq(exp_id, run_id, "running")
         return run_id
+
+    def stop_run(self, exp_id: str, run_id: str) -> None:
+        """Stop a specific run — mark it as 'stopped' (manual intervention).
+
+        Only works on runs with status='running'.
+        """
+        entry = self._get_exp(exp_id)
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        runs = entry.setdefault("runs", [])
+        found = False
+        for r in runs:
+            if r["run_id"] == run_id and r.get("status") == "running":
+                r["status"] = "stopped"
+                r["ended_at"] = now_iso
+                found = True
+                break
+
+        if not found:
+            raise RuntimeError(
+                f"Run '{run_id}' not found or not in 'running' state for experiment '{exp_id}'"
+            )
+
+        # Clear current_run if it matches
+        if entry.get("current_run") == run_id:
+            entry["current_run"] = None
+        self._save()
+
+        logger.info("Stopped run %s of experiment %s", run_id, exp_id)
+        self._log_run_to_bq(exp_id, run_id, "stopped")
+
+    def auto_heal(self, exp_id: str) -> list[str]:
+        """Check experiment PID/systemd unit and auto-complete stale runs.
+
+        If the experiment has a running run but the PID is dead AND the
+        systemd unit is inactive, mark the run as 'completed'.
+
+        Returns list of run_ids that were auto-completed.
+        """
+        entry = self._get_exp(exp_id)
+        healed: list[str] = []
+
+        pid = entry.get("pid")
+        pid_dead = pid is not None and not _is_pid_alive(pid)
+        unit_dead = not _is_unit_active(exp_id)
+
+        # Only heal if both PID and systemd unit are dead
+        if not pid_dead and not unit_dead:
+            return healed
+        if pid is not None and not pid_dead:
+            return healed  # PID alive, don't heal
+        if not unit_dead and pid is None:
+            return healed  # Unit active, just missing PID - don't heal
+
+        # Both dead (or PID dead + no unit) — mark running runs as completed
+        now_iso = datetime.now(timezone.utc).isoformat()
+        runs = entry.setdefault("runs", [])
+        for r in runs:
+            if r.get("status") == "running" and not r.get("ended_at"):
+                r["status"] = "completed"
+                r["ended_at"] = now_iso
+                healed.append(r["run_id"])
+                logger.info("Auto-healed stale run %s → completed (PID %s dead, unit inactive)",
+                            r["run_id"], pid)
+
+        if healed:
+            entry["current_run"] = None
+            entry["pid"] = None
+            self._save()
+
+        return healed
+
+    def startup_heal(self, exp_id: str) -> list[str]:
+        """On server startup, mark dead-PID runs as 'failed' (unexpected death).
+
+        Unlike auto_heal() which marks as 'completed', this marks as 'failed'
+        because the process was killed externally (reboot, OOM, etc.).
+        The user must manually review before re-running.
+
+        Returns list of run_ids that were marked failed.
+        """
+        entry = self._get_exp(exp_id)
+        healed: list[str] = []
+
+        pid = entry.get("pid")
+        pid_dead = pid is not None and not _is_pid_alive(pid)
+        unit_dead = not _is_unit_active(exp_id)
+
+        if not pid_dead and not unit_dead:
+            return healed
+        if pid is not None and not pid_dead:
+            return healed
+        if not unit_dead and pid is None:
+            return healed
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        runs = entry.setdefault("runs", [])
+        for r in runs:
+            if r.get("status") == "running" and not r.get("ended_at"):
+                r["status"] = "failed"
+                r["ended_at"] = now_iso
+                healed.append(r["run_id"])
+                logger.warning("Startup heal: stale run %s \u2192 failed (process killed externally)",
+                               r["run_id"])
+
+        if healed:
+            entry["current_run"] = None
+            entry["pid"] = None
+            self._save()
+
+        return healed
 
     def pause(self, exp_id: str) -> None:
         """Pause a running experiment."""
@@ -482,11 +629,129 @@ class ExperimentManager:
         if current_run:
             self._log_run_to_bq(exp_id, current_run, "failed")
 
+    def delete_run(self, exp_id: str, run_id: str) -> dict:
+        """Permanently delete a run and all associated data.
+
+        Cascading deletes:
+        - Registry entry removal
+        - BQ tables: experiment_equity + experiment_trades (DELETE WHERE run_id)
+        - State directory: /var/quant/state/{exp_id}/{run_id}
+        - Output directory: /opt/quant-prod/output/live/*{exp_id}_{run_id}
+        - Log files: /var/log/quant/prod/{module}/{exp_id}_{run_id}.log
+
+        Refuses if the run is currently 'running'.
+        Returns a dict summarising what was deleted.
+        """
+        import glob as _glob
+        import shutil
+
+        entry = self._get_exp(exp_id)
+        result: dict[str, str] = {}
+
+        # Guard: refuse if any run is running
+        runs = entry.setdefault("runs", [])
+        for r in runs:
+            if r["run_id"] == run_id and r.get("status") == "running":
+                raise RuntimeError(
+                    f"Cannot delete run '{run_id}': it is still running for experiment '{exp_id}'"
+                )
+
+        # 1. Remove from registry
+        entry["runs"] = [r for r in runs if r.get("run_id") != run_id]
+        if entry.get("current_run") == run_id:
+            entry["current_run"] = None
+        self._save()
+        result["registry"] = "removed"
+
+        # 2. Delete BQ data for this run
+        try:
+            from google.cloud import bigquery
+            client = bigquery.Client(project=BQ_PROJECT)
+            for table in ["experiment_equity", "experiment_trades", "experiment_runs"]:
+                q = (
+                    f"DELETE FROM `{BQ_PROJECT}.{BQ_DATASET}.{table}` "
+                    f"WHERE run_id = @run_id"
+                )
+                job_config = bigquery.QueryJobConfig(
+                    query_parameters=[
+                        bigquery.ScalarQueryParameter("run_id", "STRING", run_id)
+                    ]
+                )
+                client.query(q, job_config=job_config).result()
+                result[f"bq_{table}"] = "deleted"
+        except Exception as e:
+            result["bq_error"] = str(e)[:120]
+
+        # 3. Delete state directory
+        state_dir = Path(f"/var/quant/state/{exp_id}/{run_id}")
+        if state_dir.exists():
+            shutil.rmtree(state_dir)
+            result["state"] = "deleted"
+        else:
+            result["state"] = "not found"
+
+        # 4. Delete output directory (contains equity_curve.csv, trades.csv, etc.)
+        output_pattern = f"/opt/quant-prod/output/live/*_{exp_id}_{run_id}"
+        for d in _glob.glob(output_pattern):
+            if Path(d).is_dir():
+                shutil.rmtree(d)
+                result["output"] = "deleted"
+        if "output" not in result:
+            result["output"] = "not found"
+
+        # 5. Delete log files
+        for module in ["live", "paper_run"]:
+            log_file = Path(f"/var/log/quant/prod/{module}/{exp_id}_{run_id}.log")
+            if log_file.exists():
+                log_file.unlink()
+                result[f"log_{module}"] = "deleted"
+
+        logger.info("Deleted run %s of %s: %s", run_id, exp_id, result)
+        return result
+
+    def clear_run_state(self, exp_id: str, run_id: str) -> dict:
+        """Clear state and checkpoint for a run (keeps BQ data and logs).
+
+        Useful for resetting a run to re-run from scratch while preserving
+        historical equity/trade records.
+
+        Only deletes /var/quant/state/{exp_id}/{run_id}.
+        Refuses if the run is currently 'running'.
+        Returns a dict summarising what was deleted.
+        """
+        import shutil
+
+        entry = self._get_exp(exp_id)
+        result: dict[str, str] = {}
+
+        # Guard: refuse if this run is running
+        runs = entry.setdefault("runs", [])
+        for r in runs:
+            if r["run_id"] == run_id and r.get("status") == "running":
+                raise RuntimeError(
+                    f"Cannot clear state for run '{run_id}': "
+                    f"it is still running for experiment '{exp_id}'"
+                )
+
+        # Only delete the state/checkpoint directory
+        state_dir = Path(f"/var/quant/state/{exp_id}/{run_id}")
+        if state_dir.exists():
+            shutil.rmtree(state_dir)
+            result["state"] = "deleted"
+        else:
+            result["state"] = "not found"
+
+        logger.info("Cleared state for run %s of %s", run_id, exp_id)
+        return result
+
 
 # ── Deserialization helper ───────────────────────────────────────────
 
 def _to_experiment(entry: dict[str, Any]) -> Experiment:
-    """Convert a raw registry dict entry into an Experiment dataclass."""
+    """Convert a raw registry dict entry into an Experiment dataclass.
+
+    Status is derived from runs: 'running' if any run is active, else 'idle'.
+    """
     raw_runs = entry.get("runs", [])
     runs = [
         RunRecord(
@@ -498,13 +763,18 @@ def _to_experiment(entry: dict[str, Any]) -> Experiment:
         )
         for r in raw_runs
     ]
+    # Derive status from runs
+    if any(r.status == "running" for r in runs):
+        derived_status = "running"
+    else:
+        derived_status = "idle"
     return Experiment(
         id=entry["id"],
         type=entry["type"],
         market=entry["market"],
         strategy=entry["strategy"],
         version=entry["version"],
-        status=entry["status"],
+        status=derived_status,
         config_path=entry["config_path"],
         created_at=entry["created_at"],
         current_run=entry.get("current_run"),

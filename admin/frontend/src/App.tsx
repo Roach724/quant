@@ -4,11 +4,15 @@ import {
   FileTextOutlined,
   ClockCircleOutlined,
   DashboardOutlined,
+  LineChartOutlined,
+  DollarOutlined,
 } from '@ant-design/icons';
 import ProLayout from '@ant-design/pro-layout';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import './App.css';
+import MarketCenter from './pages/MarketCenter';
+import TradingCenter from './pages/TradingCenter';
 import Dashboard from './pages/Dashboard';
 import ExperimentDashboard from './pages/Experiments';
 import DataMap from './pages/DataMap';
@@ -17,18 +21,20 @@ import CronJobs from './pages/CronJobs';
 import Models from './pages/Models';
 
 const menuData = [
-  { path: '/dashboard', name: 'Dashboard', icon: <DashboardOutlined /> },
-  { path: '/experiments', name: '实验管理', icon: <ExperimentOutlined /> },
-  { path: '/data', name: '数据采集', icon: <CloudServerOutlined /> },
-  { path: '/logs', name: '日志浏览', icon: <FileTextOutlined /> },
-  { path: '/cron', name: 'Cron 任务', icon: <ClockCircleOutlined /> },
+  { path: '/market', name: '行情中心', icon: <LineChartOutlined /> },
+  { path: '/trade', name: '交易中心', icon: <DollarOutlined /> },
+  { path: '/board', name: '实验看板', icon: <DashboardOutlined /> },
+  { path: '/lab', name: '实验管理', icon: <ExperimentOutlined /> },
   { path: '/models', name: '模型 & 策略', icon: <DashboardOutlined /> },
+  { path: '/data', name: '数据中心', icon: <CloudServerOutlined /> },
+  { path: '/logs', name: '日志中心', icon: <FileTextOutlined /> },
+  { path: '/cron', name: '调度中心', icon: <ClockCircleOutlined /> },
 ];
 
 function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [pathname, setPathname] = useState(location.pathname || '/dashboard');
+  const [pathname, setPathname] = useState(location.pathname || '/market');
 
   return (
     <ProLayout
@@ -40,8 +46,8 @@ function AppLayout() {
       menuItemRender={(item, dom) => (
         <a
           onClick={() => {
-            setPathname(item.path || '/dashboard');
-            navigate(item.path || '/dashboard');
+            setPathname(item.path || '/market');
+            navigate(item.path || '/market');
           }}
         >
           {dom}
@@ -49,13 +55,18 @@ function AppLayout() {
       )}
     >
       <Routes>
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/experiments" element={<ExperimentDashboard />} />
+        <Route path="/market" element={<MarketCenter />} />
+        <Route path="/trade" element={<TradingCenter />} />
+        <Route path="/board" element={<Dashboard />} />
+        <Route path="/lab" element={<ExperimentDashboard />} />
+        <Route path="/models" element={<Models />} />
         <Route path="/data" element={<DataMap />} />
         <Route path="/logs" element={<LogViewer />} />
         <Route path="/cron" element={<CronJobs />} />
-        <Route path="/models" element={<Models />} />
-        <Route path="/" element={<Dashboard />} />
+        {/* Backward compat */}
+        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/experiments" element={<ExperimentDashboard />} />
+        <Route path="/" element={<MarketCenter />} />
       </Routes>
     </ProLayout>
   );

@@ -22,9 +22,37 @@ from factors.registry import FactorRegistry
 DB_SESSION_DEP = Depends(get_session)
 
 
+def _startup_auto_heal():
+    """On server startup, scan all experiments and mark dead runs as 'failed'.
+
+    This handles experiments that were killed by node reboot, OOM, or other
+    external forces. Marking them as 'failed' ensures the user sees they need
+    manual attention rather than silently completing.
+    """
+    try:
+        from live.experiment_manager import ExperimentManager
+        mgr = ExperimentManager()
+        exps = mgr.list()
+        healed = 0
+        for exp in exps:
+            if exp.has_active_run:
+                run_ids = mgr.startup_heal(exp.id)
+                if run_ids:
+                    logger.info(
+                        "Startup heal: %s runs=%s marked failed (process dead)",
+                        exp.id, run_ids,
+                    )
+                    healed += len(run_ids)
+        if healed:
+            logger.info("Startup heal complete: %d runs marked failed", healed)
+    except Exception:
+        logger.exception("Startup auto-heal failed (non-fatal)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    _startup_auto_heal()
     yield
 
 
@@ -111,30 +139,229 @@ def get_task(task_id: int, db: Session = DB_SESSION_DEP):
 @app.get("/api/admin/experiments")
 def admin_experiments():
     mgr = ExperimentManager()
+    # Auto-heal all experiments before listing
+    exps = mgr.list()
+    for e in exps:
+        if e.has_active_run:
+            mgr.auto_heal(e.id)
+    # Re-list after healing
+    exps = mgr.list()
     return [{
         "exp_id": e.id, "name": e.name, "type": e.type,
         "market": e.market, "strategy": e.strategy,
         "version": e.version, "status": e.status,
-        "current_run": e.current_run, "config_path": e.config_path,
+        "has_active_run": e.has_active_run,
+        "total_runs": e.total_runs,
+        "current_run": e.current_run,
+        "active_run_id": e.active_run.run_id if e.active_run else None,
+        "config_path": e.config_path,
         "pid": mgr.get_pid(e.id),
     } for e in mgr.list()]
 
 
 @app.get("/api/admin/experiments/{exp_id}/runs")
 def admin_experiment_runs(exp_id: str):
-    """Return run history for an experiment."""
+    """Return run history for an experiment. Auto-heals stale runs."""
     mgr = ExperimentManager()
     try:
+        # Auto-heal: mark dead-PID runs as completed
+        healed = mgr.auto_heal(exp_id)
+        if healed:
+            logger.info("Auto-healed runs for %s: %s", exp_id, healed)
         runs = mgr.runs(exp_id)
         return [{
             "run_id": r.run_id,
             "status": r.status,
             "started_at": r.started_at,
             "ended_at": r.ended_at,
+            "base_run": r.base_run,
         } for r in runs]
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
 
+
+@app.post("/api/admin/experiments/{exp_id}/runs/{run_id}/stop")
+def admin_experiment_run_stop(exp_id: str, run_id: str):
+    """Manually stop a specific run."""
+    mgr = ExperimentManager()
+    try:
+        mgr.stop_run(exp_id, run_id)
+        # Stop the systemd unit if active
+        import subprocess as _sp
+        unit = f"exp-{exp_id}"
+        try:
+            _sp.run(
+                ["sudo", "systemctl", "stop", unit],
+                capture_output=True, timeout=15,
+            )
+        except Exception:
+            pass
+        # Also kill via PID as fallback
+        pid = mgr.get_pid(exp_id)
+        if pid:
+            import os as _os, signal as _sig
+            try:
+                _os.kill(pid, _sig.SIGTERM)
+                import time as _time
+                _time.sleep(1)
+                try:
+                    _os.kill(pid, _sig.SIGKILL)
+                except OSError:
+                    pass
+            except OSError:
+                pass
+            mgr.set_pid(exp_id, None)
+        return {"status": "ok", "run_id": run_id, "new_status": "stopped"}
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── Run-level endpoints ────────────────────────────────────────────────────────
+
+@app.post("/api/admin/experiments/{exp_id}/runs/{run_id}/start")
+def admin_experiment_run_start(exp_id: str, run_id: str):
+    """Start (or resume) a specific run via task queue."""
+    mgr = ExperimentManager()
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+    if exp.has_active_run:
+        raise HTTPException(status_code=409, detail="已有活跃 Run，请先停止")
+
+    cmd = (
+        f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+        f".venv/bin/python3 live/exp_cli.py start {exp_id} --resume-run {run_id}"
+    )
+    session = get_session()
+    task = Task(type="shell", params={"cmd": cmd, "cron_command": cmd}, status="pending")
+    session.add(task)
+    session.commit()
+    return {"task_id": task.id, "run_id": run_id}
+
+
+@app.delete("/api/admin/experiments/{exp_id}/runs/{run_id}")
+def admin_experiment_run_delete(exp_id: str, run_id: str):
+    """Permanently delete a run and all associated data."""
+    mgr = ExperimentManager()
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+    if exp.has_active_run:
+        raise HTTPException(status_code=409, detail="存在活跃 Run，无法删除")
+
+    result = mgr.delete_run(exp_id, run_id)
+    return {"status": "ok", "run_id": run_id, "details": result}
+
+
+@app.post("/api/admin/experiments/{exp_id}/runs/{run_id}/clear-state")
+def admin_experiment_run_clear_state(exp_id: str, run_id: str):
+    """Clear state & checkpoint for a run (keeps BQ/logs)."""
+    mgr = ExperimentManager()
+    try:
+        exp = mgr.get(exp_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+    if exp.has_active_run:
+        raise HTTPException(status_code=409, detail="存在活跃 Run，无法清除状态")
+
+    result = mgr.clear_run_state(exp_id, run_id)
+    return {"status": "ok", "run_id": run_id, "details": result}
+
+
+@app.get("/api/admin/experiments/{exp_id}/runs/{run_id}/equity")
+def admin_experiment_run_equity(exp_id: str, run_id: str):
+    """Return equity curve for a specific run."""
+    client = _DB_BQ()
+    q = f"""
+        SELECT ts, bar, equity, cash, portfolio_value, daily_pnl, drawdown
+        FROM {_DB_TABLE("experiment_equity")}
+        WHERE exp_id='{exp_id}' AND run_id='{run_id}'
+        ORDER BY bar
+    """
+    try:
+        rows = list(client.query(q).result())
+        return [{
+            "ts": _db_serialize(r.ts),
+            "bar": r.bar,
+            "equity": r.equity,
+            "cash": r.cash,
+            "portfolio_value": r.portfolio_value,
+            "daily_pnl": r.daily_pnl,
+            "drawdown": getattr(r, "drawdown", None),
+        } for r in rows]
+    except Exception as exc:
+        logging.getLogger(__name__).error(
+            "admin_experiment_run_equity query error for %s/%s: %s", exp_id, run_id, exc
+        )
+        return []
+
+
+@app.get("/api/admin/experiments/{exp_id}/runs/{run_id}/positions")
+def admin_experiment_run_positions(exp_id: str, run_id: str):
+    """Return current FIFO positions for a specific run."""
+    from collections import defaultdict
+    client = _DB_BQ()
+    trades_q = f"""
+        SELECT symbol, side, qty, price, ts
+        FROM {_DB_TABLE("experiment_trades")}
+        WHERE exp_id='{exp_id}' AND run_id='{run_id}'
+        ORDER BY ts
+    """
+    try:
+        rows = list(client.query(trades_q).result())
+    except Exception as exc:
+        logging.getLogger(__name__).error(
+            "admin_experiment_run_positions query error for %s/%s: %s", exp_id, run_id, exc
+        )
+        return []
+
+    if not rows:
+        return []
+
+    lots = defaultdict(list)
+    for r in rows:
+        sym = r.symbol
+        qty = float(r.qty)
+        price = float(r.price)
+        if r.side == "buy":
+            lots[sym].append({"qty": qty, "price": price})
+        else:
+            remaining = qty
+            while remaining > 0 and lots[sym]:
+                lot = lots[sym][0]
+                if lot["qty"] <= remaining:
+                    remaining -= lot["qty"]
+                    lots[sym].pop(0)
+                else:
+                    lot["qty"] -= remaining
+                    remaining = 0
+
+    if not lots:
+        return []
+
+    result = []
+    for sym, sym_lots in lots.items():
+        total_qty = sum(l["qty"] for l in sym_lots)
+        if total_qty <= 0:
+            continue
+        total_cost = sum(l["qty"] * l["price"] for l in sym_lots)
+        avg_cost = total_cost / total_qty if total_qty > 0 else 0
+        result.append({
+            "symbol": sym,
+            "qty": round(total_qty, 4),
+            "avg_cost": round(avg_cost, 4),
+        })
+    return result
+
+
+# ── Experiment registration ───────────────────────────────────────────────────
 
 @app.post("/api/admin/experiments/register")
 def admin_experiment_register(data: dict):
@@ -249,6 +476,26 @@ def admin_experiment_config_put(name: str, body: dict = Body(...)):
     return {"status": "ok", "name": name}
 
 
+@app.post("/api/admin/experiments/configs/{name}/rename")
+def admin_experiment_config_rename(name: str, body: dict = Body(...)):
+    """Rename a config template. Returns error if target already exists."""
+    import shutil as _sh
+    new_name = body.get("new_name", "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Missing 'new_name'")
+    if not new_name.endswith(".yaml"):
+        new_name += ".yaml"
+    base_dir = Path("/opt/quant-prod/live/configs")
+    old_path = base_dir / name
+    new_path = base_dir / new_name
+    if not old_path.exists():
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    if new_path.exists():
+        raise HTTPException(status_code=409, detail=f"Config '{new_name}' already exists")
+    _sh.move(str(old_path), str(new_path))
+    return {"status": "ok", "old_name": name, "new_name": new_name}
+
+
 @app.post("/api/admin/experiments/{exp_id}/clear")
 def admin_experiment_clear(exp_id: str):
     """Clear all experiment data: BQ + state files + registry runs."""
@@ -313,7 +560,8 @@ def admin_experiment_clear(exp_id: str):
 
 @app.post("/api/admin/experiments/{exp_id}/delete")
 def admin_experiment_delete(exp_id: str):
-    """Delete experiment: BQ + state + output + logs + unregister."""
+    """Delete experiment: BQ + state + output + logs + unregister.
+    Blocked if there is an active run."""
     from google.cloud import bigquery as _bq
     from pathlib import Path
     import shutil, signal, time
@@ -323,6 +571,13 @@ def admin_experiment_delete(exp_id: str):
         exp = mgr.get(exp_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
+
+    # Block if active run
+    if exp.has_active_run:
+        raise HTTPException(
+            status_code=409,
+            detail=f"存在活跃 Run ({exp.active_run.run_id if exp.active_run else '?'})，无法删除实验。请先停止当前 Run。"
+        )
 
     # Kill process if running
     pid = mgr.get_pid(exp_id)
@@ -578,21 +833,29 @@ def admin_data_collectors():
     except Exception:
         pass
 
-    # Futu API quota (real-time + history)
+    # Futu API quota (real-time + history) — with 5s timeout
     rt_quota = None
     hist_quota = None
     try:
-        from futu import OpenQuoteContext
-        ctx = OpenQuoteContext("127.0.0.1", 11111)
-        try:
-            ret, data = ctx.query_subscription()
-            if ret == 0 and isinstance(data, dict):
-                rt_quota = {"used": data.get("total_used", 0), "remain": data.get("remain", 0)}
-            ret2, data2 = ctx.get_history_kl_quota()
-            if ret2 == 0 and isinstance(data2, tuple) and len(data2) >= 2:
-                hist_quota = {"remain": int(data2[0]), "today_used": int(data2[1])}
-        finally:
-            ctx.close()
+        r = subprocess.run(
+            [
+                "/opt/quant-prod/.venv/bin/python3", "-c",
+                "from futu import OpenQuoteContext; "
+                "ctx = OpenQuoteContext('127.0.0.1', 11111); "
+                "r1, d1 = ctx.query_subscription(); "
+                "r2, d2 = ctx.get_history_kl_quota(); "
+                "ctx.close(); "
+                "import json; "
+                "print(json.dumps({'rt': {'used': d1.get('total_used',0), 'remain': d1.get('remain',0)} if isinstance(d1,dict) else None, "
+                "'hist': {'remain': int(d2[0]), 'today_used': int(d2[1])} if isinstance(d2,tuple) and len(d2)>=2 else None}))"
+            ],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            import json
+            data = json.loads(r.stdout.strip())
+            rt_quota = data.get("rt")
+            hist_quota = data.get("hist")
     except Exception:
         pass
 
@@ -673,6 +936,10 @@ def admin_data_backfill_options():
                     {"key": "us_bars_1d", "label": "US 日线", "market": "us"},
                     {"key": "hk_bars_5m", "label": "HK 5分钟K线", "market": "hk"},
                     {"key": "hk_bars_1d", "label": "HK 日线", "market": "hk"},
+                    {"key": "hk_bars_index_5m", "label": "HK 指数 5分钟K线", "market": "hk"},
+                    {"key": "hk_bars_index_1d", "label": "HK 指数 日线", "market": "hk"},
+                    {"key": "us_bars_index_5m", "label": "US 指数 5分钟K线", "market": "us"},
+                    {"key": "us_bars_index_1d", "label": "US 指数 日线", "market": "us"},
                 ],
             },
         ],
@@ -870,23 +1137,29 @@ def admin_cron_update(index: int, job: dict = Body(...)):
 def admin_cron_run(command: str = Query("")):
     """Manually trigger a cron command via task queue."""
     session = get_session()
-    task = Task(type="shell", params={"cmd": command}, status="pending")
+    task = Task(type="shell", params={"cmd": command, "cron_command": command}, status="pending")
     session.add(task)
     session.commit()
     return {"task_id": task.id}
 
 
 @app.get("/api/admin/cron/{index}/history")
-def admin_cron_history(index: int):
-    """Return recent execution history from task queue."""
+def admin_cron_history(index: int, command: str = Query("")):
+    """Return recent execution history filtered by cron command."""
     session = get_session()
-    tasks = (
-        session.query(Task)
-        .filter(Task.type.in_(["shell", "cron_run"]))
-        .order_by(Task.created_at.desc())
-        .limit(50)
-        .all()
-    )
+    query = session.query(Task).order_by(Task.created_at.desc()).limit(50)
+    if command:
+        # Filter by cron_command stored in params JSON
+        tasks = [
+            t for t in query.all()
+            if t.params and t.params.get("cron_command") == command
+        ]
+    else:
+        # Legacy fallback: only tasks with cron_command set
+        tasks = [
+            t for t in query.all()
+            if t.params and "cron_command" in (t.params or {})
+        ]
     return [{
         "id": t.id,
         "status": t.status,
@@ -1115,21 +1388,42 @@ def admin_model_history(name: str):
 
 
 @app.post("/api/admin/models/train")
-def admin_train_model(model_name: str, market: str = "us"):
-    """Trigger model training via task queue."""
-    script_map = {
-        ("us_tech", "us"): "scripts/train_us_tech_v1_explicit.py",
-        ("hk_tech", "hk"): "scripts/train_hk_tech_v1.py",
-    }
-    script = script_map.get((model_name, market), "")
-    if not script:
-        return {"error": f"No training script for {model_name}/{market}"}, 400
-    cmd = f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 {script}"
+def admin_train_model(model_name: str, market: str = "us", skip_tuning: bool = False,
+                     config_name: str = ""):
+    """Trigger model training via task queue. Logs to separate file per run."""
+    # Use config_name if provided (from frontend ml/configs flow), else script_map
+    if config_name:
+        script = "scripts/train_ml.py"
+    else:
+        script_map = {
+            ("us_tech", "us"): "scripts/train_us_tech_v1_explicit.py",
+            ("hk_tech", "hk"): "scripts/train_hk_tech_v1.py",
+        }
+        script = script_map.get((model_name, market), "")
+        if not script:
+            return {"error": f"No training script for {model_name}/{market}"}, 400
+
+    from datetime import datetime, timezone
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    log_file = f"/var/log/quant/prod/train/{model_name}_{run_id}.log"
+
+    flags = ""
+    if skip_tuning:
+        flags += " --skip-tuning"
+    if config_name:
+        flags += f" --config {config_name}"
+
+    cmd = (
+        f"mkdir -p /var/log/quant/prod/train && "
+        f"cd /opt/quant-prod && "
+        f"PYTHONPATH=/opt/quant-prod .venv/bin/python3 {script}{flags} "
+        f"2>&1 | tee {log_file}"
+    )
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd}, status="pending")
     session.add(task)
     session.commit()
-    return {"task_id": task.id}
+    return {"task_id": task.id, "run_id": run_id}
 
 
 @app.get("/api/admin/models/{name}/versions")
@@ -1629,6 +1923,35 @@ def admin_ml_config_delete(name: str):
     session.delete(cfg)
     session.commit()
     return {"status": "ok"}
+
+
+@app.post("/api/admin/ml/configs/{name}/rename")
+def admin_ml_config_rename(name: str, body: dict = Body(...)):
+    """Rename a ML config template. Updates DB record and file."""
+    import shutil as _sh
+    new_name = body.get("new_name", "").strip()
+    if not new_name:
+        raise HTTPException(400, detail="Missing 'new_name'")
+    if not new_name.endswith(".yaml"):
+        new_name += ".yaml"
+    old_fname = name if name.endswith(".yaml") else f"{name}.yaml"
+    new_fname = new_name if new_name.endswith(".yaml") else f"{new_name}.yaml"
+    old_path = _ML_CONFIG_DIR / old_fname
+    new_path = _ML_CONFIG_DIR / new_fname
+    if not old_path.exists():
+        raise HTTPException(404, detail=f"Config '{old_fname}' not found")
+    if new_path.exists():
+        raise HTTPException(409, detail=f"Config '{new_fname}' already exists")
+    # Rename file
+    _sh.move(str(old_path), str(new_path))
+    # Update DB
+    session = get_session()
+    cfg = session.query(_MlConfig).filter(_MlConfig.name == old_fname).first()
+    if cfg:
+        cfg.name = new_fname
+        cfg.config_path = str(new_path)
+        session.commit()
+    return {"status": "ok", "old_name": old_fname, "new_name": new_fname}
 
 
 @app.post("/api/admin/ml/configs/{name}/register")
@@ -2213,7 +2536,7 @@ async def dash_pipeline():
             SELECT MAX(
               TIMESTAMP(DATETIME(timestamp), "America/New_York")
             ) AS latest FROM {_DB_TABLE("us_bars_5m")}
-            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
         """
         rows = list(client.query(q).result())
         if rows and rows[0].latest:
@@ -2225,14 +2548,46 @@ async def dash_pipeline():
             SELECT MAX(
               TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)
             ) AS latest FROM {_DB_TABLE("hk_bars_5m")}
-            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
         """
         rows = list(client.query(q).result())
         if rows and rows[0].latest:
             result["hk"] = _db_serialize(rows[0].latest)
     except Exception as exc:
         logging.getLogger(__name__).error("dash_pipeline hk query error: %s", exc)
+    try:
+        # HK index pipeline
+        q = f"""
+            SELECT MAX(timestamp) AS latest
+            FROM {_DB_TABLE("hk_bars_index_5m")}
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
+        """
+        rows = list(client.query(q).result())
+        if rows and rows[0].latest:
+            result["hk_index"] = _db_serialize(rows[0].latest)
+    except Exception as exc:
+        logging.getLogger(__name__).error("dash_pipeline hk_index query error: %s", exc)
+    try:
+        # US index pipeline
+        q = f"""
+            SELECT MAX(timestamp) AS latest
+            FROM {_DB_TABLE("us_bars_index_5m")}
+            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
+        """
+        rows = list(client.query(q).result())
+        if rows and rows[0].latest:
+            result["us_index"] = _db_serialize(rows[0].latest)
+    except Exception as exc:
+        logging.getLogger(__name__).error("dash_pipeline us_index query error: %s", exc)
     return result
+
+
+def _load_symbols_config():
+    """Load symbols.yaml once per request (FastAPI module-level cache)."""
+    import yaml as _y
+    _quant_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = Path(_quant_root) / "config/symbols.yaml"
+    return _y.safe_load(config_path.read_text())
 
 
 # ── Market Data API ──
@@ -2251,21 +2606,27 @@ async def dash_market_symbols(market: str):
 
 
 @app.get("/api/admin/dashboard/market/{market}/{symbol}")
-async def dash_market_bars(market: str, symbol: str, limit: int = 78):
+async def dash_market_bars(market: str, symbol: str, limit: int = 78, days: int = 2):
     client = _DB_BQ()
-    table = _DB_TABLE(f"{market}_bars_5m")
-    full_symbol = f"{'US' if market == 'us' else 'HK'}.{symbol}"
+    # Detect index symbols → route to _bars_index_5m table
+    cfg = _load_symbols_config()
+    index_syms = cfg.get("indices", {}).get(market, {}).get("symbols", [])
+    is_index = symbol in index_syms or (market == "us" and symbol.startswith("^"))
+    table = _DB_TABLE(f"{market}_bars_index_5m" if is_index else f"{market}_bars_5m")
+    full_symbol = symbol if is_index else f"{'US' if market == 'us' else 'HK'}.{symbol}"
     if market == "hk":
         ts_expr = "TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)"
     else:
         ts_expr = 'TIMESTAMP(DATETIME(timestamp), "America/New_York")'
+    # Use requested days + 2 extra to handle weekends/holidays
+    window_days = max(days, 2) + 2
     query = f"""
         WITH dedup AS (
           SELECT {ts_expr} AS timestamp, open, high, low, close, volume,
             ROW_NUMBER() OVER (PARTITION BY symbol, timestamp ORDER BY _ingest_time DESC NULLS LAST) AS rn
           FROM `{table}`
           WHERE symbol = '{full_symbol}'
-            AND {ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 DAY)
+            AND {ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {window_days} DAY)
         )
         SELECT timestamp, open, high, low, close, volume
         FROM dedup WHERE rn = 1
@@ -2278,14 +2639,27 @@ async def dash_market_bars(market: str, symbol: str, limit: int = 78):
              "l": r.low, "c": r.close, "v": r.volume} for r in rows]
 
 
-# ── Static file serving (production build, after all API routes) ──────────────
+# ── Static + SPA fallback (production build, after all API routes) ────────────
 
-from fastapi.staticfiles import StaticFiles
 import os as _os
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 DIST = _os.path.join(_os.path.dirname(__file__), "frontend", "dist")
+
 if _os.path.isdir(DIST):
-    app.mount("/", StaticFiles(directory=DIST, html=True), name="static")
+    # Serve built assets under /assets/
+    assets_dir = _os.path.join(DIST, "assets")
+    if _os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        """SPA fallback: serve file if exists in dist/, else index.html for React Router."""
+        file_path = _os.path.join(DIST, full_path)
+        if _os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(_os.path.join(DIST, "index.html"))
 
 
 if __name__ == "__main__":

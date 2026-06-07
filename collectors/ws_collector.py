@@ -72,12 +72,13 @@ HEARTBEAT_INTERVAL_SEC = int(os.environ.get("HEARTBEAT_INTERVAL_SEC", "1800"))
 
 _SYMBOL_CONFIG: dict[str, list[str]] = {}
 _CALENDARS: dict[str, MarketCalendar] = {}
+_INDEX_HK_SYMBOLS: list[str] = []  # HK indices — always-on subscription, routed to hk_bars_index_5m
 PREHEAT_MINUTES = 5
 
 
 def _load_symbols_config():
     """Load symbol lists from config/symbols.yaml (SSOT)."""
-    global _SYMBOL_CONFIG, _CALENDARS
+    global _SYMBOL_CONFIG, _CALENDARS, _INDEX_HK_SYMBOLS
 
     config_path = _PROJECT_ROOT / "config" / "symbols.yaml"
     with open(config_path) as f:
@@ -87,10 +88,14 @@ def _load_symbols_config():
         _SYMBOL_CONFIG[market] = cfg["markets"][market]["symbols"]
         _CALENDARS[market] = MarketCalendar(market)
 
+    # Load HK index symbols for always-on subscription (routed to hk_bars_index_5m)
+    _INDEX_HK_SYMBOLS = cfg.get("indices", {}).get("hk", {}).get("symbols", [])
+
     logger.info(
-        "Symbol config loaded: US=%d HK=%d (preheat=%dmin)",
+        "Symbol config loaded: US=%d HK=%d HK-indices=%d (preheat=%dmin)",
         len(_SYMBOL_CONFIG.get("us", [])),
         len(_SYMBOL_CONFIG.get("hk", [])),
+        len(_INDEX_HK_SYMBOLS),
         PREHEAT_MINUTES,
     )
 
@@ -224,6 +229,28 @@ def main():
                 logger.info("Connected to OpenD %s:%d", OPEND_HOST, OPEND_PORT)
                 reconnect_backoff = 1
                 current_subscriptions.clear()
+
+                # Always-on HK index subscription (never rotated out)
+                if _INDEX_HK_SYMBOLS:
+                    try:
+                        ret, msg = ctx.subscribe(
+                            _INDEX_HK_SYMBOLS, [SubType.K_5M],
+                            subscribe_push=True,
+                        )
+                        if ret == RET_OK:
+                            logger.info("Index subscription active: %s", _INDEX_HK_SYMBOLS)
+                            current_subscriptions.update(_INDEX_HK_SYMBOLS)
+                        else:
+                            logger.warning("Index subscribe failed: %s", msg)
+                    except Exception as e:
+                        logger.error("Index subscribe error: %s — reconnecting", e)
+                        try:
+                            ctx.close()
+                        except Exception:
+                            pass
+                        ctx = None
+                        current_subscriptions.clear()
+                        continue
             except Exception as e:
                 logger.error("OpenD connection failed: %s (retry in %ds)", e, reconnect_backoff)
                 time.sleep(reconnect_backoff)
@@ -236,7 +263,8 @@ def main():
             desired = _desired_symbols()
 
             to_sub = desired - current_subscriptions
-            to_unsub = current_subscriptions - desired
+            # Never unsubscribe HK index symbols (always-on)
+            to_unsub = current_subscriptions - desired - set(_INDEX_HK_SYMBOLS)
 
             if to_sub:
                 try:
@@ -338,6 +366,25 @@ def _flush_buffer(buffer: list, label: str):
         lambda s: "HK" if s.startswith("HK.") else ("US" if s.startswith("US.") else "CRYPTO")
     )
     df["frequency"] = "5m"
+
+    # ── Route HK index bars to separate BQ table (always-on subscription) ──
+    if _INDEX_HK_SYMBOLS and "symbol" in df.columns:
+        idx_mask = df["symbol"].isin(_INDEX_HK_SYMBOLS)
+        if idx_mask.any():
+            idx_df = df[idx_mask].copy()
+            try:
+                from common.bq_writer import write_bars_to_bq
+                n = write_bars_to_bq(idx_df, table_id="hk_bars_index_5m")
+                logger.info("Flushed %d index bars (HK) → hk_bars_index_5m", n)
+                for _, row in idx_df.iterrows():
+                    logger.info("Index K-line written: %s %s O=%.2f C=%.2f",
+                               row["symbol"], row["timestamp"],
+                               row["open"], row["close"])
+            except Exception as e:
+                logger.error("Index BQ write failed: %s", e)
+                return
+            # Remove index bars to avoid double-writing in stock loop below
+            df = df[~idx_mask]
 
     for market in ("HK", "US"):
         mkt_df = df[df["market"] == market]

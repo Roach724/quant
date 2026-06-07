@@ -93,6 +93,23 @@ else
     sleep 3
 fi
 
+# ── ⑤.5 Protect running experiments ─────────────────────────────────
+log "Checking experiment units..."
+EXP_UNITS=$(sudo systemctl list-units 'exp-*' --no-legend --no-pager 2>/dev/null | awk '{print $1}' || true)
+if [ -n "$EXP_UNITS" ]; then
+    log "Found running experiments: $(echo $EXP_UNITS | tr '\n' ' ')"
+    if [ -x "$MARKET_CHECK" ] && "$MARKET_CHECK"; then
+        log "⚠️  MARKET OPEN — skipping experiment restart to protect live runs"
+    else
+        for unit in $EXP_UNITS; do
+            log "Restarting $unit..."
+            sudo systemctl restart "$unit" 2>/dev/null || log "WARNING: failed to restart $unit (non-fatal)"
+        done
+    fi
+else
+    log "No active experiment units"
+fi
+
 # ── ⑥ Post-deploy verification ──────────────────────────────────────
 log "Verifying service status..."
 
