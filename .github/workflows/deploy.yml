@@ -58,6 +58,8 @@ jobs:
             if gcloud compute ssh quant-vm \
               --zone=${{ env.REGION }}-a \
               --command="
+                set -e
+                gcloud auth configure-docker asia-east2-docker.pkg.dev --quiet
                 cd /opt/quant-prod &&
                 git pull origin stable &&
                 TAG=$SHORT_SHA docker compose -f docker/docker-compose.yml pull &&
