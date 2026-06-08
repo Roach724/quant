@@ -1,8 +1,8 @@
 # ── Build stage 1: frontend build ──
 FROM node:22-slim AS frontend
-COPY admin/frontend/ /src/
 WORKDIR /src
-RUN npm ci && npm run build
+COPY admin/frontend/ ./
+RUN npm install && npm run build
 
 # ── Build stage 2: install Python dependencies ──
 FROM python:3.12-slim AS builder

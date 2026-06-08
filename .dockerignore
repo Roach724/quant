@@ -4,6 +4,7 @@
 __pycache__
 *.pyc
 *.pyo
+node_modules/
 
 # 实验数据
 output/
