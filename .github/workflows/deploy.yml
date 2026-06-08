@@ -63,36 +63,8 @@ jobs:
                 git stash && git pull origin stable && git stash pop || true
 
                 # ── Graceful shutdown ──
-                echo '=== Stopping experiments gracefully ==='
-                for pidfile in /var/quant/state/*.pid; do
-                  if [ -f \"\$pidfile\" ]; then
-                    pid=\$(cat \"\$pidfile\" 2>/dev/null)
-                    exp_id=\$(basename \"\$pidfile\" .pid)
-                    if [ -n \"\$pid\" ] && kill -0 \"\$pid\" 2>/dev/null; then
-                      echo \"Stopping \$exp_id (PID \$pid)...\"
-                      docker exec quant python3 -c \"
-import json
-path = '/var/quant/experiments/registry.json'
-with open(path) as f: d = json.load(f)
-if '\$exp_id' in d['experiments']:
-    e = d['experiments']['\$exp_id']
-    for r in e.get('runs', []):
-        if r.get('status') == 'running' and not r.get('ended_at'):
-            from datetime import datetime, timezone
-            r['status'] = 'stopped'
-            r['ended_at'] = datetime.now(timezone.utc).isoformat()
-    e['current_run'] = None
-    e['pid'] = None
-    with open(path, 'w') as f: json.dump(d, f, indent=2)
-    print('run marked stopped')
-\" || true
-                    fi
-                    rm -f \"\$pidfile\"
-                  fi
-                done
-
-                echo '=== Stopping ws_collector ==='
-                docker exec quant supervisorctl stop ws_collector 2>/dev/null || true
+                echo '=== Stopping experiments and ws_collector ==='
+                docker exec quant python3 /opt/quant/scripts/pre_deploy_stop.py 2>/dev/null || true
                 sleep 3
 
                 echo '=== Deploying ==='
