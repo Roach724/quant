@@ -212,6 +212,20 @@ class MarketCalendar:
 
         now = datetime.now(timezone.utc)
 
+        # If on a trading day but in the lunch break, the next "open"
+        # is actually when lunch ends (afternoon half-session resume).
+        hours = _MARKET_HOURS.get(self.market, {})
+        if "lunch_end" in hours and self.is_trading_day(now):
+            ls = _time(*hours["lunch_start"])
+            le = _time(*hours["lunch_end"])
+            t = now.time()
+            if ls <= t < le:
+                return now.replace(
+                    hour=hours["lunch_end"][0],
+                    minute=hours["lunch_end"][1],
+                    second=0, microsecond=0,
+                )
+
         if self._cal is not None:
             try:
                 ts = self._cal.next_open(self._to_ts(now))
