@@ -158,41 +158,35 @@ def cmd_start(mgr: ExperimentManager, args: argparse.Namespace) -> None:
         run_id = mgr.start(exp_id)
         print(f"Created run {run_id} for {exp_id}")
 
-    # Launch via systemd-run (auto-restart on failure, survives node reboots)
+    # Launch experiment directly (Docker: no systemd)
     project_root = os.environ.get("QUANT_ROOT", "/opt/quant")
-    unit = _systemd_unit_name(exp_id)
-    cmd = [
-        "sudo", "systemd-run",
-        "--unit", unit,
-        "--uid", "quant",
-        "--gid", "quant",
-        "--working-directory", project_root,
-        "--property=Restart=on-failure",
-        "--property=RestartSec=15",
-        "--property=StartLimitBurst=3",
-        "--property=StartLimitIntervalSec=300",
-        f"{project_root}/python3", f"{project_root}/live/run.py",
+    python_bin = "python3"
+    run_cmd = [
+        python_bin, f"{project_root}/live/run.py",
         "--config", config_path,
         "--run-id", run_id,
     ]
-    try:
-        subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
-    except subprocess.CalledProcessError as e:
-        if not args.resume_run:
-            mgr.stop_run(exp_id, run_id)
-        print(f"Error: systemd-run failed: {e.stderr}", file=sys.stderr)
-        sys.exit(1)
-    except subprocess.TimeoutExpired:
-        if not args.resume_run:
-            mgr.stop_run(exp_id, run_id)
-        print("Error: systemd-run timed out", file=sys.stderr)
-        sys.exit(1)
+    pid_file = f"/var/quant/state/{exp_id}.pid"
+    log_file = f"/var/log/quant/live/{exp_id}_{run_id}.log"
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
-    # Record PID
-    pid = _unit_pid(exp_id)
-    if pid:
-        mgr.set_pid(exp_id, pid)
-    print(f"Started {exp_id} run {run_id} (unit={unit}, PID={pid or '?'})")
+    try:
+        with open(log_file, "a") as log_fh:
+            proc = subprocess.Popen(
+                run_cmd,
+                stdout=log_fh, stderr=subprocess.STDOUT,
+                cwd=project_root,
+                start_new_session=True,
+            )
+        with open(pid_file, "w") as pf:
+            pf.write(str(proc.pid))
+        mgr.set_pid(exp_id, proc.pid)
+        print(f"Started {exp_id} run {run_id} (PID={proc.pid})")
+    except (subprocess.CalledProcessError, OSError) as e:
+        if not args.resume_run:
+            mgr.stop_run(exp_id, run_id)
+        print(f"Error: launch failed: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_stop(mgr: ExperimentManager, args: argparse.Namespace) -> None:
@@ -211,23 +205,35 @@ def cmd_stop(mgr: ExperimentManager, args: argparse.Namespace) -> None:
     active = exp.active_run
     assert active is not None
 
-    # Stop systemd unit
-    unit = _systemd_unit_name(exp_id)
-    try:
-        subprocess.run(
-            ["sudo", "systemctl", "stop", unit],
-            capture_output=True, text=True, timeout=30,
-        )
-        print(f"Stopped unit {unit}")
-    except subprocess.TimeoutExpired:
-        # Force stop
-        subprocess.run(
-            ["sudo", "systemctl", "kill", "--signal=SIGKILL", unit],
-            capture_output=True, timeout=10,
-        )
-        print(f"Force-killed unit {unit}")
-    except subprocess.CalledProcessError:
-        pass  # Unit may already be dead
+    # Stop via PID file (Docker: no systemd)
+    import signal
+    pid_file = f"/var/quant/state/{exp_id}.pid"
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file) as pf:
+                pid = int(pf.read().strip())
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            try:
+                import time
+                for _ in range(30):
+                    try:
+                        os.kill(pid, 0)
+                        time.sleep(0.5)
+                    except OSError:
+                        break
+                else:
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            print(f"Stopped {exp_id} (PID={pid})")
+        except (ValueError, ProcessLookupError, OSError) as e:
+            print(f"Stop error: {e}")
+        os.remove(pid_file)
+    else:
+        pid = mgr.get_pid(exp_id)
+        if pid and _is_pid_alive(pid):
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            print(f"Stopped {exp_id} via registry PID={pid}")
 
     mgr.set_pid(exp_id, None)
     mgr.stop_run(exp_id, active.run_id)
@@ -235,7 +241,7 @@ def cmd_stop(mgr: ExperimentManager, args: argparse.Namespace) -> None:
 
 
 def cmd_restart(mgr: ExperimentManager, args: argparse.Namespace) -> None:
-    """Restart an experiment: systemctl restart."""
+    """Restart an experiment."""
     exp_id = args.id
     try:
         mgr.get(exp_id)
@@ -243,16 +249,15 @@ def cmd_restart(mgr: ExperimentManager, args: argparse.Namespace) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    unit = _systemd_unit_name(exp_id)
-    try:
-        subprocess.run(
-            ["sudo", "systemctl", "restart", unit],
-            capture_output=True, text=True, check=True, timeout=30,
-        )
-        print(f"Restarted {exp_id} (unit={unit})")
-    except subprocess.CalledProcessError as e:
-        print(f"Error: systemctl restart failed: {e.stderr}", file=sys.stderr)
-        sys.exit(1)
+    # Stop then start
+    cmd_stop(mgr, args)
+    # Need a new args with resume_run set
+    class ResumeArgs:
+        def __init__(self):
+            self.id = exp_id
+            self.resume_run = ""
+    cmd_start(mgr, ResumeArgs())
+    print(f"Restarted {exp_id}")
 
 def cmd_register(mgr: ExperimentManager, args: argparse.Namespace) -> None:
     """Handle the 'register' subcommand."""

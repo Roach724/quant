@@ -204,15 +204,17 @@ def admin_experiment_run_stop(exp_id: str, run_id: str):
     mgr = ExperimentManager()
     try:
         mgr.stop_run(exp_id, run_id)
-        # Stop the systemd unit if active
-        import subprocess as _sp
-        unit = f"exp-{exp_id}"
-        try:
-            _sp.run(
-                ["sudo", "systemctl", "stop", unit],
-                capture_output=True, timeout=15,
-            )
-        except Exception:
+        # Stop via PID file (Docker: no systemd)
+        import signal as _sig
+        pid_file = f"/var/quant/state/{exp_id}.pid"
+        if os.path.exists(pid_file):
+            try:
+                with open(pid_file) as pf:
+                    pid = int(pf.read().strip())
+                os.killpg(os.getpgid(pid), _sig.SIGTERM)
+                os.remove(pid_file)
+            except Exception:
+                pass
             pass
         # Also kill via PID as fallback
         pid = mgr.get_pid(exp_id)
