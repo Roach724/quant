@@ -6,6 +6,8 @@ import requests
 import pandas as pd
 from contextlib import asynccontextmanager
 
+logger = logging.getLogger(__name__)
+
 from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_serializer
@@ -2731,4 +2733,4 @@ if _os.path.isdir(DIST):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("admin.server:app", host="0.0.0.0", port=8092, reload=True)
+    uvicorn.run("admin.server:app", host="0.0.0.0", port=8091, reload=True)
