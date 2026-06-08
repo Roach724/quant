@@ -18,7 +18,8 @@ COPY . /opt/quant/
 
 # Writable directories (will be volume-mounted in production)
 RUN mkdir -p /var/log/quant/{collector,admin,live} \
-    /var/quant/state /var/quant/experiments /var/data
+    /var/quant/state /var/quant/experiments /var/data && \
+    ln -s /opt/quant /opt/quant-prod
 
 # Supervisor configuration
 COPY docker/supervisord.conf /etc/supervisor/conf.d/quant.conf
