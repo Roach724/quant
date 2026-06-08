@@ -252,7 +252,7 @@ def admin_experiment_run_start(exp_id: str, run_id: str):
 
     cmd = (
         f"cd /opt/quant && PYTHONPATH=/opt/quant "
-        f".venv/bin/python3 live/exp_cli.py start {exp_id} --resume-run {run_id}"
+        f"python3 live/exp_cli.py start {exp_id} --resume-run {run_id}"
     )
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd, "cron_command": cmd}, status="pending")
@@ -696,9 +696,9 @@ def admin_experiment_delete(exp_id: str):
 def admin_experiment_action(exp_id: str, action: str):
     """start / stop / restart an experiment via task queue."""
     cmd_map = {
-        "start": f"cd /opt/quant && PYTHONPATH=/opt/quant .venv/bin/python3 live/exp_cli.py start {exp_id}",
-        "stop": f"cd /opt/quant && PYTHONPATH=/opt/quant .venv/bin/python3 live/exp_cli.py stop {exp_id}",
-        "restart": f"cd /opt/quant && PYTHONPATH=/opt/quant .venv/bin/python3 live/exp_cli.py restart {exp_id}",
+        "start": f"cd /opt/quant && PYTHONPATH=/opt/quant python3 live/exp_cli.py start {exp_id}",
+        "stop": f"cd /opt/quant && PYTHONPATH=/opt/quant python3 live/exp_cli.py stop {exp_id}",
+        "restart": f"cd /opt/quant && PYTHONPATH=/opt/quant python3 live/exp_cli.py restart {exp_id}",
     }
     if action not in cmd_map:
         return {"error": f"Unknown action: {action}"}, 400
@@ -827,10 +827,10 @@ def admin_data_collectors():
     """ws_collector status + last heartbeat + subscription stats + Futu quotas."""
     try:
         r = subprocess.run(
-            ["systemctl", "is-active", "ws-collector"],
+            ["supervisorctl", "status", "ws_collector"],
             capture_output=True, text=True, timeout=5,
         )
-        status = r.stdout.strip()
+        status = r.stdout.strip().split()[-1] if r.stdout.strip() else "STOPPED"
     except Exception:
         status = "unknown"
     heartbeat = None
@@ -861,7 +861,7 @@ def admin_data_collectors():
     hist_quota = None
     try:
         r = subprocess.run(
-            ["/opt/quant/.venv/bin/python3", "/opt/quant/scripts/quota_check.py"],
+            ["/opt/quant/python3", "/opt/quant/scripts/quota_check.py"],
             capture_output=True, text=True, timeout=10,
         )
         if r.returncode == 0 and r.stdout.strip():
@@ -931,7 +931,7 @@ def admin_data_backfill(
         mkdir_log = f"mkdir -p /var/log/quant/prod/backfill"
         log_file = f"/var/log/quant/prod/backfill/{mkt}_{freq}.log"
         cmd = (f"{mkdir_log} && cd /opt/quant && PYTHONPATH=/opt/quant "
-               f".venv/bin/python3 collectors/backfill.py "
+               f"python3 collectors/backfill.py "
                f"--symbols \"{symbols_str}\" --frequency {freq} --source {src} --start {start} --end {end} "
                f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
                f"| tee -a {log_file}")
@@ -1012,7 +1012,7 @@ def admin_data_backfill_progress(
 def admin_collector_action(action: str):
     if action not in ("start", "stop", "restart"):
         return {"error": f"Unknown action: {action}"}, 400
-    cmd = f"sudo systemctl {action} ws-collector"
+    cmd = f"supervisorctl {action} ws-collector"
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd}, status="pending")
     session.add(task)
@@ -1436,7 +1436,7 @@ def admin_train_model(model_name: str, market: str = "us", skip_tuning: bool = F
     cmd = (
         f"mkdir -p /var/log/quant/prod/train && "
         f"cd /opt/quant && "
-        f"PYTHONPATH=/opt/quant .venv/bin/python3 {script}{flags} "
+        f"PYTHONPATH=/opt/quant python3 {script}{flags} "
         f"2>&1 | tee {log_file}"
     )
     session = get_session()
@@ -1609,7 +1609,7 @@ def admin_factor_evaluate(factor_id: str):
     """Trigger factor evaluation via task queue."""
     cmd = (
         f"cd /opt/quant && PYTHONPATH=/opt/quant "
-        f".venv/bin/python3 -c \"from factors.registry import FactorRegistry; "
+        f"python3 -c \"from factors.registry import FactorRegistry; "
         f"FactorRegistry().evaluate('{factor_id}')\""
     )
     session = get_session()
@@ -1624,7 +1624,7 @@ def admin_factor_compute(source: str = "tech", market: str = "us",
                          start: str = "2020-01-01", end: str = "2026-06-03"):
     """Trigger factor batch computation via task queue."""
     cmd = (f"cd /opt/quant && PYTHONPATH=/opt/quant "
-           f".venv/bin/python3 scripts/compute_factors_batch.py "
+           f"python3 scripts/compute_factors_batch.py "
            f"--source {source} --market {market} --start {start} --end {end}")
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd}, status="pending")
@@ -1715,7 +1715,7 @@ def admin_ml_dataset_generate(ds_id: int):
 
     # Generate via task queue for logging
     cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant && "
-           f"PYTHONPATH=/opt/quant .venv/bin/python3 -c \""
+           f"PYTHONPATH=/opt/quant python3 -c \""
            f"from admin.server import _generate_dataset_inner; "
            f"_generate_dataset_inner({ds_id})\" "
            f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
@@ -2090,7 +2090,7 @@ def admin_ml_train(body: dict = Body(...)):
     if not path.exists():
         raise HTTPException(404, detail=f"Config '{config_name}' not found")
     cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant && PYTHONPATH=/opt/quant "
-           f".venv/bin/python3 -c \"import logging; logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s [%(name)s] %(message)s'); "
+           f"python3 -c \"import logging; logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s [%(name)s] %(message)s'); "
            f"from ml.pipeline import TrainPipeline; "
            f"p = TrainPipeline('{path}'); p.run(skip_tuning={skip_tuning})\" "
            f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
