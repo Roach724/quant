@@ -171,7 +171,7 @@ def cmd_start(mgr: ExperimentManager, args: argparse.Namespace) -> None:
         "--property=RestartSec=15",
         "--property=StartLimitBurst=3",
         "--property=StartLimitIntervalSec=300",
-        f"{project_root}/.venv/bin/python3", f"{project_root}/live/run.py",
+        f"{project_root}/python3", f"{project_root}/live/run.py",
         "--config", config_path,
         "--run-id", run_id,
     ]
