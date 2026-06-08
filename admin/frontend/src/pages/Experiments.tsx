@@ -332,7 +332,7 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
       message.success(`Created ${createExpId}`);
       setCreateOpen(false); setCreateTemplate(''); setCreateExpId('');
       actionRef.current?.reload();
-    } catch (e: any) { message.error(`创建失败: ${e.message || JSON.stringify(e)}`); }
+    } catch (e: any) { const msg = e?.response?.data?.detail || e?.message || JSON.stringify(e); message.error(`创建失败: ${msg}`); }
   };
 
   // ── Columns ────────────────────────────────────────────────────
