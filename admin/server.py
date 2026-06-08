@@ -2125,7 +2125,7 @@ def admin_ml_train(body: dict = Body(...)):
            f"from ml.pipeline import TrainPipeline; "
            f"p = TrainPipeline('{path}'); p.run(skip_tuning={skip_tuning})\" "
            f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
-           f"| tee -a /var/log/quant/prod/train/{config_name}.log")
+           f"| tee -a /var/log/quant/prod/train/{config_name}_$(date -u +%Y%m%d_%H%M%S).log")
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd, "config": config_name}, status="pending")
     session.add(task)

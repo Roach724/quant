@@ -178,8 +178,8 @@ const MlConfigsTab: React.FC = () => {
         { title: '数据集', dataIndex: 'dataset_name', width: 140 },
         { title: '模型名', dataIndex: 'registry_model_name', width: 140 },
         { title: '状态', dataIndex: 'status', width: 100, render: (v) => v === 'registered' ? <Tag color="green">已注册</Tag> : <Tag>草稿</Tag> },
-        { title: '创建时间', dataIndex: 'created_at', width: 160, render: (_, r) => r.created_at?.slice(0, 10) || '-' },
-        { title: '更新时间', dataIndex: 'updated_at', width: 160, render: (_, r) => r.updated_at?.slice(0, 10) || '-' },
+        { title: '创建时间', dataIndex: 'created_at', width: 160, render: (_, r) => r.created_at?.slice(0, 19) || '-' },
+        { title: '更新时间', dataIndex: 'updated_at', width: 160, render: (_, r) => r.updated_at?.slice(0, 19) || '-' },
         { title: '操作', width: 240, render: (_, r) => (<Space>
           <Button size="small" onClick={() => { setRenameOld(r.name); setRenameNew(stripYaml(r.name)); setRenameOpen(true); }}>重命名</Button>
           <Button size="small" icon={<SettingOutlined />} onClick={() => openEditor(r.name)}>编辑</Button>
@@ -421,8 +421,8 @@ const StrategiesTab: React.FC = () => {
         columns={[
           { title: '文件', dataIndex: 'name', width: 220 },
           { title: '路径', dataIndex: 'path', ellipsis: true },
-          { title: '创建时间', dataIndex: 'created_at', width: 100, render: (_, r) => r.created_at?.slice(0, 10) || '-' },
-          { title: '更新时间', dataIndex: 'updated_at', width: 100, render: (_, r) => r.updated_at?.slice(0, 10) || '-' },
+          { title: '创建时间', dataIndex: 'created_at', width: 100, render: (_, r) => r.created_at?.slice(0, 19) || '-' },
+          { title: '更新时间', dataIndex: 'updated_at', width: 100, render: (_, r) => r.updated_at?.slice(0, 19) || '-' },
           { title: '操作', width: 200, render: (_, r) => (<Space>
             <Button size="small" icon={<EyeOutlined />} onClick={() => openView(r.name)}>查看</Button>
             <Button size="small" icon={<SettingOutlined />} onClick={() => openEdit(r.name)}>编辑</Button>
