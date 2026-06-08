@@ -360,10 +360,10 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
         <Space>
           <Tooltip title="Config"><Button size="small" icon={<SettingOutlined />} onClick={() => openConfig(r.exp_id)} /></Tooltip>
           <Tooltip title="Detail"><Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(r)} /></Tooltip>
-          <Tooltip title={r.has_active_run ? `已有活跃 Run (${r.active_run_id})，请先停止` : '启动新 Run'}>
-            <Popconfirm title={`为 ${r.exp_id} 启动新 Run？`} onConfirm={() => handleAction(r.exp_id, 'start')}
+          <Tooltip title={r.has_active_run ? `已有活跃 Run (${r.active_run_id})，请先停止` : '新建 Run'}>
+            <Popconfirm title={`为 ${r.exp_id} 新建 Run？`} onConfirm={() => handleAction(r.exp_id, 'start')}
               disabled={r.has_active_run}>
-              <Button type="primary" size="small" icon={<PlayCircleOutlined />} disabled={r.has_active_run}>启动新 Run</Button>
+              <Button type="primary" size="small" icon={<PlayCircleOutlined />} disabled={r.has_active_run}>新建 Run</Button>
             </Popconfirm>
           </Tooltip>
           <Tooltip title={r.has_active_run ? `存在活跃 Run，无法删除` : '永久删除'}>
