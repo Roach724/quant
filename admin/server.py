@@ -414,7 +414,10 @@ def admin_experiment_create_from_config(body: dict = Body(...)):
     template_path = config_dir / template
     if not template_path.exists():
         raise HTTPException(status_code=404, detail=f"Template '{template}' not found")
-    new_path = config_dir / f"{new_id}.yaml"
+    # Store experiment instances in a subdirectory, separate from templates
+    instances_dir = config_dir / "instances"
+    instances_dir.mkdir(parents=True, exist_ok=True)
+    new_path = instances_dir / f"{new_id}.yaml"
     if new_path.exists():
         raise HTTPException(status_code=409, detail=f"Config '{new_id}.yaml' already exists")
     # Copy template and update experiment.id in the copy
@@ -451,6 +454,9 @@ def admin_experiment_configs():
         return []
     configs = []
     for f in sorted(config_dir.glob("*.yaml")):
+        # Skip files in instances/ (experiment instances, not templates)
+        if "instances" in f.parts:
+            continue
         st = f.stat()
         mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
         ctime = datetime.fromtimestamp(st.st_ctime, tz=timezone.utc).isoformat()
@@ -672,8 +678,11 @@ def admin_experiment_delete(exp_id: str):
                 except Exception as e:
                     results[f"log_{f.name}"] = str(e)[:80]
 
-    # 4.5 Delete experiment config file
-    config_path = Path("/opt/quant") / exp.config_path
+    # 4.5 Delete experiment instance config
+    config_path = Path("/opt/quant/live/configs/instances") / f"{exp_id}.yaml"
+    if not config_path.exists():
+        # Fallback: old location (pre-instances refactor)
+        config_path = Path("/opt/quant") / exp.config_path
     if config_path.exists():
         try:
             # Backup to .del first, then remove
