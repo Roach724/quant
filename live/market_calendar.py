@@ -147,6 +147,21 @@ class MarketCalendar:
         if self.is_open_now():
             return 0.0
 
+        # If on a trading day but in the lunch break, return time until
+        # lunch ends rather than waiting for the next session open.
+        hours = _MARKET_HOURS.get(self.market, {})
+        if "lunch_end" in hours and self.is_trading_day(now):
+            ls = _time(*hours["lunch_start"])
+            le = _time(*hours["lunch_end"])
+            t = now.time()
+            if ls <= t < le:
+                lunch_end = now.replace(
+                    hour=hours["lunch_end"][0],
+                    minute=hours["lunch_end"][1],
+                    second=0, microsecond=0,
+                )
+                return max(0.0, (lunch_end - now).total_seconds())
+
         if self._cal is not None:
             try:
                 next_open = self._cal.next_open(self._to_ts(now))
@@ -250,6 +265,20 @@ class MarketCalendar:
         hours = _MARKET_HOURS.get(self.market, {})
         if not hours:
             return 0.0
+
+        # If on a trading day but in the lunch break, return time until
+        # lunch ends (the afternoon half-session).
+        if "lunch_end" in hours and now.weekday() < 5:
+            ls = _time(*hours["lunch_start"])
+            le = _time(*hours["lunch_end"])
+            t = now.time()
+            if ls <= t < le:
+                lunch_end = now.replace(
+                    hour=hours["lunch_end"][0],
+                    minute=hours["lunch_end"][1],
+                    second=0, microsecond=0,
+                )
+                return max(0.0, (lunch_end - now).total_seconds())
 
         open_h = hours["open"]
         cursor = now.replace(minute=0, second=0, microsecond=0)
