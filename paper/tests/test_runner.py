@@ -198,7 +198,7 @@ class TestPaperRunnerStrategies:
     def test_buyhold_signals_first_bar_only(self, base_config):
         from run_paper import PaperRunner
         from engine.strategy import StrategyContext
-        from paper.strategies import BuyHold
+        from strategies import BuyHold
 
         runner = PaperRunner(base_config)
         ds = runner.load_data(
@@ -220,7 +220,7 @@ class TestPaperRunnerStrategies:
     def test_momentum_no_signals_before_lookback(self, base_config):
         from run_paper import PaperRunner
         from engine.strategy import StrategyContext
-        from paper.strategies import SimpleMomentum
+        from strategies import SimpleMomentum
 
         runner = PaperRunner(base_config)
         ds = runner.load_data(
@@ -292,22 +292,22 @@ class TestPaperRunnerCLI:
 
 class TestStrategyResolution:
     def test_builtin_buyhold(self):
-        from paper.strategies import get_strategy
+        from strategies import get_strategy
         cls = get_strategy("BuyHold")
         assert cls.__name__ == "BuyHold"
 
     def test_builtin_with_prefix(self):
-        from paper.strategies import get_strategy
-        cls = get_strategy("paper.strategies.BuyHold")
+        from strategies import get_strategy
+        cls = get_strategy("strategies.BuyHold")
         assert cls.__name__ == "BuyHold"
 
     def test_unknown_raises(self):
-        from paper.strategies import get_strategy
+        from strategies import get_strategy
         with pytest.raises(ValueError, match="Unknown strategy"):
             get_strategy("NonExistent")
 
     def test_list_strategies_coverage(self):
-        from paper.strategies import list_strategies
+        from strategies import list_strategies
         result = list_strategies()
         names = {s["name"] for s in result}
         assert "BuyHold" in names
