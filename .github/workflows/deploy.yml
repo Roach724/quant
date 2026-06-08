@@ -32,25 +32,29 @@ jobs:
       - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Auth Docker to Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
       - name: Build and push Docker image
-        run: |
-          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
-          docker build -t ${{ env.IMAGE }}:$SHORT_SHA .
-          docker tag ${{ env.IMAGE }}:$SHORT_SHA ${{ env.IMAGE }}:latest
-          docker push ${{ env.IMAGE }}:$SHORT_SHA
-          docker push ${{ env.IMAGE }}:latest
-          echo "::notice::Pushed ${{ env.IMAGE }}:$SHORT_SHA"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Deploy to VM
         run: |
           SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
           set -e
-          RETRIES=3
-          for i in $(seq 1 $RETRIES); do
-            echo "Deploy attempt $i/$RETRIES..."
+          for i in $(seq 1 3); do
+            echo "Deploy attempt $i/3..."
             if gcloud compute ssh quant-vm \
               --zone=${{ env.REGION }}-a \
               --command="
@@ -62,8 +66,7 @@ jobs:
               echo "::notice::Deploy succeeded on attempt $i"
               exit 0
             fi
-            echo "Attempt $i failed, waiting 30s..."
             sleep 30
           done
-          echo "::error::All $RETRIES deploy attempts failed"
+          echo "::error::All deploy attempts failed"
           exit 1
