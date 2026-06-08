@@ -474,6 +474,8 @@ def admin_experiment_configs():
 def admin_experiment_config_delete(name: str):
     """Delete a config template file."""
     import shutil
+    if "/" in name or name.startswith("instances"):
+        raise HTTPException(status_code=400, detail="Invalid config name")
     path = Path("/opt/quant/live/configs") / name
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
@@ -485,6 +487,8 @@ def admin_experiment_config_delete(name: str):
 @app.get("/api/admin/experiments/configs/{name}")
 def admin_experiment_config_get(name: str):
     """Read a single config template file."""
+    if "/" in name or name.startswith("instances"):
+        raise HTTPException(status_code=400, detail="Invalid config name")
     path = Path("/opt/quant/live/configs") / name
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
@@ -495,6 +499,8 @@ def admin_experiment_config_get(name: str):
 def admin_experiment_config_put(name: str, body: dict = Body(...)):
     """Create or update a config template file. Backs up existing."""
     import shutil
+    if "/" in name or name.startswith("instances"):
+        raise HTTPException(status_code=400, detail="Invalid config name")
     content = body.get("content", "")
     if not content:
         raise HTTPException(status_code=400, detail="Missing 'content'")
@@ -514,6 +520,8 @@ def admin_experiment_config_rename(name: str, body: dict = Body(...)):
     new_name = body.get("new_name", "").strip()
     if not new_name:
         raise HTTPException(status_code=400, detail="Missing 'new_name'")
+    if "/" in name or name.startswith("instances") or "/" in new_name or new_name.startswith("instances"):
+        raise HTTPException(status_code=400, detail="Invalid config name")
     if not new_name.endswith(".yaml"):
         new_name += ".yaml"
     base_dir = Path("/opt/quant/live/configs")
