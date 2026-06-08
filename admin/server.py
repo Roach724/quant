@@ -272,8 +272,10 @@ def admin_experiment_run_delete(exp_id: str, run_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
 
-    if exp.has_active_run:
-        raise HTTPException(status_code=409, detail="存在活跃 Run，无法删除")
+    # Only block if THIS specific run is currently running
+    active = exp.active_run
+    if active and active.run_id == run_id:
+        raise HTTPException(status_code=409, detail="活跃 Run 无法删除，请先停止")
 
     result = mgr.delete_run(exp_id, run_id)
     return {"status": "ok", "run_id": run_id, "details": result}
