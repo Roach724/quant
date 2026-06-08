@@ -144,15 +144,16 @@ def _is_pid_alive(pid: int) -> bool:
 
 
 def _is_unit_active(exp_id: str) -> bool:
-    """Check if the systemd transient unit for an experiment is active."""
-    unit = f"exp-{exp_id}"
+    """Check if experiment process is alive (Docker: PID file)."""
+    pid_file = f"/var/quant/state/{exp_id}.pid"
+    if not os.path.exists(pid_file):
+        return False
     try:
-        result = subprocess.run(
-            ["systemctl", "is-active", "--quiet", unit],
-            capture_output=True, timeout=5,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, OSError):
+        with open(pid_file) as pf:
+            pid = int(pf.read().strip())
+        os.kill(pid, 0)
+        return True
+    except (ValueError, OSError, ProcessLookupError):
         return False
 
 

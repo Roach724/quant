@@ -61,6 +61,13 @@ jobs:
                 gcloud auth configure-docker asia-east2-docker.pkg.dev --quiet
                 cd /opt/quant-prod &&
                 git stash && git pull origin stable && git stash pop || true
+
+                # ── Graceful shutdown ──
+                echo '=== Stopping experiments and ws_collector ==='
+                docker exec quant python3 /opt/quant/scripts/pre_deploy_stop.py 2>/dev/null || true
+                sleep 3
+
+                echo '=== Deploying ==='
                 TAG=${{ github.sha }} docker compose -f docker/docker-compose.yml pull &&
                 docker compose -f docker/docker-compose.yml up -d &&
                 sleep 10 &&

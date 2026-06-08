@@ -319,8 +319,10 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   };
 
   const doCreate = async () => {
-    if (!createTemplate || !createExpId) return;
+    if (!createTemplate) { message.warning('请选择配置模板'); return; }
+    if (!createExpId) { message.warning('请输入 exp_id'); return; }
     const parts = createExpId.split('_');
+    if (parts.length < 2) { message.error('exp_id 格式错误，例如: live_us_ml'); return; }
     try {
       await api.post('/api/admin/experiments/create-from-config', {
         template: createTemplate, exp_id: createExpId,
@@ -328,8 +330,9 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
         strategy: parts[2] || 'ml', version: parseInt(parts[3]?.replace('v','') || '1'),
       });
       message.success(`Created ${createExpId}`);
-      setCreateOpen(false); actionRef.current?.reload();
-    } catch (e: any) { message.error(`Create failed: ${e.message}`); }
+      setCreateOpen(false); setCreateTemplate(''); setCreateExpId('');
+      actionRef.current?.reload();
+    } catch (e: any) { message.error(`创建失败: ${e.message || JSON.stringify(e)}`); }
   };
 
   // ── Columns ────────────────────────────────────────────────────
