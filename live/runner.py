@@ -21,7 +21,7 @@ Dependencies (already built):
 - engine/portfolio.py → Portfolio, Position
 - engine/data.py → DataFrameSource
 - strategies/ml_pred.py → MLPredStrategy
-- paper/strategies.py → SimpleMomentum
+- strategies/SimpleMomentum.py
 """
 
 from __future__ import annotations
@@ -300,7 +300,7 @@ class LiveRunner:
             self.strategy.model_name = strat_cfg.get("model_name", "momentum_lgbm")
             self.strategy.model_version = strat_cfg.get("model_version", "latest")
         elif strat_name == "SimpleMomentum":
-            from paper.strategies import SimpleMomentum
+            from strategies import SimpleMomentum
             self.strategy = SimpleMomentum()
             self.strategy.lookback = int(strat_cfg.get("lookback", 20))
             self.strategy.top_k = int(strat_cfg.get("top_k", 5))
