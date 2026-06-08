@@ -1,0 +1,24 @@
+# 不打包进镜像
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+
+# 实验数据
+output/
+models_artifacts/
+
+# 开发文件
+*.log
+*.bak
+*.del
+.deploy_history
+
+# IDE
+.vscode/
+.idea/
+
+# 不相关的
+quant-dev/
+quant-prod/
