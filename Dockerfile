@@ -8,7 +8,7 @@ RUN pip install --no-cache-dir --target=/deps -r /tmp/requirements.txt
 FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    supervisor curl libgomp1 && \
+    supervisor curl libgomp1 cron && \
     rm -rf /var/lib/apt/lists/*
 
 # Dependencies from build stage
