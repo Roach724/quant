@@ -52,7 +52,7 @@ from paper.market import (
     MARKET_SCHEDULES, default_symbols_for, is_market_open,
     MARKET_US, MARKET_HK, MARKET_CRYPTO,
 )
-from paper.strategies import get_strategy, list_strategies
+from strategies import get_strategy, list_strategies
 
 log = logging.getLogger("paper.runner")
 
@@ -559,7 +559,7 @@ class PaperRunner:
         """Resolve a strategy by qualified name.
 
         Tries in order:
-        1. paper.strategies.get_strategy(name)  (built-in)
+        1. strategies.get_strategy(name)  (built-in)
         2. importlib dynamic import             (user module)
         """
         # Try built-in first
