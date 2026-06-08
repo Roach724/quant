@@ -8,8 +8,13 @@ concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PROJECT_ID: deductive-notch-495015-c2
+  REGION: asia-east2
+  IMAGE: asia-east2-docker.pkg.dev/deductive-notch-495015-c2/quant/quant
+
 jobs:
-  deploy:
+  docker:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -27,15 +32,33 @@ jobs:
       - name: Set up gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
 
+      - name: Auth Docker to Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push Docker image
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          docker build -t ${{ env.IMAGE }}:$SHORT_SHA .
+          docker tag ${{ env.IMAGE }}:$SHORT_SHA ${{ env.IMAGE }}:latest
+          docker push ${{ env.IMAGE }}:$SHORT_SHA
+          docker push ${{ env.IMAGE }}:latest
+          echo "::notice::Pushed ${{ env.IMAGE }}:$SHORT_SHA"
+
       - name: Deploy to VM
         run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
           set -e
           RETRIES=3
           for i in $(seq 1 $RETRIES); do
             echo "Deploy attempt $i/$RETRIES..."
             if gcloud compute ssh quant-vm \
-              --zone=${{ vars.GCP_REGION || 'asia-east2' }}-a \
-              --command="cd /opt/quant-prod && bash scripts/deploy.sh" 2>&1; then
+              --zone=${{ env.REGION }}-a \
+              --command="
+                cd /opt/quant-prod &&
+                TAG=$SHORT_SHA docker compose pull &&
+                docker compose up -d &&
+                sleep 10 &&
+                curl -f http://localhost:8091/api/health" 2>&1; then
               echo "::notice::Deploy succeeded on attempt $i"
               exit 0
             fi
