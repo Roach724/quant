@@ -1474,6 +1474,16 @@ def admin_model_stage(name: str, version: str = "", stage: str = ""):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.delete("/api/admin/models/{name}/versions/{version}")
+def admin_model_version_delete(name: str, version: int):
+    """Delete a model version from MLflow registry."""
+    try:
+        ModelRegistry.delete_version(name, version)
+        return {"status": "ok", "name": name, "version": version}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/admin/strategies")
 def admin_strategies():
     """List strategy files in strategies/ directory."""

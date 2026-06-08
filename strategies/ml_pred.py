@@ -192,30 +192,29 @@ class MLPredStrategy(Strategy):
         for sym in symbols:
             rows = symbol_ohlcv.get(sym, [])
             if len(rows) < 20:
-                scores[sym] = 0.0
                 continue
             sym_df = pd.DataFrame(rows)
             try:
                 factors = fb.compute(factor_names, sym_df)
             except Exception:
-                scores[sym] = 0.0
                 continue
             if factors.empty:
-                scores[sym] = 0.0
                 continue
             latest = factors.iloc[-1:]
             try:
                 preds = self._model_trainer.predict(self._model, latest)
             except Exception:
-                scores[sym] = 0.0
                 continue
             if preds is None or len(preds) == 0:
-                scores[sym] = 0.0
                 continue
             if isinstance(preds, pd.Series):
                 scores[sym] = float(preds.values[0]) if len(preds) > 0 else 0.0
+                if np.isnan(scores[sym]):
+                    continue
             elif isinstance(preds, np.ndarray):
                 scores[sym] = float(preds[0]) if len(preds) > 0 else 0.0
+                if np.isnan(scores[sym]):
+                    continue
             else:
                 scores[sym] = 0.0
 
