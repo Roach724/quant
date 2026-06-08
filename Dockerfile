@@ -1,10 +1,4 @@
-# ── Build stage 1: frontend build ──
-FROM node:22-slim AS frontend
-WORKDIR /src
-COPY admin/frontend/ ./
-RUN npm install && npm run build
-
-# ── Build stage 2: install Python dependencies ──
+# ── Build stage: install Python dependencies ──
 FROM python:3.12-slim AS builder
 
 COPY requirements.txt /tmp/
@@ -19,8 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Dependencies from build stage
 COPY --from=builder /deps /usr/local/lib/python3.12/site-packages/
-COPY --from=frontend /src/dist/ /opt/quant/admin/frontend/dist/
-
 # Application code (read-only after build)
 COPY . /opt/quant/
 
