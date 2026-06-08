@@ -107,6 +107,7 @@ class TaskOut(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/health")
+@app.get("/api/admin/health")
 def health():
     return {"status": "ok"}
 
@@ -248,7 +249,7 @@ def admin_experiment_run_start(exp_id: str, run_id: str):
         raise HTTPException(status_code=409, detail="已有活跃 Run，请先停止")
 
     cmd = (
-        f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+        f"cd /opt/quant && PYTHONPATH=/opt/quant "
         f".venv/bin/python3 live/exp_cli.py start {exp_id} --resume-run {run_id}"
     )
     session = get_session()
@@ -405,7 +406,7 @@ def admin_experiment_create_from_config(body: dict = Body(...)):
     new_id = body.get("exp_id", "")
     if not template or not new_id:
         raise HTTPException(status_code=400, detail="Missing 'template' or 'exp_id'")
-    config_dir = Path("/opt/quant-prod/live/configs")
+    config_dir = Path("/opt/quant/live/configs")
     template_path = config_dir / template
     if not template_path.exists():
         raise HTTPException(status_code=404, detail=f"Template '{template}' not found")
@@ -441,7 +442,7 @@ def admin_experiment_create_from_config(body: dict = Body(...)):
 @app.get("/api/admin/experiments/configs")
 def admin_experiment_configs():
     """List all experiment config templates (YAML files)."""
-    config_dir = Path("/opt/quant-prod/live/configs")
+    config_dir = Path("/opt/quant/live/configs")
     if not config_dir.exists():
         return []
     configs = []
@@ -463,7 +464,7 @@ def admin_experiment_configs():
 def admin_experiment_config_delete(name: str):
     """Delete a config template file."""
     import shutil
-    path = Path("/opt/quant-prod/live/configs") / name
+    path = Path("/opt/quant/live/configs") / name
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
     backup = path.with_suffix(path.suffix + ".del")
@@ -474,7 +475,7 @@ def admin_experiment_config_delete(name: str):
 @app.get("/api/admin/experiments/configs/{name}")
 def admin_experiment_config_get(name: str):
     """Read a single config template file."""
-    path = Path("/opt/quant-prod/live/configs") / name
+    path = Path("/opt/quant/live/configs") / name
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
     return {"name": name, "content": path.read_text()}
@@ -487,7 +488,7 @@ def admin_experiment_config_put(name: str, body: dict = Body(...)):
     content = body.get("content", "")
     if not content:
         raise HTTPException(status_code=400, detail="Missing 'content'")
-    path = Path("/opt/quant-prod/live/configs") / name
+    path = Path("/opt/quant/live/configs") / name
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         backup = path.with_suffix(path.suffix + ".bak")
@@ -505,7 +506,7 @@ def admin_experiment_config_rename(name: str, body: dict = Body(...)):
         raise HTTPException(status_code=400, detail="Missing 'new_name'")
     if not new_name.endswith(".yaml"):
         new_name += ".yaml"
-    base_dir = Path("/opt/quant-prod/live/configs")
+    base_dir = Path("/opt/quant/live/configs")
     old_path = base_dir / name
     new_path = base_dir / new_name
     if not old_path.exists():
@@ -638,7 +639,7 @@ def admin_experiment_delete(exp_id: str):
                 results["state_shared"] = str(e)[:80]
 
     # 3. Delete output/live directories (including experiments meta)
-    output_base = Path("/opt/quant-prod/output/live")
+    output_base = Path("/opt/quant/output/live")
     if output_base.exists():
         for d in output_base.iterdir():
             if d.is_dir() and exp_id in d.name:
@@ -668,7 +669,7 @@ def admin_experiment_delete(exp_id: str):
                     results[f"log_{f.name}"] = str(e)[:80]
 
     # 4.5 Delete experiment config file
-    config_path = Path("/opt/quant-prod") / exp.config_path
+    config_path = Path("/opt/quant") / exp.config_path
     if config_path.exists():
         try:
             # Backup to .del first, then remove
@@ -693,9 +694,9 @@ def admin_experiment_delete(exp_id: str):
 def admin_experiment_action(exp_id: str, action: str):
     """start / stop / restart an experiment via task queue."""
     cmd_map = {
-        "start": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py start {exp_id}",
-        "stop": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py stop {exp_id}",
-        "restart": f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod .venv/bin/python3 live/exp_cli.py restart {exp_id}",
+        "start": f"cd /opt/quant && PYTHONPATH=/opt/quant .venv/bin/python3 live/exp_cli.py start {exp_id}",
+        "stop": f"cd /opt/quant && PYTHONPATH=/opt/quant .venv/bin/python3 live/exp_cli.py stop {exp_id}",
+        "restart": f"cd /opt/quant && PYTHONPATH=/opt/quant .venv/bin/python3 live/exp_cli.py restart {exp_id}",
     }
     if action not in cmd_map:
         return {"error": f"Unknown action: {action}"}, 400
@@ -714,7 +715,7 @@ def admin_experiment_config(exp_id: str):
         exp = mgr.get(exp_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
-    config_path = Path("/opt/quant-prod") / exp.config_path
+    config_path = Path("/opt/quant") / exp.config_path
     if not config_path.exists():
         raise HTTPException(status_code=404, detail=f"Config file not found: {config_path}")
     return {"exp_id": exp_id, "path": str(config_path), "content": config_path.read_text()}
@@ -729,7 +730,7 @@ def admin_experiment_config_update(exp_id: str, body: dict = Body(...)):
         exp = mgr.get(exp_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
-    config_path = Path("/opt/quant-prod") / exp.config_path
+    config_path = Path("/opt/quant") / exp.config_path
     if not config_path.exists():
         raise HTTPException(status_code=404, detail=f"Config file not found: {config_path}")
     content = body.get("content", "")
@@ -858,7 +859,7 @@ def admin_data_collectors():
     hist_quota = None
     try:
         r = subprocess.run(
-            ["/opt/quant-prod/.venv/bin/python3", "/opt/quant-prod/scripts/quota_check.py"],
+            ["/opt/quant/.venv/bin/python3", "/opt/quant/scripts/quota_check.py"],
             capture_output=True, text=True, timeout=10,
         )
         if r.returncode == 0 and r.stdout.strip():
@@ -927,7 +928,7 @@ def admin_data_backfill(
         src = resolved_source if resolved_source != "auto" else ("yfinance" if mkt == "us" else "futu_stock")
         mkdir_log = f"mkdir -p /var/log/quant/prod/backfill"
         log_file = f"/var/log/quant/prod/backfill/{mkt}_{freq}.log"
-        cmd = (f"{mkdir_log} && cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+        cmd = (f"{mkdir_log} && cd /opt/quant && PYTHONPATH=/opt/quant "
                f".venv/bin/python3 collectors/backfill.py "
                f"--symbols \"{symbols_str}\" --frequency {freq} --source {src} --start {start} --end {end} "
                f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
@@ -1432,8 +1433,8 @@ def admin_train_model(model_name: str, market: str = "us", skip_tuning: bool = F
 
     cmd = (
         f"mkdir -p /var/log/quant/prod/train && "
-        f"cd /opt/quant-prod && "
-        f"PYTHONPATH=/opt/quant-prod .venv/bin/python3 {script}{flags} "
+        f"cd /opt/quant && "
+        f"PYTHONPATH=/opt/quant .venv/bin/python3 {script}{flags} "
         f"2>&1 | tee {log_file}"
     )
     session = get_session()
@@ -1472,7 +1473,7 @@ def admin_model_stage(name: str, version: str = "", stage: str = ""):
 @app.get("/api/admin/strategies")
 def admin_strategies():
     """List strategy files in strategies/ directory."""
-    files = glob.glob("/opt/quant-prod/strategies/*.py")
+    files = glob.glob("/opt/quant/strategies/*.py")
     result = []
     for f in sorted(files):
         st = os.stat(f)
@@ -1489,7 +1490,7 @@ def admin_strategies():
 @app.get("/api/admin/strategies/{name}")
 def admin_strategy_read(name: str):
     """Read a strategy source file."""
-    path = f"/opt/quant-prod/strategies/{name}"
+    path = f"/opt/quant/strategies/{name}"
     if not os.path.isfile(path) or not name.endswith(".py"):
         return {"error": "Invalid strategy name"}, 400
     with open(path) as f:
@@ -1499,7 +1500,7 @@ def admin_strategy_read(name: str):
 @app.put("/api/admin/strategies/{name}")
 def admin_strategy_save(name: str, body: dict = Body(...)):
     """Save a strategy source file."""
-    path = f"/opt/quant-prod/strategies/{name}"
+    path = f"/opt/quant/strategies/{name}"
     if not name.endswith(".py"):
         return {"error": "Invalid strategy name"}, 400
     with open(path, "w") as f:
@@ -1511,7 +1512,7 @@ def admin_strategy_save(name: str, body: dict = Body(...)):
 def admin_strategy_delete(name: str):
     """Delete a strategy file (backup to .del)."""
     import shutil
-    path = f"/opt/quant-prod/strategies/{name}"
+    path = f"/opt/quant/strategies/{name}"
     if not name.endswith(".py") or name == "__init__.py":
         return {"error": "Cannot delete this file"}, 400
     if not os.path.isfile(path):
@@ -1605,7 +1606,7 @@ def admin_factor_toggle(factor_id: str, active: bool = True):
 def admin_factor_evaluate(factor_id: str):
     """Trigger factor evaluation via task queue."""
     cmd = (
-        f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+        f"cd /opt/quant && PYTHONPATH=/opt/quant "
         f".venv/bin/python3 -c \"from factors.registry import FactorRegistry; "
         f"FactorRegistry().evaluate('{factor_id}')\""
     )
@@ -1620,7 +1621,7 @@ def admin_factor_evaluate(factor_id: str):
 def admin_factor_compute(source: str = "tech", market: str = "us",
                          start: str = "2020-01-01", end: str = "2026-06-03"):
     """Trigger factor batch computation via task queue."""
-    cmd = (f"cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+    cmd = (f"cd /opt/quant && PYTHONPATH=/opt/quant "
            f".venv/bin/python3 scripts/compute_factors_batch.py "
            f"--source {source} --market {market} --start {start} --end {end}")
     session = get_session()
@@ -1711,8 +1712,8 @@ def admin_ml_dataset_generate(ds_id: int):
         raise HTTPException(404, detail=f"Dataset {ds_id} not found")
 
     # Generate via task queue for logging
-    cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant-prod && "
-           f"PYTHONPATH=/opt/quant-prod .venv/bin/python3 -c \""
+    cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant && "
+           f"PYTHONPATH=/opt/quant .venv/bin/python3 -c \""
            f"from admin.server import _generate_dataset_inner; "
            f"_generate_dataset_inner({ds_id})\" "
            f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
@@ -2086,7 +2087,7 @@ def admin_ml_train(body: dict = Body(...)):
     path = _ML_CONFIG_DIR / fname
     if not path.exists():
         raise HTTPException(404, detail=f"Config '{config_name}' not found")
-    cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant-prod && PYTHONPATH=/opt/quant-prod "
+    cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant && PYTHONPATH=/opt/quant "
            f".venv/bin/python3 -c \"import logging; logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s [%(name)s] %(message)s'); "
            f"from ml.pipeline import TrainPipeline; "
            f"p = TrainPipeline('{path}'); p.run(skip_tuning={skip_tuning})\" "
