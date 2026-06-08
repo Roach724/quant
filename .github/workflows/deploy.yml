@@ -59,8 +59,9 @@ jobs:
               --zone=${{ env.REGION }}-a \
               --command="
                 cd /opt/quant-prod &&
-                TAG=$SHORT_SHA docker compose pull &&
-                docker compose up -d &&
+                git pull origin stable &&
+                TAG=$SHORT_SHA docker compose -f docker/docker-compose.yml pull &&
+                docker compose -f docker/docker-compose.yml up -d &&
                 sleep 10 &&
                 curl -f http://localhost:8091/api/health" 2>&1; then
               echo "::notice::Deploy succeeded on attempt $i"
