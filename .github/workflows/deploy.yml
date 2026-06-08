@@ -51,7 +51,6 @@ jobs:
 
       - name: Deploy to VM
         run: |
-          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
           set -e
           for i in $(seq 1 3); do
             echo "Deploy attempt $i/3..."
@@ -61,8 +60,8 @@ jobs:
                 set -e
                 gcloud auth configure-docker asia-east2-docker.pkg.dev --quiet
                 cd /opt/quant-prod &&
-                git pull origin stable &&
-                TAG=$SHORT_SHA docker compose -f docker/docker-compose.yml pull &&
+                git stash && git pull origin stable && git stash pop || true
+                TAG=${{ github.sha }} docker compose -f docker/docker-compose.yml pull &&
                 docker compose -f docker/docker-compose.yml up -d &&
                 sleep 10 &&
                 curl -f http://localhost:8091/api/health" 2>&1; then
