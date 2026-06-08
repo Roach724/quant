@@ -39,7 +39,6 @@ observer:
   log_dir: output/live/
   snapshot_interval: 60
 
-dashboard:
   port: 8090
   websocket: true
 

@@ -1,0 +1,80 @@
+# =============================================================================
+# Experiment Base Template
+# 实验配置基础模板 — 包含当前框架所有有效字段
+# 新建实验配置时从此文件复制，按需修改参数
+# =============================================================================
+
+# ── Experiment Identity ───────────────────────────────────────────────
+experiment:
+  id: live_us_ml_v1          # 唯一 ID: {type}_{market}_{strategy}_v{version}
+  name: "My Experiment"      # 人类可读名称（显示在 Dashboard / 实验室）
+  type: live                 # live | paper（对应实验室子 Tab）
+  market: us                 # us | hk
+  strategy: ml               # 策略缩写: ml | mom | 自定义
+  version: 1                 # 整数版本号
+
+# ── Live Mode ─────────────────────────────────────────────────────────
+live:
+  mode: live                 # live（实时模拟/实盘）| paper（历史回测）
+  market: us                 # us | hk（必须与 experiment.market 一致）
+  output_dir: output/live/   # 输出根目录（自动追加子目录）
+
+# ── Broker（交易执行）─────────────────────────────────────────────────
+broker:
+  # Live 模式（实时 / paper trading）
+  live:
+    type: paper              # paper（模拟交易）| futu_stock（富途实盘，待接入）
+    initial_capital: 100000  # 初始资金
+    slippage_bps: 5          # 滑点（基点）
+    commission_bps: 1        # 佣金（基点）
+    min_commission: 1.0      # 最小佣金（元/美元）
+
+  # Paper 模式（历史回测，与 live 二选一）
+  # paper:
+  #   initial_capital: 100000
+  #   slippage_bps: 5
+  #   commission_bps: 1
+  #   min_commission: 1.0
+
+# ── Strategy ──────────────────────────────────────────────────────────
+strategy:
+  name: SimpleMomentum       # 策略类名: SimpleMomentum | MLPredStrategy
+  # ── Momentum 策略参数 ──
+  lookback: 20               # 回看周期（bar 数）
+  top_k: 5                   # 选股数量
+  rebalance_every: 5         # 调仓频率（bar 数）
+  # ── ML 策略参数 ──
+  # model_name: us_tech      # MLflow 模型名
+  # model_version: 2         # 模型版本号（数字 或 "latest"）
+  # ── 通用 ──
+  fallback_strategy: SimpleMomentum  # 模型不可用时的降级策略（仅 ML 策略需要）
+
+# ── Schedule（调度 / 多日配置）────────────────────────────────────────
+schedule:
+  bar_interval: 60           # 信号计算间隔（秒）
+  multi_day: true            # 是否多日运行（false=单日即停）
+  max_trading_days: 5        # 最大交易天数（0=不限）
+  max_duration_per_day: 390  # 每日最大运行时长（秒，390=6.5h 美股）
+
+# ── Risk Control ──────────────────────────────────────────────────────
+risk:
+  max_drawdown: 0.15         # 最大回撤触发阈值（15%）
+  max_daily_loss: 0.05       # 单日最大亏损（5%）
+  max_consecutive_failures: 10  # 最大连续失败次数
+
+# ── Observer（输出日志）───────────────────────────────────────────────
+observer:
+  log_dir: output/live/      # CSV 输出目录
+  snapshot_interval: 60      # 持仓快照间隔（秒）
+
+# ── State（多日状态持久化）────────────────────────────────────────────
+state:
+  enabled: true              # 是否启用到日终/盘中状态保存
+  dir: /var/quant/state/     # 状态文件根目录（自动追加 {exp_id}/{run_id}/）
+  checkpoint_interval: 300   # 盘中检查点间隔（秒）
+
+# ── Data（可选，过滤标的范围）─────────────────────────────────────────
+# data:
+#   symbols:                 # 限定交易标的列表（省略=全量 SSOT）
+#     - "US.AAPL"
+#     - "US.GOOGL"

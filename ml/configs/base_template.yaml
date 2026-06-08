@@ -1,0 +1,56 @@
+# =============================================================================
+# ML Model Base Template
+# 模型训练配置基础模板 — 包含当前框架所有有效字段
+# 新建模型配置时从此文件复制，按需修改参数
+# =============================================================================
+
+# ── Data ──────────────────────────────────────────────────────────────
+data:
+  dataset: us_baseline_39factor  # 数据集名称（在 ML 配置→数据集 中创建）
+  label: fwd_ret_5d              # 标签列名（BQ 宽表中的预测目标列）
+
+# ── Model ─────────────────────────────────────────────────────────────
+model:
+  type: lightgbm             # 模型类型: lightgbm（当前支持）
+  params:
+    objective: regression    # 学习目标: regression（回归预测收益率）
+    metric: rmse             # 评估指标: rmse
+    boosting_type: gbdt      # Boosting 类型: gbdt
+    num_leaves: 31           # 叶子数（控制模型复杂度）
+    learning_rate: 0.05      # 学习率
+    feature_fraction: 0.8    # 特征采样比例（列采样）
+    bagging_fraction: 0.7    # 数据采样比例（行采样）
+    bagging_freq: 5          # Bagging 频率（每 N 轮）
+    min_data_in_leaf: 100    # 叶节点最小样本数
+    lambda_l1: 0.5           # L1 正则化
+    lambda_l2: 0.5           # L2 正则化
+    num_boost_round: 2000    # 最大提升轮数
+    early_stopping_rounds: 100  # 早停轮数（验证集不再提升时停止）
+    seed: 42                 # 随机种子
+
+# ── Tuning（Optuna 超参优化）───────────────────────────────────────────
+tuning:
+  enabled: true              # 是否启用超参搜索
+  n_trials: 50               # 搜索试验次数
+  direction: maximize        # 优化方向: maximize（越大越好）| minimize
+  metric: val_ic             # 优化指标: val_ic（验证集 IC）
+  search_space:              # 搜索空间定义
+    num_leaves: { type: int, low: 8, high: 128 }
+    learning_rate: { type: loguniform, low: 0.01, high: 0.2 }
+    feature_fraction: { type: uniform, low: 0.4, high: 1.0 }
+    bagging_fraction: { type: uniform, low: 0.4, high: 1.0 }
+    min_data_in_leaf: { type: int, low: 50, high: 500 }
+    lambda_l1: { type: loguniform, low: 0.01, high: 10.0 }
+    lambda_l2: { type: loguniform, low: 0.01, high: 10.0 }
+
+# ── Evaluation ────────────────────────────────────────────────────────
+evaluation:
+  metrics: [rmse, rank_ic]   # 评估指标列表
+  save_top_features: 20      # 保存 Top N 重要特征
+
+# ── Registry（模型注册）───────────────────────────────────────────────
+registry:
+  model_name: my_model       # MLflow 注册的模型名（唯一标识）
+  stage: production          # 部署阶段: production | staging | archived
+  tags:                      # 元数据标签
+    market: us               # 市场: us | hk

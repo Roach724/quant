@@ -11,7 +11,7 @@ import {
   Tag, Button, Space, message, Tooltip, Modal,
   Select, Input, Drawer, Descriptions, Table,
   Alert, Divider, Popconfirm, Typography, Tabs,
-  Row, Col, Spin, Empty,
+  Spin, Empty,
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
@@ -28,9 +28,10 @@ interface ExperimentItem {
   strategy: string; version: number; status: string;
   has_active_run: boolean; total_runs: number; active_run_id: string | null;
   current_run: string | null; config_path: string; pid: number | null;
+  created_at?: string; latest_run_at?: string;
 }
 
-interface ConfigItem { name: string; path: string; size: number; }
+interface ConfigItem { name: string; path: string; size: number; created_at?: string; updated_at?: string; }
 
 interface RunRecord { run_id: string; status: string; started_at: string; ended_at: string; base_run: string | null; }
 
@@ -58,11 +59,11 @@ const pollTask = (taskId: number): Promise<{ status: string; result: string | nu
 // =============================================================================
 
 const ExperimentDashboard: React.FC = () => {
-  const [tab, setTab] = useState('configs');
+  const [tab, setTab] = useState('lab');
   return (
     <Tabs activeKey={tab} onChange={setTab} items={[
-      { key: 'configs', label: '实验配置', children: <ConfigsTabs /> },
       { key: 'lab', label: '实验室', children: <LabTabs /> },
+      { key: 'configs', label: '实验配置', children: <ConfigsTabs /> },
     ]} />
   );
 };
@@ -146,6 +147,8 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
       title: 'Size', dataIndex: 'size', key: 'size', width: 100,
       render: (_, r) => `${(r.size / 1024).toFixed(1)} KB`,
     },
+    { title: '创建时间', dataIndex: 'created_at', width: 160, render: (_, r) => r.created_at?.slice(0, 10) || '-' },
+    { title: '更新时间', dataIndex: 'updated_at', width: 160, render: (_, r) => r.updated_at?.slice(0, 10) || '-' },
     {
       title: 'Actions', key: 'actions', width: 200,
       render: (_, r) => (
@@ -343,6 +346,8 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
         ? <Tag color="green">🔵 活跃 Run</Tag>
         : <Tag>⚪ 无活跃 Run</Tag>,
     },
+    { title: '创建时间', dataIndex: 'created_at', width: 100, render: (_, r) => r.created_at?.slice(0, 10) || '-' },
+    { title: '最新Run', dataIndex: 'latest_run_at', width: 160, render: (_, r) => r.latest_run_at?.slice(0, 16) || '-' },
     {
       title: '累计 Run', dataIndex: 'total_runs', key: 'total_runs', width: 50,
     },
@@ -420,7 +425,7 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
     try {
       const [equity, positions] = await Promise.all([
         api.get(`/api/admin/experiments/${expId}/runs/${runId}/equity`),
-        api.get(`/api/admin/experiments/${expId}/runs/${runId}/positions`),
+        api.get(`/api/admin/dashboard/experiments/${expId}/positions?run_id=${runId}`),
       ]);
       setExpandedRunKeys(prev => ({
         ...prev,
@@ -495,7 +500,10 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   const posColumns: ColumnsType<any> = [
     { title: 'Symbol', dataIndex: 'symbol', key: 'symbol', width: 80 },
     { title: 'Qty', dataIndex: 'qty', key: 'qty', width: 80, render: (v) => Number(v).toFixed(2) },
-    { title: 'Cost', dataIndex: 'cost', key: 'cost', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
+    { title: 'Avg Cost', dataIndex: 'avg_cost', key: 'avg_cost', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
+    { title: 'Price', dataIndex: 'current_price', key: 'current_price', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
+    { title: 'PnL', dataIndex: 'pnl', key: 'pnl', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
+    { title: 'PnL%', dataIndex: 'pnl_pct', key: 'pnl_pct', width: 80, render: (v) => `${Number(v).toFixed(2)}%` },
   ];
 
   function buildEquityChart(data: any[]) {
@@ -582,18 +590,15 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
                   const posEmpty = !details.positions || details.positions.length === 0;
                   if (equityEmpty && posEmpty) return <Text type="secondary">No data for this run</Text>;
                   return (
-                    <Row gutter={16}>
-                      <Col span={16}>
-                        <Text strong style={{ marginBottom: 8, display: 'block' }}>权益曲线</Text>
-                        {equityEmpty ? <Empty description="No equity data" /> :
-                          <ReactECharts option={buildEquityChart(details.equity)} style={{ height: 200 }} />}
-                      </Col>
-                      <Col span={8}>
-                        <Text strong style={{ marginBottom: 8, display: 'block' }}>当前持仓</Text>
-                        {posEmpty ? <Empty description="No positions" /> :
-                          <Table size="small" dataSource={details.positions} columns={posColumns} rowKey="symbol" pagination={false} />}
-                      </Col>
-                    </Row>
+                    <div>
+                      <Text strong style={{ marginBottom: 8, display: 'block' }}>权益曲线</Text>
+                      {equityEmpty ? <Empty description="No equity data" /> :
+                        <ReactECharts option={buildEquityChart(details.equity)} style={{ height: 200 }} />}
+                      <div style={{ marginTop: 16 }} />
+                      <Text strong style={{ marginBottom: 8, display: 'block' }}>当前持仓</Text>
+                      {posEmpty ? <Empty description="No positions" /> :
+                        <Table size="small" dataSource={details.positions} columns={posColumns} rowKey="symbol" pagination={false} />}
+                    </div>
                   );
                 },
                 onExpand: (expanded, record) => {

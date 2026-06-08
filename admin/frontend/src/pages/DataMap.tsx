@@ -346,27 +346,22 @@ const DataMap: React.FC = () => {
             <Space>
               <Text strong>实时订阅:</Text>
               <Text>{subStats.subscriptions} 个</Text>
-              {rtQuota && (
-                <>
-                  <Text type="secondary">(配额剩余: {rtQuota.remain}, 已用: {rtQuota.used})</Text>
-                </>
+              {rtQuota ? (
+                <Text>配额: {rtQuota.used}/{rtQuota.used + rtQuota.remain}</Text>
+              ) : (
+                <Text type="secondary">配额: 加载中...</Text>
               )}
               <Text type="secondary">| 缓冲: {subStats.buffer}</Text>
               <Text type="secondary">| 已收: {subStats.bars_received.toLocaleString()} bars</Text>
             </Space>
-            {histQuota ? (
-              <Space>
-                <Text strong>历史K线配额:</Text>
-                <Text type={histQuota.remain < 50 ? 'danger' : undefined}>
-                  剩余: {histQuota.remain}, 今日已用: {histQuota.today_used}
-                </Text>
-              </Space>
-            ) : (
-              <Space>
-                <Text strong>历史K线配额:</Text>
+            <Space>
+              <Text strong>历史订阅:</Text>
+              {histQuota ? (
+                <Text>今日已用: {histQuota.today_used} / 剩余: {histQuota.remain}</Text>
+              ) : (
                 <Text type="secondary">加载中...</Text>
-              </Space>
-            )}
+              )}
+            </Space>
           </Space>
         </Card>
       ),

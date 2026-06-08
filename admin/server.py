@@ -54,6 +54,8 @@ async def lifespan(app: FastAPI):
     init_db()
     _startup_auto_heal()
     yield
+    from admin.models import cleanup_session
+    cleanup_session()
 
 
 app = FastAPI(title="Quant Admin", version="0.1.0", lifespan=lifespan)
@@ -65,6 +67,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def db_session_cleanup(request, call_next):
+    """Clean up SQLAlchemy scoped session after every request."""
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        from admin.models import cleanup_session
+        cleanup_session()
 
 
 # ── Request / response schemas ────────────────────────────────────────────────
@@ -156,6 +169,8 @@ def admin_experiments():
         "active_run_id": e.active_run.run_id if e.active_run else None,
         "config_path": e.config_path,
         "pid": mgr.get_pid(e.id),
+        "created_at": e.created_at,
+        "latest_run_at": e.runs[0].started_at if e.runs else None,
     } for e in mgr.list()]
 
 
@@ -431,10 +446,15 @@ def admin_experiment_configs():
         return []
     configs = []
     for f in sorted(config_dir.glob("*.yaml")):
+        st = f.stat()
+        mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
+        ctime = datetime.fromtimestamp(st.st_ctime, tz=timezone.utc).isoformat()
         configs.append({
             "name": f.name,
             "path": str(f),
-            "size": f.stat().st_size,
+            "size": st.st_size,
+            "created_at": ctime if ctime < mtime else mtime,  # ensure created ≤ updated
+            "updated_at": mtime,
         })
     return configs
 
@@ -833,31 +853,28 @@ def admin_data_collectors():
     except Exception:
         pass
 
-    # Futu API quota (real-time + history) — with 5s timeout
+    # Futu API quota (real-time + history)
     rt_quota = None
     hist_quota = None
     try:
         r = subprocess.run(
-            [
-                "/opt/quant-prod/.venv/bin/python3", "-c",
-                "from futu import OpenQuoteContext; "
-                "ctx = OpenQuoteContext('127.0.0.1', 11111); "
-                "r1, d1 = ctx.query_subscription(); "
-                "r2, d2 = ctx.get_history_kl_quota(); "
-                "ctx.close(); "
-                "import json; "
-                "print(json.dumps({'rt': {'used': d1.get('total_used',0), 'remain': d1.get('remain',0)} if isinstance(d1,dict) else None, "
-                "'hist': {'remain': int(d2[0]), 'today_used': int(d2[1])} if isinstance(d2,tuple) and len(d2)>=2 else None}))"
-            ],
-            capture_output=True, text=True, timeout=5,
+            ["/opt/quant-prod/.venv/bin/python3", "/opt/quant-prod/scripts/quota_check.py"],
+            capture_output=True, text=True, timeout=10,
         )
         if r.returncode == 0 and r.stdout.strip():
-            import json
-            data = json.loads(r.stdout.strip())
-            rt_quota = data.get("rt")
-            hist_quota = data.get("hist")
-    except Exception:
-        pass
+            # Futu prints debug logs to stdout mixed with our JSON
+            # Find and extract JSON object from the output
+            for line in r.stdout.strip().split('\n'):
+                idx = line.find('{"rt"')
+                if idx >= 0:
+                    data = _json.loads(line[idx:])
+                    rt_quota = data.get("rt")
+                    hist_quota = data.get("hist")
+                    break
+        else:
+            logging.getLogger(__name__).warning("quota_check failed: rc=%s stderr=%s", r.returncode, r.stderr[:200])
+    except Exception as exc:
+        logging.getLogger(__name__).exception("quota_check error")
 
     return {
         "ws_collector": status,
@@ -1456,7 +1473,17 @@ def admin_model_stage(name: str, version: str = "", stage: str = ""):
 def admin_strategies():
     """List strategy files in strategies/ directory."""
     files = glob.glob("/opt/quant-prod/strategies/*.py")
-    return [{"name": os.path.basename(f), "path": f} for f in sorted(files)]
+    result = []
+    for f in sorted(files):
+        st = os.stat(f)
+        mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
+        ctime = datetime.fromtimestamp(st.st_ctime, tz=timezone.utc).isoformat()
+        result.append({
+            "name": os.path.basename(f), "path": f,
+            "created_at": ctime if ctime < mtime else mtime,
+            "updated_at": mtime,
+        })
+    return result
 
 
 @app.get("/api/admin/strategies/{name}")
@@ -1851,6 +1878,8 @@ def admin_ml_configs():
         "id": r.id, "name": r.name, "description": r.description,
         "config_path": r.config_path, "dataset_name": r.dataset_name,
         "registry_model_name": r.registry_model_name, "status": r.status,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     } for r in rows]
 
 
@@ -2024,7 +2053,11 @@ def admin_ml_center():
                 "icir": v.get("icir"),
                 "n_features": v.get("n_features"),
                 "dataset": v.get("dataset"),
+                "training_time": v.get("training_time"),
+                "created_at": v.get("created_at"),
+                "completed_at": v.get("completed_at"),
             } for v in m["versions"]],
+            "last_trained_at": m["versions"][0].get("created_at") if m["versions"] else None,
         })
 
     # ── Configs registered but not yet trained ──
@@ -2037,6 +2070,7 @@ def admin_ml_center():
                 "dataset_name": cfg.dataset_name or "",
                 "config_name": cfg.name,
                 "versions": [],
+                "last_trained_at": None,
             })
     return result
 
@@ -2392,19 +2426,20 @@ async def dash_experiment_positions(exp_id: str, run_id: str = ""):
 # ---------------------------------------------------------------------------
 @app.get("/api/admin/dashboard/experiments/{exp_id}/runs")
 async def dash_experiment_runs(exp_id: str):
-    client = _DB_BQ()
-    query = f"""
-        SELECT run_id, status, started_at, ended_at, base_run
-        FROM {_DB_TABLE("experiment_runs")}
-        WHERE exp_id = '{exp_id}'
-        ORDER BY started_at DESC
-    """
+    """Return run history from registry (SSOT, synced with Lab)."""
+    from live.experiment_manager import ExperimentManager
+    mgr = ExperimentManager()
     try:
-        rows = client.query(query).result()
-        return [_db_row_to_dict(r, ["run_id", "status", "started_at", "ended_at", "base_run"])
-                for r in rows]
-    except Exception as exc:
-        logging.getLogger(__name__).error("dash_experiment_runs query error for %s: %s", exp_id, exc)
+        mgr.auto_heal(exp_id)
+        runs = mgr.runs(exp_id)
+        return [{
+            "run_id": r.run_id,
+            "status": r.status,
+            "started_at": r.started_at,
+            "ended_at": r.ended_at,
+            "base_run": r.base_run,
+        } for r in runs]
+    except KeyError:
         return []
 
 
@@ -2412,8 +2447,32 @@ async def dash_experiment_runs(exp_id: str):
 
 @app.get("/api/admin/dashboard/paper-runs")
 async def dash_paper_runs(limit: int = 50):
-    client = _DB_BQ()
+    """List paper runs: BQ completed results + registry active experiments."""
+    results = []
+    
+    # 1. Active paper experiments from registry (source of truth)
     try:
+        from live.experiment_manager import ExperimentManager
+        mgr = ExperimentManager()
+        for exp in mgr.list(exp_type="paper"):
+            if exp.has_active_run and exp.active_run:
+                results.append({
+                    "run_id": exp.active_run.run_id,
+                    "name": exp.name or exp.id,
+                    "strategy": exp.strategy,
+                    "market": exp.market,
+                    "status": "running",
+                    "n_periods": 0,
+                    "created_at": exp.active_run.started_at,
+                    "error_msg": None,
+                    "_source": "registry",
+                })
+    except Exception as e:
+        logging.getLogger(__name__).warning("paper-runs registry query: %s", e)
+
+    # 2. Completed paper runs from BQ
+    try:
+        client = _DB_BQ()
         query = f"""
             SELECT run_id, name, strategy, market, status, n_periods,
                    created_at, error_msg
@@ -2428,10 +2487,16 @@ async def dash_paper_runs(limit: int = 50):
         rows = client.query(query).result()
         names = ["run_id", "name", "strategy", "market", "status",
                  "n_periods", "created_at", "error_msg"]
-        return [_db_row_to_dict(r, names) for r in rows]
+        for r in rows:
+            d = _db_row_to_dict(r, names)
+            d["_source"] = "bq"
+            # Don't duplicate registry runs
+            if not any(e["run_id"] == d["run_id"] for e in results):
+                results.append(d)
     except Exception as e:
         logging.getLogger(__name__).error("dash_paper_runs query failed: %s", e)
-        return []
+
+    return results
 
 
 @app.get("/api/admin/dashboard/paper-runs/{run_id}")

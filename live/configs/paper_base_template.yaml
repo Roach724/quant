@@ -1,0 +1,51 @@
+# =============================================================================
+# Paper Run Template — 历史回测实验配置
+# 从实验室 Paper 子 Tab "从模板创建" 复制此文件
+# =============================================================================
+
+# ── Experiment Identity ───────────────────────────────────────────────
+experiment:
+  id: paper_us_mom_v1        # 唯一 ID: {type}_{market}_{strategy}_v{version}
+  name: "Paper Backtest"     # 人类可读名称
+  type: paper                # paper（固定，对应实验室 Paper 子 Tab）
+  market: us                 # us | hk
+  strategy: mom              # 策略缩写: ml | mom | 自定义
+  version: 1                 # 整数版本号
+
+# ── Mode ──────────────────────────────────────────────────────────────
+live:
+  mode: paper                # paper（历史回测，固定）
+  market: us                 # us | hk
+  output_dir: output/live/   # 输出目录（CSV/equity_curve 等）
+  start_date: "2026-01-01" # 回测起始日期（YYYY-MM-DD，省略=当年1月1日）
+  end_date: ""              # 回测结束日期（YYYY-MM-DD，省略=今天）
+
+# ── Broker ────────────────────────────────────────────────────────────
+broker:
+  paper:
+    initial_capital: 100000  # 初始资金
+    slippage_bps: 5          # 滑点（基点）
+    commission_bps: 1        # 佣金（基点）
+    min_commission: 1.0      # 最小佣金
+
+# ── Strategy ──────────────────────────────────────────────────────────
+strategy:
+  name: SimpleMomentum       # SimpleMomentum | MLPredStrategy
+  lookback: 20               # 回看周期（bar）
+  top_k: 5                   # 选股数量
+  rebalance_every: 5         # 调仓频率（bar）
+  # ── ML 策略额外参数 ──
+  # model_name: us_tech      # ML 模型名
+  # model_version: latest    # 模型版本
+  # fallback_strategy: SimpleMomentum
+
+# ── Observer ──────────────────────────────────────────────────────────
+observer:
+  log_dir: output/live/      # CSV 输出目录（equity_curve.csv, trades.csv 等）
+  snapshot_interval: 60      # 持仓快照间隔（秒）
+
+# ── Risk ──────────────────────────────────────────────────────────────
+risk:
+  max_drawdown: 0.15         # 最大回撤触发阈值
+  max_daily_loss: 0.05       # 单日最大亏损
+  max_consecutive_failures: 10  # 最大连续失败次数

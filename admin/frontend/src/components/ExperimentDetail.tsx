@@ -6,7 +6,7 @@ import ReactECharts from 'echarts-for-react';
 import { api } from '../api';
 
 interface Props {
-  type: 'live' | 'prod' | 'debug';
+  type: 'live' | 'prod' | 'debug' | 'paper';
   readonly?: boolean;
 }
 
