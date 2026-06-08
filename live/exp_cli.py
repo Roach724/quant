@@ -159,7 +159,7 @@ def cmd_start(mgr: ExperimentManager, args: argparse.Namespace) -> None:
         print(f"Created run {run_id} for {exp_id}")
 
     # Launch via systemd-run (auto-restart on failure, survives node reboots)
-    project_root = os.environ.get("QUANT_ROOT", "/opt/quant-prod")
+    project_root = os.environ.get("QUANT_ROOT", "/opt/quant")
     unit = _systemd_unit_name(exp_id)
     cmd = [
         "sudo", "systemd-run",

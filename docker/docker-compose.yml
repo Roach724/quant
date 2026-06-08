@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  quant:
+    image: asia-east2-docker.pkg.dev/deductive-notch-495015-c2/quant/quant:${TAG:-latest}
+    container_name: quant
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - /var/log/quant:/var/log/quant
+      - /var/quant/state:/var/quant/state
+      - /var/quant/experiments:/var/quant/experiments
+      - /var/data:/var/data
+      - /opt/quant-prod/output:/opt/quant/output
+      - /opt/quant/configs/live:/opt/quant/live/configs
+      - /opt/quant/configs/ml:/opt/quant/ml/configs
+      - /opt/quant/configs/strategies:/opt/quant/configs/strategies
+    environment:
+      - QUANT_ENV=prod
+      - FUTU_HOST=127.0.0.1
+      - FUTU_PORT=11111
+      - TZ=Asia/Shanghai
+      - GCS_BUCKET=deductive-notch-495015-c2-quant-data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8091/api/admin/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

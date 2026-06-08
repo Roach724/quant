@@ -10,7 +10,7 @@ from datetime import datetime
 
 from admin.models import get_session, Task
 
-PROJECT_ROOT = "/opt/quant-prod"
+PROJECT_ROOT = "/opt/quant"
 POLL_INTERVAL = 2  # seconds
 
 
