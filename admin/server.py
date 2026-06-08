@@ -2125,12 +2125,22 @@ def admin_ml_train(body: dict = Body(...)):
     path = _ML_CONFIG_DIR / fname
     if not path.exists():
         raise HTTPException(404, detail=f"Config '{config_name}' not found")
+    # Read model_name from config YAML for log file naming
+    import yaml as _yaml
+    model_name = config_name.replace(".yaml", "")
+    try:
+        cfg = _yaml.safe_load(path.read_text()) or {}
+        registry_name = cfg.get("registry", {}).get("model_name", "")
+        if registry_name:
+            model_name = registry_name
+    except Exception:
+        pass
     cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant && PYTHONPATH=/opt/quant "
            f"python3 -c \"import logging; logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s [%(name)s] %(message)s'); "
            f"from ml.pipeline import TrainPipeline; "
            f"p = TrainPipeline('{path}'); p.run(skip_tuning={skip_tuning})\" "
            f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
-           f"| tee -a /var/log/quant/prod/train/{config_name}_$(date -u +%Y%m%d_%H%M%S).log")
+           f"| tee -a /var/log/quant/prod/train/{model_name}_$(date -u +%Y%m%d_%H%M%S).log")
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd, "config": config_name}, status="pending")
     session.add(task)
