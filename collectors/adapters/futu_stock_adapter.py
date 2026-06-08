@@ -158,7 +158,7 @@ class FutuStockAdapter:
 
         config_paths = [
             Path(__file__).resolve().parent.parent.parent / "config" / "symbols.yaml",
-            Path("/opt/quant-prod/config/symbols.yaml"),
+            Path("/opt/quant/config/symbols.yaml"),
             Path("/opt/quant-dev/config/symbols.yaml"),
         ]
         for p in config_paths:

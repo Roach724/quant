@@ -636,7 +636,7 @@ class ExperimentManager:
         - Registry entry removal
         - BQ tables: experiment_equity + experiment_trades (DELETE WHERE run_id)
         - State directory: /var/quant/state/{exp_id}/{run_id}
-        - Output directory: /opt/quant-prod/output/live/*{exp_id}_{run_id}
+        - Output directory: /opt/quant/output/live/*{exp_id}_{run_id}
         - Log files: /var/log/quant/prod/{module}/{exp_id}_{run_id}.log
 
         Refuses if the run is currently 'running'.
@@ -691,7 +691,7 @@ class ExperimentManager:
             result["state"] = "not found"
 
         # 4. Delete output directory (contains equity_curve.csv, trades.csv, etc.)
-        output_pattern = f"/opt/quant-prod/output/live/*_{exp_id}_{run_id}"
+        output_pattern = f"/opt/quant/output/live/*_{exp_id}_{run_id}"
         for d in _glob.glob(output_pattern):
             if Path(d).is_dir():
                 shutil.rmtree(d)
