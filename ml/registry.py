@@ -366,6 +366,18 @@ class ModelRegistry:
         )
         logger.info("Promoted '%s' v%d → %s", name, version, stage)
 
+    @classmethod
+    def delete_version(cls, name: str, version: int) -> None:
+        """Permanently delete a model version from MLflow registry.
+
+        Args:
+            name: Registered model name.
+            version: Model version number to delete.
+        """
+        client = cls._client()
+        client.delete_model_version(name=name, version=str(version))
+        logger.info("Deleted '%s' v%d from MLflow", name, version)
+
     # ── Get latest ──────────────────────────────────────────────────────
 
     @classmethod

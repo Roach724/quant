@@ -327,10 +327,17 @@ const ModelCenterTab: React.FC = () => {
           { title: 'Feat', dataIndex: 'n_features', width: 60 },
           { title: 'Completed', dataIndex: 'completed_at', width: 160, render: (v: string) => v?.slice(0, 16) || '—' },
           { title: 'Dataset', dataIndex: 'dataset', width: 120, render: (v: string) => v || '—' },
-          { title: '操作', width: 260, render: (_: any, r: VersionDetail) => (<Space size={0}>
+          { title: '操作', width: 310, render: (_: any, r: VersionDetail) => (<Space size={0}>
             {r.stage !== 'Production' && <Popconfirm title="Promote?" onConfirm={() => doStage(modelName, r.version, 'Production')}><Button size="small" type="link" style={{ color: '#52c41a' }}>Prod</Button></Popconfirm>}
             {r.stage !== 'Staging' && <Popconfirm title="Stage?" onConfirm={() => doStage(modelName, r.version, 'Staging')}><Button size="small" type="link">Staging</Button></Popconfirm>}
             {r.stage !== 'Archived' && <Popconfirm title="Archive?" onConfirm={() => doStage(modelName, r.version, 'Archived')}><Button size="small" type="link" danger>Archive</Button></Popconfirm>}
+            <Popconfirm title={`永久删除 ${modelName} v${r.version}？`} description="包括 MLflow 中的模型文件" onConfirm={async () => {
+              try {
+                await api.del(`/api/admin/models/${encodeURIComponent(modelName)}/versions/${r.version}`);
+                message.success(`${modelName} v${r.version} 已删除`);
+                (async () => { setItems(await api.get('/api/admin/ml/center')); })();
+              } catch (e: any) { message.error(e.message); }
+            }} okText="确认删除" okButtonProps={{ danger: true }}><Button size="small" type="link" danger>删除</Button></Popconfirm>
           </Space>) },
         ]}
       />
