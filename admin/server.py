@@ -249,8 +249,13 @@ def admin_experiment_run_start(exp_id: str, run_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
 
-    if exp.has_active_run:
-        raise HTTPException(status_code=409, detail="已有活跃 Run，请先停止")
+    # Only block if THIS run is already running
+    active = exp.active_run
+    if active and active.run_id == run_id:
+        raise HTTPException(status_code=409, detail="该 Run 已在运行中")
+    # If a different run is active, stop it first
+    if active and active.run_id != run_id:
+        raise HTTPException(status_code=409, detail=f"已有其他活跃 Run ({active.run_id[:16]}...)，请先停止")
 
     cmd = (
         f"cd /opt/quant && PYTHONPATH=/opt/quant "
@@ -272,8 +277,10 @@ def admin_experiment_run_delete(exp_id: str, run_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
 
-    if exp.has_active_run:
-        raise HTTPException(status_code=409, detail="存在活跃 Run，无法删除")
+    # Only block if THIS specific run is currently running
+    active = exp.active_run
+    if active and active.run_id == run_id:
+        raise HTTPException(status_code=409, detail="活跃 Run 无法删除，请先停止")
 
     result = mgr.delete_run(exp_id, run_id)
     return {"status": "ok", "run_id": run_id, "details": result}
@@ -2123,7 +2130,7 @@ def admin_ml_train(body: dict = Body(...)):
            f"from ml.pipeline import TrainPipeline; "
            f"p = TrainPipeline('{path}'); p.run(skip_tuning={skip_tuning})\" "
            f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
-           f"| tee -a /var/log/quant/prod/train/{config_name}.log")
+           f"| tee -a /var/log/quant/prod/train/{config_name}_$(date -u +%Y%m%d_%H%M%S).log")
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd, "config": config_name}, status="pending")
     session.add(task)
