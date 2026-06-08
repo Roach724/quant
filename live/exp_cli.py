@@ -141,10 +141,15 @@ def cmd_start(mgr: ExperimentManager, args: argparse.Namespace) -> None:
         if not run_found:
             print(f"Error: run {run_id} not found for {exp_id}", file=sys.stderr)
             sys.exit(1)
-        # Ensure experiment status is idle before launch
-        if exp.status != "idle":
-            mgr._data[exp_id]["status"] = "idle"
-            mgr._save()
+        # Mark run as running in registry
+        for r in mgr._data[exp_id].setdefault("runs", []):
+            if r["run_id"] == run_id:
+                r["status"] = "running"
+                r["ended_at"] = None
+                break
+        mgr._data[exp_id]["current_run"] = run_id
+        mgr._data[exp_id]["status"] = "idle"
+        mgr._save()
         print(f"Resuming run {run_id} for {exp_id}")
     else:
         if exp.has_active_run:

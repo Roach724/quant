@@ -1038,7 +1038,7 @@ def admin_data_backfill_progress(
 def admin_collector_action(action: str):
     if action not in ("start", "stop", "restart"):
         return {"error": f"Unknown action: {action}"}, 400
-    cmd = f"supervisorctl {action} ws-collector"
+    cmd = f"supervisorctl {action} ws_collector"
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd}, status="pending")
     session.add(task)

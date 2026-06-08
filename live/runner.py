@@ -106,9 +106,15 @@ class LiveRunner:
         # ── Experiment lifecycle integration ──
         exp_cfg = self.config.get("experiment", {})
         exp_id = exp_cfg.get("id", "")
-        run_id = None
+        # Use CLI --run-id if provided (from exp_cli.py start --resume-run),
+        # otherwise get/create from experiment registry
+        run_id = self.config.get("_cli_run_id", None)
 
-        if exp_id:
+        if run_id:
+            # Pre-created run_id from CLI — use it directly
+            logger.info("Experiment %s using CLI run_id %s", exp_id, run_id)
+            self.config["_run_id"] = run_id
+        elif exp_id:
             from live.experiment_manager import ExperimentManager
             mgr = ExperimentManager()
             try:

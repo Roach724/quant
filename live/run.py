@@ -74,6 +74,8 @@ def main():
     logger.info("Logging to %s (exp=%s run=%s)", log_file, exp_id, args.run_id or "-")
 
     runner = LiveRunner(args.config, config=config)
+    if args.run_id:
+        runner.config["_cli_run_id"] = args.run_id
     if args.mode:
         runner.config["live"]["mode"] = args.mode
         runner.mode = args.mode
