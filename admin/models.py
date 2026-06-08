@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, J
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, scoped_session
 from datetime import datetime, timezone
 
-DB_PATH = "/var/quant/admin.db"
+DB_PATH = "/var/data/admin.db"
 engine = create_engine(f"sqlite:///{DB_PATH}", echo=False, pool_size=5, max_overflow=10)
 
 _session_factory = sessionmaker(bind=engine)
