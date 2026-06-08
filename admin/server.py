@@ -830,7 +830,7 @@ def admin_data_collectors():
             ["supervisorctl", "status", "ws_collector"],
             capture_output=True, text=True, timeout=5,
         )
-        status = r.stdout.strip().split()[-1] if r.stdout.strip() else "STOPPED"
+        status = "active" if "RUNNING" in r.stdout else "inactive"
     except Exception:
         status = "unknown"
     heartbeat = None
@@ -861,7 +861,7 @@ def admin_data_collectors():
     hist_quota = None
     try:
         r = subprocess.run(
-            ["/opt/quant/python3", "/opt/quant/scripts/quota_check.py"],
+            ["python3", "/opt/quant/scripts/quota_check.py"],
             capture_output=True, text=True, timeout=10,
         )
         if r.returncode == 0 and r.stdout.strip():
