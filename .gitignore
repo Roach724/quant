@@ -13,6 +13,7 @@ output/
 .claude
 .vscode
 *.ipynb
+!admin/frontend/dist/index.html
 *.html
 *.txt
 .terraform/
