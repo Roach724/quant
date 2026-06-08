@@ -87,6 +87,14 @@ class LiveRunner:
         self._calendar: MarketCalendar | None = None
         self._symbols: list[str] = []
 
+        # Live run tracking (used by both single-day and multi-day modes)
+        self._live_bar_count: int = 0
+        self._live_peak_equity: float = 0.0
+        self._live_bars: list[dict] = []
+        self._live_start_time: datetime | None = None
+        self._live_stop_reason: str | None = None
+        self._live_daily_start_equity: float = 0.0
+
     # ── Main entry point ──────────────────────────────────────────────
 
     def run(self):

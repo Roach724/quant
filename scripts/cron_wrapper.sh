@@ -37,7 +37,9 @@ LEGACY_DIR="/home/quant/logs"
 LEGACY_LOGFILE="${LEGACY_DIR}/${JOB_NAME}.log"
 ALERTFILE="${LEGACY_DIR}/quant_alerts.log"
 
-LOCKFILE="/tmp/${JOB_NAME}.lock"
+LOCKFILE="/tmp/cron_${JOB_NAME}.lock"
+GLOBAL_SEM="/tmp/cron_global.sem"
+MAX_CONCURRENT=3
 
 # Try primary log dir; fall back to legacy
 if mkdir -p "$LOG_DIR" 2>/dev/null && [ -w "$LOG_DIR" ]; then
@@ -51,9 +53,33 @@ fi
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} START  module=${MODULE} env=${ENV}" >> "$LOGFILE"
 
+# ── Concurrency control ──
+# 1. Job-level: prevent the same cron job from running twice
+( flock -n 9 || {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} SKIPPED (already running)" >> "$LOGFILE"
+    exit 0
+}
+
+# 2. Global: limit total concurrent cron Python processes
+ACQUIRED_SEM=false
+for i in $(seq 1 30); do
+    RUNNING_COUNT=$(pgrep -cf 'cron_wrapper\\|python.*collector\\|python.*loader\\|python.*quality\\|python.*factor' 2>/dev/null || echo 0)
+    if [ "$RUNNING_COUNT" -lt "$MAX_CONCURRENT" ]; then
+        ACQUIRED_SEM=true
+        break
+    fi
+    sleep 2
+done
+if [ "$ACQUIRED_SEM" = false ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} SKIPPED (concurrency limit=$MAX_CONCURRENT)" >> "$LOGFILE"
+    exit 0
+fi
+
 # Run the command, capture all output
 "$@" >> "$LOGFILE" 2>&1
 RC=$?
+
+) 9>"$LOCKFILE"
 
 TS="$(date '+%Y-%m-%d %H:%M:%S')"
 if [ $RC -eq 0 ]; then
