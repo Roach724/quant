@@ -20,6 +20,7 @@ services:
       - FUTU_HOST=127.0.0.1
       - FUTU_PORT=11111
       - TZ=Asia/Shanghai
+      - GCS_BUCKET=deductive-notch-495015-c2-quant-data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8091/api/admin/health"]
       interval: 30s

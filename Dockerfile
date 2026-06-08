@@ -18,7 +18,8 @@ COPY --from=builder /deps /usr/local/lib/python3.12/site-packages/
 COPY . /opt/quant/
 
 # Writable directories (will be volume-mounted in production)
-RUN mkdir -p /var/log/quant /var/quant/state /var/quant/experiments /var/data
+RUN mkdir -p /var/log/quant/{collector,admin,live} \
+    /var/quant/state /var/quant/experiments /var/data
 
 # Supervisor configuration
 COPY docker/supervisord.conf /etc/supervisor/conf.d/quant.conf
