@@ -249,8 +249,13 @@ def admin_experiment_run_start(exp_id: str, run_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Experiment '{exp_id}' not found")
 
-    if exp.has_active_run:
-        raise HTTPException(status_code=409, detail="已有活跃 Run，请先停止")
+    # Only block if THIS run is already running
+    active = exp.active_run
+    if active and active.run_id == run_id:
+        raise HTTPException(status_code=409, detail="该 Run 已在运行中")
+    # If a different run is active, stop it first
+    if active and active.run_id != run_id:
+        raise HTTPException(status_code=409, detail=f"已有其他活跃 Run ({active.run_id[:16]}...)，请先停止")
 
     cmd = (
         f"cd /opt/quant && PYTHONPATH=/opt/quant "
