@@ -61,6 +61,39 @@ jobs:
                 gcloud auth configure-docker asia-east2-docker.pkg.dev --quiet
                 cd /opt/quant-prod &&
                 git stash && git pull origin stable && git stash pop || true
+
+                # ── Graceful shutdown ──
+                echo '=== Stopping experiments gracefully ==='
+                for pidfile in /var/quant/state/*.pid; do
+                  if [ -f \"\$pidfile\" ]; then
+                    pid=\$(cat \"\$pidfile\" 2>/dev/null)
+                    exp_id=\$(basename \"\$pidfile\" .pid)
+                    if [ -n \"\$pid\" ] && kill -0 \"\$pid\" 2>/dev/null; then
+                      echo \"Stopping \$exp_id (PID \$pid)...\"
+                      docker exec quant python3 -c \"
+import signal, os
+try:
+    os.killpg(os.getpgid($pid), signal.SIGTERM)
+    import time
+    for _ in range(30):
+        try: os.kill($pid, 0); time.sleep(0.5)
+        except OSError: break
+    else:
+        os.killpg(os.getpgid($pid), signal.SIGKILL)
+    print('stopped')
+except Exception as e:
+    print(f'skip: {e}')
+\" || true
+                    fi
+                    rm -f \"\$pidfile\"
+                  fi
+                done
+
+                echo '=== Stopping ws_collector ==='
+                docker exec quant supervisorctl stop ws_collector 2>/dev/null || true
+                sleep 3
+
+                echo '=== Deploying ==='
                 TAG=${{ github.sha }} docker compose -f docker/docker-compose.yml pull &&
                 docker compose -f docker/docker-compose.yml up -d &&
                 sleep 10 &&
