@@ -372,6 +372,10 @@ def _flush_buffer(buffer: list, label: str):
         idx_mask = df["symbol"].isin(_INDEX_HK_SYMBOLS)
         if idx_mask.any():
             idx_df = df[idx_mask].copy()
+            # Drop columns not in the index table schema (market, frequency are stock-only)
+            for drop_col in ["market", "frequency"]:
+                if drop_col in idx_df.columns:
+                    idx_df.drop(columns=[drop_col], inplace=True)
             try:
                 from common.bq_writer import write_bars_to_bq
                 n = write_bars_to_bq(idx_df, table_id="hk_bars_index_5m")
