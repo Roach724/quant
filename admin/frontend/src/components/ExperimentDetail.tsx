@@ -88,6 +88,11 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
 
   // Latest metrics
   const last = equity.length > 0 ? equity[equity.length - 1] : null;
+  const first = equity.length > 0 ? equity[0] : null;
+  const initialCapital = first ? Number(first.cash ?? first.equity ?? 0) : 0;
+  const totalPnl = last ? Number(last.equity ?? 0) - initialCapital : 0;
+  const unrealizedPnl = positions.reduce((s: number, p: any) => s + Number(p.pnl ?? 0), 0);
+  const realizedPnl = totalPnl - unrealizedPnl;
 
   return (
     <div>
@@ -129,46 +134,63 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
         </Col>
       </Row>
 
-      {/* ── Metric Cards ── */}
+      {/* ── Metric Cards: PnL Decomposition ── */}
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
-        <Col xs={12} sm={6}>
+        <Col xs={12} sm={6} md={4}>
           <Card size="small"><Statistic title="Bar" value={last?.bar ?? '—'} /></Card>
         </Col>
+        <Col xs={12} sm={6} md={4}>
+          <Card size="small">
+            <Statistic title="Initial Capital" value={Math.round(initialCapital).toLocaleString()} prefix="$" />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={4}>
+          <Card size="small">
+            <Statistic title="Realized PnL" value={Math.round(realizedPnl).toLocaleString()} prefix="$"
+              valueStyle={{ color: realizedPnl >= 0 ? '#3f8600' : '#cf1322' }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={4}>
+          <Card size="small">
+            <Statistic title="Unrealized PnL" value={Math.round(unrealizedPnl).toLocaleString()} prefix="$"
+              valueStyle={{ color: unrealizedPnl >= 0 ? '#3f8600' : '#cf1322' }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={4}>
+          <Card size="small">
+            <Statistic title="Total PnL" value={Math.round(totalPnl).toLocaleString()} prefix="$"
+              valueStyle={{ color: totalPnl >= 0 ? '#3f8600' : '#cf1322' }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={4}>
+          <Card size="small">
+            <Statistic title="Equity" value={last?.equity != null ? Math.round(Number(last.equity)).toLocaleString() : '—'} prefix="$" />
+          </Card>
+        </Col>
+      </Row>
+
+      {/* ── Metric Cards: Risk ── */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic
-              title="Equity"
-              value={last?.equity != null ? Math.round(Number(last.equity)).toLocaleString() : '—'}
-              prefix="$"
-            />
+            <Statistic title="Cash" value={last?.cash != null ? Math.round(Number(last.cash)).toLocaleString() : '—'} prefix="$" />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic
-              title="Cash"
-              value={last?.cash != null ? Math.round(Number(last.cash)).toLocaleString() : '—'}
-              prefix="$"
-            />
+            <Statistic title="Day PnL" value={last?.daily_pnl != null ? Math.round(Number(last.daily_pnl)).toLocaleString() : '—'} prefix="$"
+              valueStyle={{ color: Number(last?.daily_pnl ?? 0) >= 0 ? '#3f8600' : '#cf1322' }} />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic
-              title="Day PnL"
-              value={last?.daily_pnl != null ? Math.round(Number(last.daily_pnl)).toLocaleString() : '—'}
-              prefix="$"
-              valueStyle={{ color: Number(last?.daily_pnl ?? 0) >= 0 ? '#3f8600' : '#cf1322' }}
-            />
+            <Statistic title="Max Drawdown" value={last?.drawdown != null ? (Number(last.drawdown) * 100).toFixed(2) + '%' : '—'}
+              valueStyle={{ color: '#cf1322' }} />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic
-              title="Max Drawdown"
-              value={last?.drawdown != null ? (Number(last.drawdown) * 100).toFixed(2) + '%' : '—'}
-              valueStyle={{ color: '#cf1322' }}
-            />
+            <Statistic title="Positions" value={positions.length} />
           </Card>
         </Col>
       </Row>
@@ -178,7 +200,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
           <Empty description="Select an experiment to view data" />
         ) : (
           <>
-            {/* ── Equity Curve ── */}
+            {/* ── Equity Curve (stacked) ── */}
             <Card size="small" title="Equity Curve" style={{ marginBottom: 16 }}>
               <ReactECharts option={makeEquityOption(equity)} style={{ height: 350 }} />
             </Card>
@@ -267,21 +289,50 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
 
 function makeEquityOption(data: any[]) {
   const ts = data.map((d: any) => d.ts?.slice(0, 19) ?? '');
-  const values = data.map((d: any) => Number(d.equity ?? 0));
+  const equity = data.map((d: any) => Number(d.equity ?? 0));
+  const cash = data.map((d: any) => Number(d.cash ?? 0));
+  const posValue = data.map((_: any, i: number) => equity[i] - cash[i]);
 
   return {
-    tooltip: { trigger: 'axis' },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (ps: any) => {
+        const i = ps[0]?.dataIndex ?? 0;
+        return `Bar ${i}<br/>Equity: $${equity[i].toLocaleString()}<br/>Cash: $${cash[i].toLocaleString()}<br/>Positions: $${posValue[i].toLocaleString()}`;
+      },
+    },
     grid: { left: 70, right: 20, top: 20, bottom: 30 },
     xAxis: { type: 'category', data: ts, axisLabel: { show: false } },
     yAxis: { type: 'value', axisLabel: { fontSize: 10, formatter: (v: number) => `$${(v / 1000).toFixed(0)}k` } },
     series: [
       {
+        name: 'Cash',
         type: 'line',
-        data: values,
+        data: cash,
+        stack: 'total',
         smooth: true,
         showSymbol: false,
-        lineStyle: { color: '#1677ff', width: 1.5 },
-        areaStyle: { color: 'rgba(22, 119, 255, 0.08)' },
+        lineStyle: { color: '#52c41a', width: 1 },
+        areaStyle: { color: 'rgba(82, 196, 26, 0.25)' },
+      },
+      {
+        name: 'Positions',
+        type: 'line',
+        data: posValue,
+        stack: 'total',
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { color: '#faad14', width: 1 },
+        areaStyle: { color: 'rgba(250, 173, 20, 0.25)' },
+      },
+      {
+        name: 'Equity',
+        type: 'line',
+        data: equity,
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { color: '#1677ff', width: 2 },
+        symbol: 'none',
       },
     ],
     dataZoom: [
