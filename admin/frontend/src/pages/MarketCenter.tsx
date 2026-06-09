@@ -477,11 +477,11 @@ function makeCandlestickOption(data: any[], symbol: string) {
       },
     ],
     dataZoom: [
-      { type: 'inside', xAxisIndex: [0, 1], start: 60, end: 100 },
+      { type: 'inside', xAxisIndex: [0, 1], start: 0, end: 100 },
       {
         type: 'slider',
         xAxisIndex: [0, 1],
-        start: 60,
+        start: 0,
         end: 100,
         height: 20,
         bottom: 0,
