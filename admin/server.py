@@ -1099,7 +1099,10 @@ def admin_cron_list():
         for lf in sorted(log_dir.iterdir(), reverse=True):
             if lf.suffix == ".gz":
                 continue
-            base = lf.stem.split(".log")[0].rsplit("-", 2)[0] if re.search(r'-\d{8}', lf.stem) else lf.stem
+            base = lf.stem.split(".log")[0]
+            m = re.search(r'[_-]\d{8}', base)
+            if m:
+                base = base[:m.start()]
             if base not in log_files:
                 log_files[base] = lf
     for i, line in enumerate(lines):
