@@ -1,6 +1,6 @@
 """Quant Admin Platform — FastAPI server."""
 
-import subprocess, json as _json, os, glob, logging
+import subprocess, json as _json, os, glob, logging, re
 from pathlib import Path
 import requests
 import pandas as pd
@@ -1079,6 +1079,16 @@ def admin_cron_list():
 
     lines = raw.split("\n")
     jobs = []
+    # Scan log dir for latest log per job name
+    log_dir = Path("/var/log/quant/prod/cron")
+    log_files = {}
+    if log_dir.exists():
+        for lf in sorted(log_dir.iterdir(), reverse=True):
+            if lf.suffix == ".gz":
+                continue
+            base = lf.stem.split(".log")[0].rsplit("-", 2)[0] if re.search(r'-\d{8}', lf.stem) else lf.stem
+            if base not in log_files:
+                log_files[base] = lf
     for i, line in enumerate(lines):
         line = line.strip()
         if not line or line.startswith("#"):
@@ -1086,20 +1096,23 @@ def admin_cron_list():
         parts = line.split(None, 5)
         if len(parts) >= 6:
             cmd = parts[5].strip()
-            # Match by prefix (crontab may add >> redirect that registry lacks)
             meta = {}
             for reg_cmd, reg_job in registry_jobs.items():
                 if cmd.startswith(reg_cmd) or reg_cmd.startswith(cmd.split(">>")[0].strip()):
                     meta = reg_job
                     break
+            job_name = meta.get("name", "")
+            latest = log_files.get(job_name)
             jobs.append({
                 "index": i,
                 "raw": line,
                 "enabled": True,
                 "schedule": " ".join(parts[:5]),
                 "command": cmd,
-                "name": meta.get("name", ""),
+                "name": job_name,
                 "description": meta.get("description", ""),
+                "latest_log": latest.name if latest else None,
+                "last_run": datetime.fromtimestamp(latest.stat().st_mtime, tz=timezone.utc).isoformat() if latest else None,
             })
     return jobs
 
@@ -1180,13 +1193,19 @@ def admin_cron_update(index: int, job: dict = Body(...)):
 
 
 @app.post("/api/admin/cron/run")
-def admin_cron_run(command: str = Query("")):
+def admin_cron_run(command: str = Query(""), name: str = Query("")):
     """Manually trigger a cron command via task queue."""
+    # Wrap with timestamped log redirect
+    log_name = name or "cron"
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    log_file = f"/var/log/quant/prod/cron/{log_name}_{ts}.log"
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    wrapped = f"({command}) >> {log_file} 2>&1"
     session = get_session()
-    task = Task(type="shell", params={"cmd": command, "cron_command": command}, status="pending")
+    task = Task(type="shell", params={"cmd": wrapped, "cron_command": command}, status="pending")
     session.add(task)
     session.commit()
-    return {"task_id": task.id}
+    return {"task_id": task.id, "log_file": log_name + "_" + ts + ".log"}
 
 
 @app.get("/api/admin/cron/{index}/history")
