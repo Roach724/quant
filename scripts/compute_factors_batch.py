@@ -135,7 +135,6 @@ def write_factor_values(
                     "date": date_str,
                     "value": float(val),
                     "source_builder": source,
-                    "computed_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
 
