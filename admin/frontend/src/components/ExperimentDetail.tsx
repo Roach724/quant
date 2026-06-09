@@ -94,6 +94,32 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
   const maxDrawdown = equity.length > 0 ? Math.min(...equity.map((d: any) => Number(d.drawdown ?? 0))) : 0;
   const unrealizedPnl = positions.reduce((s: number, p: any) => s + Number(p.pnl ?? 0), 0);
   const realizedPnl = totalPnl - unrealizedPnl;
+  const winRate = (() => {
+    const lots: Record<string, { qty: number; price: number }[]> = {};
+    let wins = 0, losses = 0;
+    for (const t of trades) {
+      const sym = t.symbol;
+      const qty = Number(t.qty);
+      const price = Number(t.price);
+      if (!lots[sym]) lots[sym] = [];
+      if (t.side === 'buy') {
+        lots[sym].push({ qty, price });
+      } else {
+        let remaining = qty;
+        while (remaining > 0 && lots[sym].length > 0) {
+          const lot = lots[sym][0];
+          const matched = Math.min(lot.qty, remaining);
+          if (price > lot.price) wins++;
+          else if (price < lot.price) losses++;
+          lot.qty -= matched;
+          remaining -= matched;
+          if (lot.qty <= 0) lots[sym].shift();
+        }
+      }
+    }
+    const total = wins + losses;
+    return total > 0 ? (wins / total) * 100 : 0;
+  })();
 
   return (
     <div>
@@ -187,6 +213,12 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
           <Card size="small">
             <Statistic title="Max Drawdown" value={(maxDrawdown * 100).toFixed(2) + '%'}
               valueStyle={{ color: '#cf1322' }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6}>
+          <Card size="small">
+            <Statistic title="Win Rate" value={(winRate).toFixed(1) + '%'}
+              valueStyle={{ color: winRate >= 50 ? '#3f8600' : '#cf1322' }} />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
