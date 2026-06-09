@@ -4,6 +4,7 @@ import {
   EditOutlined,
   HistoryOutlined,
   ReloadOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
@@ -22,6 +23,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 
 interface CronJob {
@@ -33,6 +35,8 @@ interface CronJob {
   comment?: string;
   name: string;
   description: string;
+  latest_log?: string | null;
+  last_run?: string | null;
 }
 
 interface HistoryEntry {
@@ -53,6 +57,7 @@ const statusColor: Record<string, string> = {
 
 const CronJobs: React.FC = () => {
   const actionRef = useRef<ActionType | undefined>(undefined);
+  const navigate = useNavigate();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [form] = Form.useForm();
@@ -65,31 +70,27 @@ const CronJobs: React.FC = () => {
 
   // ── Run ────────────────────────────────────────────────────────────────────
 
-  const handleRun = async (command: string) => {
+  const handleRun = async (command: string, name: string) => {
     try {
       const data = await api.post(
-        `/api/admin/cron/run?command=${encodeURIComponent(command)}`
+        `/api/admin/cron/run?command=${encodeURIComponent(command)}&name=${encodeURIComponent(name || 'cron')}`
       );
       const hide = message.loading(`Running...`, 0);
-      // Poll until task completes
       for (let i = 0; i < 360; i++) {
         await new Promise(r => setTimeout(r, 1000));
         const t = await api.get(`/api/admin/tasks/${data.task_id}`);
-        if (t.status === 'completed') {
-          hide();
-          message.success(`Done — ${(t.result || '').slice(-100)}`);
-          return;
-        }
-        if (t.status === 'failed') {
-          hide();
-          message.error(`Failed: ${(t.result || '').slice(-200)}`);
-          return;
-        }
+        if (t.status === 'completed') { hide(); message.success(`Done`); actionRef.current?.reload(); return; }
+        if (t.status === 'failed') { hide(); message.error(`Failed: ${(t.result || '').slice(-200)}`); return; }
       }
-      hide();
-      message.warning('Timeout (6 min) — still running in background');
-    } catch (err: any) {
-      message.error(`Failed: ${err.message}`);
+      hide(); message.warning('Timeout (6 min)');
+    } catch (err: any) { message.error(`Failed: ${err.message}`); }
+  };
+
+  const handleViewLog = (latestLog: string | null | undefined) => {
+    if (latestLog) {
+      navigate(`/logs?module=cron&file=${encodeURIComponent(latestLog)}`);
+    } else {
+      navigate('/logs?module=cron');
     }
   };
 
@@ -269,6 +270,13 @@ const CronJobs: React.FC = () => {
       },
     },
     {
+      title: '最近运行',
+      dataIndex: 'last_run',
+      key: 'last_run',
+      width: 160,
+      render: (_, r) => r.last_run?.slice(0, 19)?.replace('T', ' ') || '—',
+    },
+    {
       title: 'Enabled',
       dataIndex: 'enabled',
       width: 80,
@@ -284,7 +292,7 @@ const CronJobs: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 240,
+      width: 320,
       render: (_, r) => (
         <Space>
           {r.command && (
@@ -292,11 +300,18 @@ const CronJobs: React.FC = () => {
               type="primary"
               size="small"
               icon={<ThunderboltOutlined />}
-              onClick={() => handleRun(r.command)}
+              onClick={() => handleRun(r.command, r.name || '')}
             >
               执行
             </Button>
           )}
+          <Button
+            size="small"
+            icon={<FileTextOutlined />}
+            onClick={() => handleViewLog(r.latest_log)}
+          >
+            日志
+          </Button>
           {r.index !== undefined && (
             <Button
               size="small"
