@@ -20,6 +20,7 @@ import {
   Table,
   Tag,
   Tooltip,
+  Popconfirm,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useRef, useState } from 'react';
@@ -67,11 +68,13 @@ const CronJobs: React.FC = () => {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyData, setHistoryData] = useState<HistoryEntry[]>([]);
   const [historyTitle, setHistoryTitle] = useState('');
+  const [runningTasks, setRunningTasks] = useState<Set<number>>(new Set());
 
   // ── Run ────────────────────────────────────────────────────────────────────
 
-  const handleRun = async (command: string, name: string) => {
+  const handleRun = async (command: string, name: string, index: number) => {
     try {
+      setRunningTasks(prev => new Set(prev).add(index));
       const data = await api.post(
         `/api/admin/cron/run?command=${encodeURIComponent(command)}&name=${encodeURIComponent(name || 'cron')}`
       );
@@ -82,8 +85,17 @@ const CronJobs: React.FC = () => {
         if (t.status === 'completed') { hide(); message.success(`Done`); actionRef.current?.reload(); return; }
         if (t.status === 'failed') { hide(); message.error(`Failed: ${(t.result || '').slice(-200)}`); return; }
       }
-      hide(); message.warning('Timeout (6 min)');
-    } catch (err: any) { message.error(`Failed: ${err.message}`); }
+      hide();
+      message.warning('Timeout (6 min) — still running in background');
+    } catch (err: any) {
+      message.error(`Failed: ${err.message}`);
+    } finally {
+      setRunningTasks(prev => {
+        const next = new Set(prev);
+        next.delete(index);
+        return next;
+      });
+    }
   };
 
   const handleViewLog = (latestLog: string | null | undefined) => {
@@ -295,15 +307,22 @@ const CronJobs: React.FC = () => {
       width: 320,
       render: (_, r) => (
         <Space>
-          {r.command && (
-            <Button
-              type="primary"
-              size="small"
-              icon={<ThunderboltOutlined />}
-              onClick={() => handleRun(r.command, r.name || '')}
+          {r.command && r.index !== undefined && (
+            <Popconfirm
+              title={`执行 ${r.name || r.command?.slice(0, 30)}？`}
+              onConfirm={() => handleRun(r.command, r.name || '', r.index!)}
+              okText="确认执行"
             >
-              执行
-            </Button>
+              <Button
+                type="primary"
+                size="small"
+                icon={<ThunderboltOutlined />}
+                loading={runningTasks.has(r.index!)}
+                disabled={runningTasks.has(r.index!)}
+              >
+                执行
+              </Button>
+            </Popconfirm>
           )}
           <Button
             size="small"
