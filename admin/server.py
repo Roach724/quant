@@ -1154,13 +1154,17 @@ def admin_cron_save(jobs: list[dict]):
     Crontab_File = "/var/data/crontab.txt"
     resolved = os.path.abspath(CRON_REGISTRY)
 
+    # Normalize all commands before saving
+    for j in jobs:
+        j["command"] = _normalize_to_wrapper(j.get("command", ""), j.get("name", ""))
+
     # Save registry metadata if it exists
     if os.path.isfile(resolved):
         out = [{
             "name": j.get("name", ""),
             "description": j.get("description", ""),
             "schedule": j.get("schedule", ""),
-            "command": _normalize_to_wrapper(j.get("command", ""), j.get("name", "")),
+            "command": j.get("command", ""),
             "enabled": j.get("enabled", False),
         } for j in jobs]
         os.makedirs(os.path.dirname(resolved), exist_ok=True)
