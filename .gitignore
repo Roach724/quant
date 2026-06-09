@@ -239,6 +239,5 @@ collectors/main.py.bak
 models_artifacts/
 
 # Runtime experiment configs (managed via /opt/quant/configs/, not git)
-live/configs/live_*.yaml
-live/configs/paper_*.yaml
+live/configs/*.yaml
 ml/configs/*.yaml
