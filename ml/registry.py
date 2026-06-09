@@ -6,7 +6,7 @@ Provides:
     ModelRegistry — save/load/list/promote models via MLflow
 
 Backend: SQLite at $HOME/.mlflow/mlflow.db
-Artifacts: /opt/quant/models_artifacts/
+Artifacts: /var/data/mlflow_artifacts/models/
 """
 
 from __future__ import annotations
