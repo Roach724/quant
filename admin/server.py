@@ -937,7 +937,7 @@ def admin_data_backfill(
     try:
         with open(symbols_yaml_path) as sf:
             ssot = _y2.safe_load(sf)
-        market_syms = ssot.get("markets", {}).get(mkt, {}).get("symbols", [])
+        market_syms = ssot.get("markets", {}).get(market, {}).get("symbols", [])
         symbols_list = [s for s in market_syms if isinstance(s, str)]
     except Exception:
         pass
