@@ -2531,6 +2531,7 @@ async def dash_experiment_positions(exp_id: str, run_id: str = ""):
             "qty": round(total_qty, 2),
             "avg_cost": round(avg_cost, 2),
             "current_price": round(current_price, 2),
+            "market_value": round(total_qty * current_price, 2),
             "pnl": round(pnl, 2),
             "pnl_pct": round(pnl_pct, 2),
         })

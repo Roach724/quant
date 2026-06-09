@@ -505,6 +505,7 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
     { title: 'Qty', dataIndex: 'qty', key: 'qty', width: 80, render: (v) => Number(v).toFixed(2) },
     { title: 'Avg Cost', dataIndex: 'avg_cost', key: 'avg_cost', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
     { title: 'Price', dataIndex: 'current_price', key: 'current_price', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
+    { title: 'Mkt Val', dataIndex: 'market_value', key: 'market_value', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
     { title: 'PnL', dataIndex: 'pnl', key: 'pnl', width: 100, render: (v) => `$${Number(v).toFixed(2)}` },
     { title: 'PnL%', dataIndex: 'pnl_pct', key: 'pnl_pct', width: 80, render: (v) => `${Number(v).toFixed(2)}%` },
   ];
@@ -600,7 +601,32 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
                       <div style={{ marginTop: 16 }} />
                       <Text strong style={{ marginBottom: 8, display: 'block' }}>当前持仓</Text>
                       {posEmpty ? <Empty description="No positions" /> :
-                        <Table size="small" dataSource={details.positions} columns={posColumns} rowKey="symbol" pagination={false} />}
+                        <Table size="small" dataSource={details.positions} columns={posColumns} rowKey="symbol" pagination={false}
+                          summary={(pageData) => {
+                            const totalQty = pageData.reduce((s: number, r: any) => s + Number(r.qty), 0);
+                            const totalCost = pageData.reduce((s: number, r: any) => s + Number(r.qty) * Number(r.avg_cost), 0);
+                            const totalMktVal = pageData.reduce((s: number, r: any) => s + Number(r.market_value), 0);
+                            const totalPriceQty = pageData.reduce((s: number, r: any) => s + Number(r.current_price) * Number(r.qty), 0);
+                            const avgPrice = totalQty > 0 ? totalPriceQty / totalQty : 0;
+                            const avgCost = totalQty > 0 ? totalCost / totalQty : 0;
+                            const totalPnl = totalPriceQty - totalCost;
+                            const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
+                            return (
+                              <Table.Summary.Row>
+                                <Table.Summary.Cell index={0}><strong>Total</strong></Table.Summary.Cell>
+                                <Table.Summary.Cell index={1}>{totalQty.toFixed(2)}</Table.Summary.Cell>
+                                <Table.Summary.Cell index={2}>${avgCost.toFixed(2)}</Table.Summary.Cell>
+                                <Table.Summary.Cell index={3}>${avgPrice.toFixed(2)}</Table.Summary.Cell>
+                                <Table.Summary.Cell index={4}>${totalMktVal.toFixed(2)}</Table.Summary.Cell>
+                                <Table.Summary.Cell index={5}>
+                                  <span style={{ color: totalPnl >= 0 ? '#3f8600' : '#cf1322' }}>${totalPnl.toFixed(2)}</span>
+                                </Table.Summary.Cell>
+                                <Table.Summary.Cell index={6}>
+                                  <span style={{ color: totalPnlPct >= 0 ? '#3f8600' : '#cf1322' }}>{totalPnlPct.toFixed(2)}%</span>
+                                </Table.Summary.Cell>
+                              </Table.Summary.Row>
+                            );
+                          }} />}
                     </div>
                   );
                 },

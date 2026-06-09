@@ -146,6 +146,15 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
         <Col xs={12} sm={6}>
           <Card size="small">
             <Statistic
+              title="Cash"
+              value={last?.cash != null ? Math.round(Number(last.cash)).toLocaleString() : '—'}
+              prefix="$"
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6}>
+          <Card size="small">
+            <Statistic
               title="Day PnL"
               value={last?.daily_pnl != null ? Math.round(Number(last.daily_pnl)).toLocaleString() : '—'}
               prefix="$"
@@ -187,15 +196,41 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
                   rowKey="symbol"
                   size="small"
                   pagination={false}
-                  scroll={{ x: 600 }}
+                  scroll={{ x: 700 }}
                   columns={[
                     { title: 'Symbol', dataIndex: 'symbol', width: 80 },
                     { title: 'Qty', dataIndex: 'qty', width: 80, render: (v: any) => Number(v).toFixed(2) },
                     { title: 'Avg Cost', dataIndex: 'avg_cost', width: 100, render: (v: any) => `$${Number(v).toFixed(2)}` },
                     { title: 'Price', dataIndex: 'current_price', width: 100, render: (v: any) => `$${Number(v).toFixed(2)}` },
+                    { title: 'Mkt Val', dataIndex: 'market_value', width: 100, render: (v: any) => `$${Number(v).toFixed(2)}` },
                     { title: 'PnL', dataIndex: 'pnl', width: 100, render: (v: any) => ({ children: `$${Number(v).toFixed(2)}`, props: { style: { color: Number(v) >= 0 ? '#3f8600' : '#cf1322' } } }) },
                     { title: 'PnL%', dataIndex: 'pnl_pct', width: 80, render: (v: any) => ({ children: `${Number(v).toFixed(2)}%`, props: { style: { color: Number(v) >= 0 ? '#3f8600' : '#cf1322' } } }) },
                   ]}
+                  summary={(pageData) => {
+                    const totalQty = pageData.reduce((s: number, r: any) => s + Number(r.qty), 0);
+                    const totalCost = pageData.reduce((s: number, r: any) => s + Number(r.qty) * Number(r.avg_cost), 0);
+                    const totalMktVal = pageData.reduce((s: number, r: any) => s + Number(r.market_value), 0);
+                    const totalPriceQty = pageData.reduce((s: number, r: any) => s + Number(r.current_price) * Number(r.qty), 0);
+                    const avgPrice = totalQty > 0 ? totalPriceQty / totalQty : 0;
+                    const avgCost = totalQty > 0 ? totalCost / totalQty : 0;
+                    const totalPnl = totalPriceQty - totalCost;
+                    const totalPnlPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
+                    return (
+                      <Table.Summary.Row>
+                        <Table.Summary.Cell index={0}><strong>Total</strong></Table.Summary.Cell>
+                        <Table.Summary.Cell index={1}>{totalQty.toFixed(2)}</Table.Summary.Cell>
+                        <Table.Summary.Cell index={2}>${avgCost.toFixed(2)}</Table.Summary.Cell>
+                        <Table.Summary.Cell index={3}>${avgPrice.toFixed(2)}</Table.Summary.Cell>
+                        <Table.Summary.Cell index={4}>${totalMktVal.toFixed(2)}</Table.Summary.Cell>
+                        <Table.Summary.Cell index={5}>
+                          <span style={{ color: totalPnl >= 0 ? '#3f8600' : '#cf1322' }}>${totalPnl.toFixed(2)}</span>
+                        </Table.Summary.Cell>
+                        <Table.Summary.Cell index={6}>
+                          <span style={{ color: totalPnlPct >= 0 ? '#3f8600' : '#cf1322' }}>{totalPnlPct.toFixed(2)}%</span>
+                        </Table.Summary.Cell>
+                      </Table.Summary.Row>
+                    );
+                  }}
                 />
               )}
             </Card>
