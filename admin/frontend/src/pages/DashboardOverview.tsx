@@ -2,7 +2,7 @@ import { Card, Tag, Row, Col, Switch, Select, Spin, Empty, Space, Typography } f
 const { Text } = Typography;
 import { useEffect, useState, useCallback } from 'react';
 import ReactECharts from 'echarts-for-react';
-import { api } from '../api';
+import { api, toLocal } from '../api';
 
 export default function DashboardOverview() {
   const [experiments, setExperiments] = useState<any[]>([]);
@@ -229,7 +229,7 @@ function makeCandlestickOption(data: any[], symbol: string) {
   const dates = data.map((d: any) => formatTime(d.ts ?? d.time ?? ''));
   const fullDates = data.map((d: any) => {
     const t = d.ts ?? d.time ?? '';
-    return t.replace('T', ' ').replace(/\+00:00$/, '').slice(0, 19);
+    return toLocal(t);
   });
   // Show sparse labels (every Nth point)
   const labelInterval = Math.max(1, Math.floor(data.length / 10));

@@ -25,7 +25,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../api';
+import { api, toLocal } from '../api';
 
 interface CronJob {
   index?: number;
@@ -286,7 +286,7 @@ const CronJobs: React.FC = () => {
       dataIndex: 'last_run',
       key: 'last_run',
       width: 160,
-      render: (_, r) => r.last_run?.slice(0, 19)?.replace('T', ' ') || '—',
+      render: (_, r) => toLocal(r.last_run),
     },
     {
       title: 'Enabled',

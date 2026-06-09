@@ -23,7 +23,7 @@ class Task(Base):
     status = Column(String(20), nullable=False, default="pending", index=True)
     params = Column(JSON, nullable=True)
     result = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
 

@@ -15,7 +15,7 @@ import {
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
-import { api } from '../api';
+import { api, toLocal } from '../api';
 import DashboardProd from './DashboardProd';
 
 const { Text } = Typography;
@@ -397,8 +397,8 @@ const ProdLabTab: React.FC = () => {
   const runColumns: ColumnsType<RunRecord> = [
     { title: 'Run ID', dataIndex: 'run_id', key: 'run_id', width: 200 },
     { title: 'Status', dataIndex: 'status', key: 'status', width: 90, render: (_, r) => <Tag color={statusColor[r.status] || 'default'}>{r.status}</Tag> },
-    { title: 'Started', dataIndex: 'started_at', key: 'started_at', width: 160, render: (_, r) => r.started_at?.slice(0,19) || '-' },
-    { title: 'Ended', dataIndex: 'ended_at', key: 'ended_at', width: 160, render: (_, r) => r.ended_at?.slice(0,19) || '-' },
+    { title: 'Started', dataIndex: 'started_at', key: 'started_at', width: 160, render: (_, r) => toLocal(r.started_at) || '-' },
+    { title: 'Ended', dataIndex: 'ended_at', key: 'ended_at', width: 160, render: (_, r) => toLocal(r.ended_at) || '-' },
     {
       title: '', key: 'actions', width: 340,
       render: (_, r) => {

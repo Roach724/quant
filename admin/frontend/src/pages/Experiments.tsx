@@ -15,7 +15,7 @@ import {
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
-import { api } from '../api';
+import { api, toLocal } from '../api';
 
 const { Text } = Typography;
 
@@ -147,8 +147,8 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
       title: 'Size', dataIndex: 'size', key: 'size', width: 100,
       render: (_, r) => `${(r.size / 1024).toFixed(1)} KB`,
     },
-    { title: '创建时间', dataIndex: 'created_at', width: 160, render: (_, r) => r.created_at?.slice(0, 19) || '-' },
-    { title: '更新时间', dataIndex: 'updated_at', width: 160, render: (_, r) => r.updated_at?.slice(0, 19) || '-' },
+    { title: '创建时间', dataIndex: 'created_at', width: 160, render: (_, r) => toLocal(r.created_at) || '-' },
+    { title: '更新时间', dataIndex: 'updated_at', width: 160, render: (_, r) => toLocal(r.updated_at) || '-' },
     {
       title: 'Actions', key: 'actions', width: 200,
       render: (_, r) => (
@@ -349,8 +349,8 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
         ? <Tag color="green">🔵 活跃 Run</Tag>
         : <Tag>⚪ 无活跃 Run</Tag>,
     },
-    { title: '创建时间', dataIndex: 'created_at', width: 100, render: (_, r) => r.created_at?.slice(0, 19) || '-' },
-    { title: '最新Run', dataIndex: 'latest_run_at', width: 160, render: (_, r) => r.latest_run_at?.slice(0, 16) || '-' },
+    { title: '创建时间', dataIndex: 'created_at', width: 100, render: (_, r) => toLocal(r.created_at) || '-' },
+    { title: '最新Run', dataIndex: 'latest_run_at', width: 160, render: (_, r) => toLocal(r.latest_run_at) || '-' },
     {
       title: '累计 Run', dataIndex: 'total_runs', key: 'total_runs', width: 50,
     },
@@ -445,8 +445,8 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   const runColumns: ColumnsType<RunRecord> = [
     { title: 'Run ID', dataIndex: 'run_id', key: 'run_id', width: 200 },
     { title: 'Status', dataIndex: 'status', key: 'status', width: 90, render: (_, r) => <Tag color={statusColor[r.status] || 'default'}>{r.status}</Tag> },
-    { title: 'Started', dataIndex: 'started_at', key: 'started_at', width: 160, render: (_, r) => r.started_at?.slice(0,19) || '-' },
-    { title: 'Ended', dataIndex: 'ended_at', key: 'ended_at', width: 160, render: (_, r) => r.ended_at?.slice(0,19) || '-' },
+    { title: 'Started', dataIndex: 'started_at', key: 'started_at', width: 160, render: (_, r) => toLocal(r.started_at) || '-' },
+    { title: 'Ended', dataIndex: 'ended_at', key: 'ended_at', width: 160, render: (_, r) => toLocal(r.ended_at) || '-' },
     {
       title: '', key: 'actions', width: 340,
       render: (_, r) => {
