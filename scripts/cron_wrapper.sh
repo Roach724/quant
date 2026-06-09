@@ -30,7 +30,7 @@ ENV="${QUANT_ENV:-prod}"
 
 # Primary log path (unified structured)
 LOG_DIR="/var/log/quant/${ENV}/${MODULE}"
-LOGFILE="${LOG_DIR}/${JOB_NAME}.log"
+LOGFILE="${LOG_DIR}/${JOB_NAME}_$(date +%Y%m%d_%H%M%S).log"
 
 # Fallback: legacy path
 LEGACY_DIR="/home/quant/logs"

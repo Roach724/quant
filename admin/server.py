@@ -1054,6 +1054,17 @@ CRON_REGISTRY = os.environ.get(
 )
 
 
+def _normalize_to_wrapper(command: str, job_name: str) -> str:
+    """Convert raw cron command to cron_wrapper.sh format with timestamped logging."""
+    cmd = command.strip()
+    if "cron_wrapper.sh" in cmd:
+        return cmd
+    if cmd.startswith("docker exec quant "):
+        cmd = cmd[len("docker exec quant "):]
+    cmd = re.sub(r'\s*>>\s*\S+\s*(2>&1)?\s*$', '', cmd)
+    return f"docker exec quant /opt/quant-prod/scripts/cron_wrapper.sh {job_name} {cmd}"
+
+
 @app.get("/api/admin/cron")
 def admin_cron_list():
     """Read cron jobs from persistent file (/var/data/crontab.txt)."""
@@ -1146,7 +1157,7 @@ def admin_cron_save(jobs: list[dict]):
             "name": j.get("name", ""),
             "description": j.get("description", ""),
             "schedule": j.get("schedule", ""),
-            "command": j.get("command", ""),
+            "command": _normalize_to_wrapper(j.get("command", ""), j.get("name", "")),
             "enabled": j.get("enabled", False),
         } for j in jobs]
         os.makedirs(os.path.dirname(resolved), exist_ok=True)
@@ -1183,7 +1194,7 @@ def admin_cron_add(job: dict = Body(...)):
         "name": job.get("name", ""),
         "description": job.get("description", ""),
         "schedule": job.get("schedule", ""),
-        "command": job.get("command", ""),
+        "command": _normalize_to_wrapper(job.get("command", ""), job.get("name", "")),
         "enabled": job.get("enabled", True),
     })
     with open(resolved, "w") as f:
@@ -1214,21 +1225,15 @@ def admin_cron_update(index: int, job: dict = Body(...)):
 @app.post("/api/admin/cron/run")
 def admin_cron_run(command: str = Query(""), name: str = Query("")):
     """Manually trigger a cron command via task queue."""
-    # Strip docker exec quant prefix (we're already inside the container)
-    cmd = command.strip()
+    # Normalize to cron_wrapper.sh for consistent timestamped logging
+    cmd = _normalize_to_wrapper(command.strip(), name or "cron")
     if cmd.startswith("docker exec quant "):
         cmd = cmd[len("docker exec quant "):]
-    # Strip crontab log redirect (our wrapper handles logging)
-    if ">>" in cmd:
-        cmd = cmd.split(">>")[0].strip()
-    # Wrap with timestamped log redirect
     log_name = name or "cron"
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    log_file = f"/var/log/quant/prod/cron/{log_name}_{ts}.log"
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
-    wrapped = f"({cmd}) >> {log_file} 2>&1"
+    log_file = f"{log_name}_{ts}.log"
     session = get_session()
-    task = Task(type="shell", params={"cmd": wrapped, "cron_command": command}, status="pending")
+    task = Task(type="shell", params={"cmd": cmd, "cron_command": command}, status="pending")
     session.add(task)
     session.commit()
     return {"task_id": task.id, "log_file": log_name + "_" + ts + ".log"}
