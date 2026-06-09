@@ -69,8 +69,10 @@ jobs:
 
                 echo '=== Deploying ==='
                 TAG=${{ github.sha }} docker compose -f docker/docker-compose.yml pull &&
-                docker compose -f docker/docker-compose.yml up -d --force-recreate &&
-                sleep 10 &&
+                docker compose -f docker/docker-compose.yml stop &&
+                docker compose -f docker/docker-compose.yml rm -f &&
+                TAG=${{ github.sha }} docker compose -f docker/docker-compose.yml up -d &&
+                sleep 15 &&
                 curl -f http://localhost:8091/api/health" 2>&1; then
               echo "::notice::Deploy succeeded on attempt $i"
               exit 0
