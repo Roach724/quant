@@ -4,42 +4,42 @@
       "name": "factor-tech-us",
       "description": "美股技术因子增量计算（周一至五 6:00 UTC）",
       "schedule": "0 6 * * 1-5",
-      "command": "cd /opt/quant-prod && .venv/bin/python3 scripts/compute_factors_batch.py --incremental --source tech --market us >> /var/log/quant/prod/cron/factor_tech_us.log 2>&1",
+      "command": "cd /opt/quant-prod && /opt/quant-prod/scripts/cron_wrapper.sh factor-tech-us /opt/quant-prod/.venv/bin/python3.12 /opt/quant-prod/scripts/compute_factors_batch.py --incremental --source tech --market us",
       "enabled": true
     },
     {
       "name": "factor-tech-hk",
       "description": "港股技术因子增量计算（周一至五 6:00 UTC）",
       "schedule": "0 6 * * 1-5",
-      "command": "cd /opt/quant-prod && .venv/bin/python3 scripts/compute_factors_batch.py --incremental --source tech --market hk >> /var/log/quant/prod/cron/factor_tech_hk.log 2>&1",
+      "command": "cd /opt/quant-prod && /opt/quant-prod/scripts/cron_wrapper.sh factor-tech-hk /opt/quant-prod/.venv/bin/python3.12 /opt/quant-prod/scripts/compute_factors_batch.py --incremental --source tech --market hk",
       "enabled": true
     },
     {
       "name": "factor-fundamental-us",
       "description": "因子计算: fundamental/us",
       "schedule": "0 2 * * 0",
-      "command": "cd /opt/quant-prod && .venv/bin/python3 scripts/compute_factors_batch.py --source fundamental --market us >> /var/log/quant/prod/cron/factor_f10_us.log 2>&1",
+      "command": "cd /opt/quant-prod && /opt/quant-prod/scripts/cron_wrapper.sh factor-fundamental-us /opt/quant-prod/.venv/bin/python3.12 /opt/quant-prod/scripts/compute_factors_batch.py --source fundamental --market us",
       "enabled": true
     },
     {
       "name": "factor-fundamental-hk",
       "description": "因子计算: fundamental/hk",
       "schedule": "0 2 * * 0",
-      "command": "cd /opt/quant-prod && .venv/bin/python3 scripts/compute_factors_batch.py --source fundamental --market hk >> /var/log/quant/prod/cron/factor_f10_hk.log 2>&1",
+      "command": "cd /opt/quant-prod && /opt/quant-prod/scripts/cron_wrapper.sh factor-fundamental-hk /opt/quant-prod/.venv/bin/python3.12 /opt/quant-prod/scripts/compute_factors_batch.py --source fundamental --market hk",
       "enabled": true
     },
     {
       "name": "collect-us_rating_summary",
       "description": "",
       "schedule": "30 3 * * *",
-      "command": "cd /opt/quant-prod && .venv/bin/python3 -m collectors.collect_futu_factors --table us_rating_summary >> /var/log/quant/prod/cron/collect_rating.log 2>&1",
+      "command": "cd /opt/quant-prod && /opt/quant-prod/scripts/cron_wrapper.sh collect-us_rating_summary /opt/quant-prod/.venv/bin/python3.12 -m collectors.collect_futu_factors --table us_rating_summary",
       "enabled": true
     },
     {
       "name": "collect-us_insider_trade",
       "description": "",
       "schedule": "0 4 * * *",
-      "command": "cd /opt/quant-prod && .venv/bin/python3 -m collectors.collect_futu_factors --table us_insider_trade >> /var/log/quant/prod/cron/collect_insider.log 2>&1",
+      "command": "cd /opt/quant-prod && /opt/quant-prod/scripts/cron_wrapper.sh collect-us_insider_trade /opt/quant-prod/.venv/bin/python3.12 -m collectors.collect_futu_factors --table us_insider_trade",
       "enabled": true
     },
     {
