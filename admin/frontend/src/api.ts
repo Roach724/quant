@@ -10,3 +10,11 @@ export const api = {
   put: (path: string, data?: any) => axios.put(`${API_BASE}${path}`, data).then((r) => r.data),
   del: (path: string) => axios.delete(`${API_BASE}${path}`).then((r) => r.data),
 };
+
+export function toLocal(iso?: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}

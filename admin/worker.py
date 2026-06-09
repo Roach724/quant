@@ -6,7 +6,7 @@ via subprocess, and updates the row to "done" / "failed".
 
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from admin.models import get_session, Task
 
@@ -24,7 +24,7 @@ def run_one(task: Task) -> None:
             return
 
         t.status = "running"
-        t.started_at = datetime.utcnow()
+        t.started_at = datetime.now(timezone.utc)
         session.commit()
 
         command = (t.params or {}).get("cmd") or (t.params or {}).get("command", "echo no command")
@@ -41,18 +41,18 @@ def run_one(task: Task) -> None:
 
         t.status = "completed" if proc.returncode == 0 else "failed"
         t.result = stdout.strip() or stderr.strip()
-        t.finished_at = datetime.utcnow()
+        t.finished_at = datetime.now(timezone.utc)
         session.commit()
 
     except subprocess.TimeoutExpired:
         t.status = "failed"
         t.result = "Timeout after 300s"
-        t.finished_at = datetime.utcnow()
+        t.finished_at = datetime.now(timezone.utc)
         session.commit()
     except Exception as exc:
         t.status = "failed"
         t.result = str(exc)
-        t.finished_at = datetime.utcnow()
+        t.finished_at = datetime.now(timezone.utc)
         session.commit()
     finally:
         session.close()

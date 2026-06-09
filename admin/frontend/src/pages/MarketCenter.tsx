@@ -144,10 +144,9 @@ function IndexChartCard({ market, symbol }: { market: string; symbol: string }) 
   // ── 日线 chart ──
   const loadDaily = useCallback(async () => {
     setLoadingDaily(true);
-    const limit = daysDaily * bpd;
     try {
       const data = await api.get(
-        `/api/admin/dashboard/market/${market}/${symbol}?limit=${limit}&days=${daysDaily}`,
+        `/api/admin/dashboard/market/${market}/${symbol}?limit=${daysDaily}&days=${daysDaily}&freq=1d`,
       );
       setDataDaily(Array.isArray(data) ? data : []);
     } catch (e) {
@@ -284,10 +283,9 @@ function StocksPanel({ market }: { market: string }) {
   const loadDaily = useCallback(async () => {
     if (!symbol) return;
     setLoadingDaily(true);
-    const limit = daysDaily * bpd;
     try {
       const data = await api.get(
-        `/api/admin/dashboard/market/${market}/${symbol}?limit=${limit}&days=${daysDaily}`,
+        `/api/admin/dashboard/market/${market}/${symbol}?limit=${daysDaily}&days=${daysDaily}&freq=1d`,
       );
       setDataDaily(Array.isArray(data) ? data : []);
     } catch (e) {
