@@ -1206,12 +1206,19 @@ def admin_cron_update(index: int, job: dict = Body(...)):
 @app.post("/api/admin/cron/run")
 def admin_cron_run(command: str = Query(""), name: str = Query("")):
     """Manually trigger a cron command via task queue."""
+    # Strip docker exec quant prefix (we're already inside the container)
+    cmd = command.strip()
+    if cmd.startswith("docker exec quant "):
+        cmd = cmd[len("docker exec quant "):]
+    # Strip crontab log redirect (our wrapper handles logging)
+    if ">>" in cmd:
+        cmd = cmd.split(">>")[0].strip()
     # Wrap with timestamped log redirect
     log_name = name or "cron"
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     log_file = f"/var/log/quant/prod/cron/{log_name}_{ts}.log"
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
-    wrapped = f"({command}) >> {log_file} 2>&1"
+    wrapped = f"({cmd}) >> {log_file} 2>&1"
     session = get_session()
     task = Task(type="shell", params={"cmd": wrapped, "cron_command": command}, status="pending")
     session.add(task)
