@@ -71,11 +71,21 @@ def write_rows_to_bq(
         logger.info("Empty DataFrame, skipping BQ write for %s.%s", dataset, table_name)
         return 0
 
+    # Strip columns not in BQ schema to avoid insert errors
+    client = bigquery.Client(project=project)
+    table_ref = _bq_table_ref(table_name, dataset, project)
+    try:
+        table = client.get_table(table_ref)
+        valid_cols = {s.name for s in table.schema}
+        extra = set(df.columns) - valid_cols
+        if extra:
+            df = df.drop(columns=list(extra))
+            logger.warning("Dropped columns not in BQ schema: %s", sorted(extra))
+    except Exception:
+        pass  # Schema lookup failed, try anyway
+
     rows = _df_to_rows(df)
     total = len(rows)
-    table_ref = _bq_table_ref(table_name, dataset, project)
-
-    client = bigquery.Client(project=project)
     logger.info("Writing %d rows to %s", total, table_ref)
 
     written = 0

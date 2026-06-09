@@ -1056,7 +1056,8 @@ CRON_REGISTRY = os.environ.get(
 
 @app.get("/api/admin/cron")
 def admin_cron_list():
-    """Read system crontab, merge with registry for names/descriptions."""
+    """Read cron jobs from persistent file (/var/data/crontab.txt)."""
+    Crontab_File = "/var/data/crontab.txt"
     # Load registry for metadata (names, descriptions)
     registry_jobs = {}
     resolved = os.path.abspath(CRON_REGISTRY)
@@ -1071,9 +1072,10 @@ def admin_cron_list():
         except Exception:
             pass
 
-    # Read system crontab (source of truth)
-    r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
-    raw = r.stdout.strip()
+    # Read from persistent crontab file
+    if not os.path.isfile(Crontab_File):
+        return list(registry_jobs.values()) if registry_jobs else []
+    raw = open(Crontab_File).read().strip()
     if not raw:
         return list(registry_jobs.values()) if registry_jobs else []
 
@@ -1119,10 +1121,11 @@ def admin_cron_list():
 
 @app.post("/api/admin/cron")
 def admin_cron_save(jobs: list[dict]):
-    """Save updated cron jobs — write back to registry if it exists, else crontab."""
+    """Save cron jobs — write to persistent file + sync to crontab."""
+    Crontab_File = "/var/data/crontab.txt"
     resolved = os.path.abspath(CRON_REGISTRY)
 
-    # If registry exists, save back to it
+    # Save registry metadata if it exists
     if os.path.isfile(resolved):
         out = [{
             "name": j.get("name", ""),
@@ -1134,9 +1137,8 @@ def admin_cron_save(jobs: list[dict]):
         os.makedirs(os.path.dirname(resolved), exist_ok=True)
         with open(resolved, "w") as f:
             _json.dump({"jobs": out}, f, ensure_ascii=False, indent=2)
-        return {"status": "ok"}
 
-    # Fallback: system crontab
+    # Write crontab lines to persistent file
     lines = []
     for j in jobs:
         if j.get("raw"):
@@ -1144,9 +1146,11 @@ def admin_cron_save(jobs: list[dict]):
         elif j.get("enabled"):
             lines.append(f"{j['schedule']} {j['command']}")
     crontab_content = "\n".join(lines) + "\n"
-    proc = subprocess.run(["crontab", "-"], input=crontab_content, capture_output=True, text=True)
-    if proc.returncode != 0:
-        return {"error": proc.stderr}, 400
+    with open(Crontab_File, "w") as f:
+        f.write(crontab_content)
+
+    # Sync to system crontab (for cron daemon inside container)
+    subprocess.run(["crontab", Crontab_File], capture_output=True)
     return {"status": "ok"}
 
 
@@ -2144,12 +2148,22 @@ def admin_ml_train(body: dict = Body(...)):
     path = _ML_CONFIG_DIR / fname
     if not path.exists():
         raise HTTPException(404, detail=f"Config '{config_name}' not found")
+    # Read model_name from config YAML for log file naming
+    import yaml as _yaml
+    model_name = config_name.replace(".yaml", "")
+    try:
+        cfg = _yaml.safe_load(path.read_text()) or {}
+        registry_name = cfg.get("registry", {}).get("model_name", "")
+        if registry_name:
+            model_name = registry_name
+    except Exception:
+        pass
     cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant && PYTHONPATH=/opt/quant "
            f"python3 -c \"import logging; logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s [%(name)s] %(message)s'); "
            f"from ml.pipeline import TrainPipeline; "
            f"p = TrainPipeline('{path}'); p.run(skip_tuning={skip_tuning})\" "
            f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
-           f"| tee -a /var/log/quant/prod/train/{config_name}_$(date -u +%Y%m%d_%H%M%S).log")
+           f"| tee -a /var/log/quant/prod/train/{model_name}_$(date -u +%Y%m%d_%H%M%S).log")
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd, "config": config_name}, status="pending")
     session.add(task)
@@ -2244,6 +2258,7 @@ async def dash_experiments(type: str = ""):
     prefix_filter = ""
     if type:
         prefix_filter = f"AND exp_id LIKE '{type}_%'"
+    # 1. Query BQ for experiments with equity data
     query = f"""
         SELECT * EXCEPT (rn)
         FROM (
@@ -2255,16 +2270,32 @@ async def dash_experiments(type: str = ""):
         WHERE rn = 1
         ORDER BY ts DESC
     """
+    equity_map: dict[str, dict] = {}
     try:
         rows = client.query(query).result()
-        return [{"exp_id": row.exp_id, "ts": _db_serialize(row.ts),
-                 "bar": row.bar, "equity": row.equity, "cash": row.cash,
-                 "portfolio_value": row.portfolio_value, "daily_pnl": row.daily_pnl,
-                 "drawdown": row.drawdown}
-                for row in rows]
+        for row in rows:
+            equity_map[row.exp_id] = {
+                "exp_id": row.exp_id, "ts": _db_serialize(row.ts),
+                "bar": row.bar, "equity": row.equity, "cash": row.cash,
+                "portfolio_value": row.portfolio_value, "daily_pnl": row.daily_pnl,
+                "drawdown": row.drawdown,
+            }
     except Exception as exc:
         logging.getLogger(__name__).error("dash_experiments query error: %s", exc)
-        return []
+
+    # 2. Also include registry experiments that have no equity yet
+    from live.experiment_manager import ExperimentManager
+    mgr = ExperimentManager()
+    for exp in mgr.list(exp_type=type or None):
+        if "test" in exp.id:
+            continue
+        if exp.id not in equity_map:
+            equity_map[exp.id] = {
+                "exp_id": exp.id, "ts": exp.created_at,
+                "bar": 0, "equity": 0, "cash": 0,
+                "portfolio_value": 0, "daily_pnl": 0, "drawdown": 0,
+            }
+    return sorted(equity_map.values(), key=lambda x: x["ts"], reverse=True)
 
 
 # ---------------------------------------------------------------------------
