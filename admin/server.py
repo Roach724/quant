@@ -1115,14 +1115,22 @@ def admin_cron_list():
                     meta = reg_job
                     break
             job_name = meta.get("name", "")
-            # Fallback: extract from cron_wrapper.sh argument
-            if not job_name and "cron_wrapper.sh" in cmd:
+            # Fallback: extract name from command
+            if not job_name:
                 wrapper_parts = cmd.split()
+                if ">>" in cmd:
+                    wrapper_parts = cmd.split(">>")[0].split()  # strip log redirect
                 for j, p in enumerate(wrapper_parts):
                     if p.endswith("cron_wrapper.sh") and j + 1 < len(wrapper_parts):
                         job_name = wrapper_parts[j + 1]
                         break
-            latest = log_files.get(job_name)
+                # For direct commands, use script basename
+                if not job_name:
+                    for p in reversed(wrapper_parts):
+                        if p.endswith(".py") or p.endswith(".sh"):
+                            job_name = p.rsplit("/", 1)[-1].replace(".py", "").replace(".sh", "")
+                            break
+            latest = log_files.get(job_name) or log_files.get(job_name.replace("-", "_"))
             jobs.append({
                 "index": i,
                 "raw": line,
