@@ -958,7 +958,7 @@ def admin_data_backfill(
         log_file = f"/var/log/quant/prod/backfill/{mkt}_{freq}.log"
         cmd = (f"{mkdir_log} && cd /opt/quant && PYTHONPATH=/opt/quant "
                f"python3 collectors/backfill.py "
-               f"--symbols \"{symbols_str}\" --frequency {freq} --source {src} --start {start} --end {end} "
+               f"--symbols \"{symbols_str}\" --frequency {freq} --source {src} --market {mkt} --start {start} --end {end} "
                f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
                f"| tee -a {log_file}")
         session = get_session()
@@ -2797,26 +2797,35 @@ async def dash_market_symbols(market: str):
 @app.get("/api/admin/dashboard/market/{market}/{symbol}")
 async def dash_market_bars(market: str, symbol: str, limit: int = 78, days: int = 2, freq: str = "5m"):
     client = _DB_BQ()
-    # Detect index symbols → route to _bars_index_ table
     cfg = _load_symbols_config()
     index_syms = cfg.get("indices", {}).get(market, {}).get("symbols", [])
     is_index = symbol in index_syms or (market == "us" and symbol.startswith("^"))
     suffix = f"_index_{freq}" if is_index else f"_{freq}"
     table = _DB_TABLE(f"{market}_bars{suffix}")
     full_symbol = symbol if is_index else f"{'US' if market == 'us' else 'HK'}.{symbol}"
-    if market == "hk":
+    window_days = max(days, 2) + 2
+
+    # Determine time expression based on freq + index type
+    if freq == "1d" and is_index:
+        ts_expr = "TIMESTAMP(date)"
+        window_clause = f"date >= DATE_SUB(CURRENT_DATE(), INTERVAL {window_days} DAY)"
+    elif freq == "1d":
+        ts_expr = "timestamp"
+        window_clause = f"timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {window_days} DAY)"
+    elif market == "hk":
         ts_expr = "TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)"
+        window_clause = f"{ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {window_days} DAY)"
     else:
         ts_expr = 'TIMESTAMP(DATETIME(timestamp), "America/New_York")'
-    # Use requested days + 2 extra to handle weekends/holidays
-    window_days = max(days, 2) + 2
+        window_clause = f"{ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {window_days} DAY)"
+
     query = f"""
         WITH dedup AS (
           SELECT {ts_expr} AS timestamp, open, high, low, close, volume,
-            ROW_NUMBER() OVER (PARTITION BY symbol, timestamp ORDER BY _ingest_time DESC NULLS LAST) AS rn
+            ROW_NUMBER() OVER (PARTITION BY symbol, {ts_expr} ORDER BY _ingest_time DESC NULLS LAST) AS rn
           FROM `{table}`
           WHERE symbol = '{full_symbol}'
-            AND {ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {window_days} DAY)
+            AND {window_clause}
         )
         SELECT timestamp, open, high, low, close, volume
         FROM dedup WHERE rn = 1

@@ -21,7 +21,7 @@ class FutuStockAdapter:
     Supports both HK (LV2) and US (LV3: NasBasic+TotalView+Arcabook).
     """
 
-    market = "MIXED"
+    market = "MIXED"  # resolved per-symbol in fetch_bars via prefix (HK./US.)
 
     _FREQ_MAP = {
         "1m": KLType.K_1M,
