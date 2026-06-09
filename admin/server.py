@@ -1104,6 +1104,13 @@ def admin_cron_list():
                     meta = reg_job
                     break
             job_name = meta.get("name", "")
+            # Fallback: extract from cron_wrapper.sh argument
+            if not job_name and "cron_wrapper.sh" in cmd:
+                wrapper_parts = cmd.split()
+                for j, p in enumerate(wrapper_parts):
+                    if p.endswith("cron_wrapper.sh") and j + 1 < len(wrapper_parts):
+                        job_name = wrapper_parts[j + 1]
+                        break
             latest = log_files.get(job_name)
             jobs.append({
                 "index": i,
