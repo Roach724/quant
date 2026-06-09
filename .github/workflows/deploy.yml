@@ -60,7 +60,7 @@ jobs:
                 set -e
                 gcloud auth configure-docker asia-east2-docker.pkg.dev --quiet
                 cd /opt/quant-prod &&
-                sudo -u quant git stash && sudo -u quant git pull origin stable && sudo -u quant git stash pop || true
+                sudo -u quant rm -f scripts/pre_deploy_stop.py; sudo -u quant git stash -u && sudo -u quant git pull origin stable; sudo -u quant git stash drop 2>/dev/null; true
 
                 # ── Graceful shutdown ──
                 echo '=== Stopping experiments and ws_collector ==='
