@@ -117,7 +117,7 @@ def compute_index_1d(market: str, date_str: str) -> int:
     query = f"""
         SELECT
           {norm_expr} as symbol,
-          PARSE_TIMESTAMP('%Y-%m-%d', '{date_str}') as timestamp,
+          '{date_str}' as date,
           ARRAY_AGG(open ORDER BY bar_ts LIMIT 1)[OFFSET(0)] as open,
           MAX(high) as high,
           MIN(low) as low,
@@ -150,7 +150,7 @@ def compute_index_1d(market: str, date_str: str) -> int:
 
     # Skip symbols that already have a bar for this date
     existing = client.query(
-        f"SELECT DISTINCT symbol FROM `{table_1d}` WHERE timestamp = TIMESTAMP('{date_str}')"
+        f"SELECT DISTINCT symbol FROM `{table_1d}` WHERE date = '{date_str}'"
     ).to_dataframe()
     existing_set = set(existing["symbol"].tolist()) if not existing.empty else set()
     df_new = df[~df["symbol"].isin(existing_set)]
