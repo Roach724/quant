@@ -1168,13 +1168,17 @@ class LiveRunner:
                                 portfolio.positions[tracked.symbol] = pos
                             delta = tracked.filled_qty if tracked.side == "buy" else -tracked.filled_qty
                             pos.add(delta, price)
+                            # Commission (mirrors _process_signal)
+                            exec_price = price * (1.0 + self._slippage_bps / 10000.0) if tracked.side == "buy" else price * (1.0 - self._slippage_bps / 10000.0)
+                            notional = tracked.filled_qty * exec_price
+                            commission = max(notional * self._commission_bps / 10000.0, self._min_commission)
                             if tracked.side == "buy":
-                                portfolio.cash -= price * tracked.filled_qty
+                                portfolio.cash -= price * tracked.filled_qty + commission
                             else:
-                                portfolio.cash += price * tracked.filled_qty
+                                portfolio.cash += price * tracked.filled_qty - commission
                             self.observer.record_trade(
                                 ts, tracked.symbol, tracked.side,
-                                int(tracked.filled_qty), price,
+                                int(tracked.filled_qty), price, commission,
                             )
                             if hasattr(self, '_dash_observer'):
                                 self._dash_observer.record_trade(
@@ -1183,7 +1187,7 @@ class LiveRunner:
                                     side=tracked.side,
                                     qty=tracked.filled_qty,
                                     price=price,
-                                    commission=getattr(tracked, 'commission', 0),
+                                    commission=commission,
                                     run_id=self.config.get("_run_id", ""),
                                 )
 
