@@ -103,15 +103,8 @@ def compute_index_1d(market: str, date_str: str) -> int:
 
     client = bigquery.Client(project=PROJECT)
 
-    # Normalize symbol: strip market prefix + (HK only) zero-pad to 5 digits
-    if market == "hk":
-        norm_expr = (
-            f"CONCAT('HK.', "
-            f"LPAD(REGEXP_REPLACE(REGEXP_REPLACE(symbol, r'^HK\\.', ''), r'^0+', ''), 5, '0'))"
-        )
-    else:
-        # US index symbols keep their ticker format (^IXIC, ^GSPC, etc.)
-        norm_expr = "symbol"
+    # Index symbols keep their original format (HK.800000, ^IXIC, etc.)
+    norm_expr = "symbol"
 
     # Aggregate 5m → 1d
     query = f"""
