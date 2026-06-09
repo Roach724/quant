@@ -1056,7 +1056,8 @@ CRON_REGISTRY = os.environ.get(
 
 @app.get("/api/admin/cron")
 def admin_cron_list():
-    """Read system crontab, merge with registry for names/descriptions."""
+    """Read cron jobs from persistent file (/var/data/crontab.txt)."""
+    Crontab_File = "/var/data/crontab.txt"
     # Load registry for metadata (names, descriptions)
     registry_jobs = {}
     resolved = os.path.abspath(CRON_REGISTRY)
@@ -1071,9 +1072,10 @@ def admin_cron_list():
         except Exception:
             pass
 
-    # Read system crontab (source of truth)
-    r = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
-    raw = r.stdout.strip()
+    # Read from persistent crontab file
+    if not os.path.isfile(Crontab_File):
+        return list(registry_jobs.values()) if registry_jobs else []
+    raw = open(Crontab_File).read().strip()
     if not raw:
         return list(registry_jobs.values()) if registry_jobs else []
 
@@ -1086,7 +1088,6 @@ def admin_cron_list():
         parts = line.split(None, 5)
         if len(parts) >= 6:
             cmd = parts[5].strip()
-            # Match by prefix (crontab may add >> redirect that registry lacks)
             meta = {}
             for reg_cmd, reg_job in registry_jobs.items():
                 if cmd.startswith(reg_cmd) or reg_cmd.startswith(cmd.split(">>")[0].strip()):
@@ -1106,10 +1107,11 @@ def admin_cron_list():
 
 @app.post("/api/admin/cron")
 def admin_cron_save(jobs: list[dict]):
-    """Save updated cron jobs — write back to registry if it exists, else crontab."""
+    """Save cron jobs — write to persistent file + sync to crontab."""
+    Crontab_File = "/var/data/crontab.txt"
     resolved = os.path.abspath(CRON_REGISTRY)
 
-    # If registry exists, save back to it
+    # Save registry metadata if it exists
     if os.path.isfile(resolved):
         out = [{
             "name": j.get("name", ""),
@@ -1121,9 +1123,8 @@ def admin_cron_save(jobs: list[dict]):
         os.makedirs(os.path.dirname(resolved), exist_ok=True)
         with open(resolved, "w") as f:
             _json.dump({"jobs": out}, f, ensure_ascii=False, indent=2)
-        return {"status": "ok"}
 
-    # Fallback: system crontab
+    # Write crontab lines to persistent file
     lines = []
     for j in jobs:
         if j.get("raw"):
@@ -1131,9 +1132,11 @@ def admin_cron_save(jobs: list[dict]):
         elif j.get("enabled"):
             lines.append(f"{j['schedule']} {j['command']}")
     crontab_content = "\n".join(lines) + "\n"
-    proc = subprocess.run(["crontab", "-"], input=crontab_content, capture_output=True, text=True)
-    if proc.returncode != 0:
-        return {"error": proc.stderr}, 400
+    with open(Crontab_File, "w") as f:
+        f.write(crontab_content)
+
+    # Sync to system crontab (for cron daemon inside container)
+    subprocess.run(["crontab", Crontab_File], capture_output=True)
     return {"status": "ok"}
 
 
