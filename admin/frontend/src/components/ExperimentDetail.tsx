@@ -3,7 +3,7 @@ import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
-import { api } from '../api';
+import { api, toLocal } from '../api';
 
 interface Props {
   type: 'live' | 'prod' | 'debug' | 'paper';
@@ -150,7 +150,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
               optionFilterProp="label"
               options={runs.map((r: any) => ({
                 value: r.run_id,
-                label: `${r.run_id}${r.created_at ? ' — ' + r.created_at?.slice(0, 19) : ''}`,
+                label: `${r.run_id}${r.created_at ? ' — ' + toLocal(r.created_at) : ''}`,
               }))}
             />
           </Col>
@@ -300,7 +300,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
                   pagination={{ pageSize: 50, showSizeChanger: true, pageSizeOptions: ['20', '50', '100', '200'] }}
                   scroll={{ x: 600 }}
                   columns={[
-                    { title: 'Time', dataIndex: 'ts', width: 170, render: (v: string) => v?.slice(0, 19) },
+                    { title: 'Time', dataIndex: 'ts', width: 170, render: (v: string) => toLocal(v) },
                     { title: 'Bar', dataIndex: 'bar', width: 60 },
                     { title: 'Symbol', dataIndex: 'symbol', width: 80 },
                     { title: 'Side', dataIndex: 'side', width: 60, render: (v: string) => ({ children: v?.toUpperCase(), props: { style: { color: v === 'buy' ? '#3f8600' : '#cf1322', fontWeight: 600 } } }) },
@@ -321,7 +321,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
 /* ── ECharts options ── */
 
 function makeEquityOption(data: any[]) {
-  const ts = data.map((d: any) => d.ts?.slice(0, 19) ?? '');
+  const ts = data.map((d: any) => toLocal(d.ts) ?? '');
   const equity = data.map((d: any) => Number(d.equity ?? 0));
   const cash = data.map((d: any) => Number(d.cash ?? 0));
   const posValue = data.map((_: any, i: number) => equity[i] - cash[i]);
@@ -375,7 +375,7 @@ function makeEquityOption(data: any[]) {
 }
 
 function makeDrawdownOption(data: any[]) {
-  const ts = data.map((d: any) => d.ts?.slice(0, 19) ?? '');
+  const ts = data.map((d: any) => toLocal(d.ts) ?? '');
   const values = data.map((d: any) => Number(d.drawdown ?? 0) * 100);
   const yMin = Math.min(...values, 0);
   // Auto-scale with 10% padding below worst drawdown
