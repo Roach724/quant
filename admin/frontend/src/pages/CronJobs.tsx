@@ -70,7 +70,24 @@ const CronJobs: React.FC = () => {
       const data = await api.post(
         `/api/admin/cron/run?command=${encodeURIComponent(command)}`
       );
-      message.success(`Task queued — #${data.task_id}`);
+      const hide = message.loading(`Running...`, 0);
+      // Poll until task completes
+      for (let i = 0; i < 360; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        const t = await api.get(`/api/admin/tasks/${data.task_id}`);
+        if (t.status === 'completed') {
+          hide();
+          message.success(`Done — ${(t.result || '').slice(-100)}`);
+          return;
+        }
+        if (t.status === 'failed') {
+          hide();
+          message.error(`Failed: ${(t.result || '').slice(-200)}`);
+          return;
+        }
+      }
+      hide();
+      message.warning('Timeout (6 min) — still running in background');
     } catch (err: any) {
       message.error(`Failed: ${err.message}`);
     }

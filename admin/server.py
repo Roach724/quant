@@ -2125,12 +2125,22 @@ def admin_ml_train(body: dict = Body(...)):
     path = _ML_CONFIG_DIR / fname
     if not path.exists():
         raise HTTPException(404, detail=f"Config '{config_name}' not found")
+    # Read model_name from config YAML for log file naming
+    import yaml as _yaml
+    model_name = config_name.replace(".yaml", "")
+    try:
+        cfg = _yaml.safe_load(path.read_text()) or {}
+        registry_name = cfg.get("registry", {}).get("model_name", "")
+        if registry_name:
+            model_name = registry_name
+    except Exception:
+        pass
     cmd = (f"mkdir -p /var/log/quant/prod/train && cd /opt/quant && PYTHONPATH=/opt/quant "
            f"python3 -c \"import logging; logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s [%(name)s] %(message)s'); "
            f"from ml.pipeline import TrainPipeline; "
            f"p = TrainPipeline('{path}'); p.run(skip_tuning={skip_tuning})\" "
            f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
-           f"| tee -a /var/log/quant/prod/train/{config_name}_$(date -u +%Y%m%d_%H%M%S).log")
+           f"| tee -a /var/log/quant/prod/train/{model_name}_$(date -u +%Y%m%d_%H%M%S).log")
     session = get_session()
     task = Task(type="shell", params={"cmd": cmd, "config": config_name}, status="pending")
     session.add(task)
@@ -2225,6 +2235,7 @@ async def dash_experiments(type: str = ""):
     prefix_filter = ""
     if type:
         prefix_filter = f"AND exp_id LIKE '{type}_%'"
+    # 1. Query BQ for experiments with equity data
     query = f"""
         SELECT * EXCEPT (rn)
         FROM (
@@ -2236,16 +2247,32 @@ async def dash_experiments(type: str = ""):
         WHERE rn = 1
         ORDER BY ts DESC
     """
+    equity_map: dict[str, dict] = {}
     try:
         rows = client.query(query).result()
-        return [{"exp_id": row.exp_id, "ts": _db_serialize(row.ts),
-                 "bar": row.bar, "equity": row.equity, "cash": row.cash,
-                 "portfolio_value": row.portfolio_value, "daily_pnl": row.daily_pnl,
-                 "drawdown": row.drawdown}
-                for row in rows]
+        for row in rows:
+            equity_map[row.exp_id] = {
+                "exp_id": row.exp_id, "ts": _db_serialize(row.ts),
+                "bar": row.bar, "equity": row.equity, "cash": row.cash,
+                "portfolio_value": row.portfolio_value, "daily_pnl": row.daily_pnl,
+                "drawdown": row.drawdown,
+            }
     except Exception as exc:
         logging.getLogger(__name__).error("dash_experiments query error: %s", exc)
-        return []
+
+    # 2. Also include registry experiments that have no equity yet
+    from live.experiment_manager import ExperimentManager
+    mgr = ExperimentManager()
+    for exp in mgr.list(exp_type=type or None):
+        if "test" in exp.id:
+            continue
+        if exp.id not in equity_map:
+            equity_map[exp.id] = {
+                "exp_id": exp.id, "ts": exp.created_at,
+                "bar": 0, "equity": 0, "cash": 0,
+                "portfolio_value": 0, "daily_pnl": 0, "drawdown": 0,
+            }
+    return sorted(equity_map.values(), key=lambda x: x["ts"], reverse=True)
 
 
 # ---------------------------------------------------------------------------
