@@ -1086,11 +1086,26 @@ def admin_cron_list():
         parts = line.split(None, 5)
         if len(parts) >= 6:
             cmd = parts[5].strip()
-            # Match by prefix (crontab may add >> redirect that registry lacks)
-            meta = {}
+            # Extract job name from cron_wrapper.sh or command pattern
+            name = ""
+            desc = ""
+            # cron_wrapper.sh JOB_NAME env ... → extract JOB_NAME
+            if "cron_wrapper.sh" in cmd:
+                wrapper_parts = cmd.split()
+                for j, p in enumerate(wrapper_parts):
+                    if p.endswith("cron_wrapper.sh") and j + 1 < len(wrapper_parts):
+                        name = wrapper_parts[j + 1]
+                        break
+            # Also try registry metadata
             for reg_cmd, reg_job in registry_jobs.items():
-                if cmd.startswith(reg_cmd) or reg_cmd.startswith(cmd.split(">>")[0].strip()):
-                    meta = reg_job
+                # Match by script/purpose suffix
+                if cmd.split()[-1] == reg_cmd.split()[-1]:
+                    name = reg_job.get("name", name) or name
+                    desc = reg_job.get("description", "")
+                    break
+                # Match by job name in wrapper
+                if name and reg_job.get("name") == name:
+                    desc = reg_job.get("description", "")
                     break
             jobs.append({
                 "index": i,
@@ -1098,8 +1113,8 @@ def admin_cron_list():
                 "enabled": True,
                 "schedule": " ".join(parts[:5]),
                 "command": cmd,
-                "name": meta.get("name", ""),
-                "description": meta.get("description", ""),
+                "name": name,
+                "description": desc,
             })
     return jobs
 
