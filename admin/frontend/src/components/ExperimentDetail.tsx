@@ -91,6 +91,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
   const first = equity.length > 0 ? equity[0] : null;
   const initialCapital = first ? Number(first.cash ?? first.equity ?? 0) : 0;
   const totalPnl = last ? Number(last.equity ?? 0) - initialCapital : 0;
+  const maxDrawdown = equity.length > 0 ? Math.min(...equity.map((d: any) => Number(d.drawdown ?? 0))) : 0;
   const unrealizedPnl = positions.reduce((s: number, p: any) => s + Number(p.pnl ?? 0), 0);
   const realizedPnl = totalPnl - unrealizedPnl;
 
@@ -184,7 +185,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
         </Col>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic title="Max Drawdown" value={last?.drawdown != null ? (Number(last.drawdown) * 100).toFixed(2) + '%' : '—'}
+            <Statistic title="Max Drawdown" value={(maxDrawdown * 100).toFixed(2) + '%'}
               valueStyle={{ color: '#cf1322' }} />
           </Card>
         </Col>
@@ -344,12 +345,15 @@ function makeEquityOption(data: any[]) {
 function makeDrawdownOption(data: any[]) {
   const ts = data.map((d: any) => d.ts?.slice(0, 19) ?? '');
   const values = data.map((d: any) => Number(d.drawdown ?? 0) * 100);
+  const yMin = Math.min(...values, 0);
+  // Auto-scale with 10% padding below worst drawdown
+  const yPad = Math.abs(yMin) * 0.1;
 
   return {
     tooltip: { trigger: 'axis', valueFormatter: (v: any) => `${v?.toFixed(2)}%` },
     grid: { left: 60, right: 20, top: 20, bottom: 30 },
     xAxis: { type: 'category', data: ts, axisLabel: { show: false } },
-    yAxis: { type: 'value', axisLabel: { fontSize: 10, formatter: '{value}%' }, max: 0 },
+    yAxis: { type: 'value', axisLabel: { fontSize: 10, formatter: '{value}%' }, max: 0, min: yMin - yPad },
     series: [
       {
         type: 'line',
