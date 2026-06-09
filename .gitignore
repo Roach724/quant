@@ -241,6 +241,4 @@ models_artifacts/
 # Runtime experiment configs (managed via /opt/quant/configs/, not git)
 live/configs/live_*.yaml
 live/configs/paper_*.yaml
-ml/configs/hk_*.yaml
-ml/configs/us_*.yaml
-ml/configs/lgb_*.yaml
+ml/configs/*.yaml
