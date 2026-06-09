@@ -72,8 +72,15 @@ jobs:
                 docker compose -f docker/docker-compose.yml stop &&
                 docker compose -f docker/docker-compose.yml rm -f &&
                 TAG=${{ github.sha }} docker compose -f docker/docker-compose.yml up -d &&
-                sleep 15 &&
-                curl -f http://localhost:8091/api/health" 2>&1; then
+                sleep 5 &&
+                for j in 1 2 3 4 5 6; do
+                  if curl -sf http://localhost:8091/api/health 2>/dev/null; then
+                    echo '::notice::Health check passed'
+                    break
+                  fi
+                  echo "Waiting... ($j/6)"
+                  sleep 10
+                done &&
               echo "::notice::Deploy succeeded on attempt $i"
               exit 0
             fi
