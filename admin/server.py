@@ -1582,16 +1582,18 @@ def admin_cron_run(command: str = Query(""), name: str = Query("")):
         cmd = cmd[len("docker exec quant "):]
     log_name = name or "cron"
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    log_file = f"{log_name}_{ts}.log"
+    log_file_basename = f"{log_name}_{ts}.log"
+    log_file_path = f"/var/log/quant/prod/cron/{log_file_basename}"
 
     session = get_session()
     task = Task(type="shell", params={
         "cmd": cmd, "cron_command": command, "cron_name": log_name,
         "cron_trigger": "manual", "cron_started": datetime.now(timezone.utc).isoformat(),
+        "cron_log_file": log_file_path,
     }, status="pending")
     session.add(task)
     session.commit()
-    return {"task_id": task.id, "log_file": log_file}
+    return {"task_id": task.id, "log_file": log_file_basename}
 
 
 @app.get("/api/admin/cron/{index}/history")
