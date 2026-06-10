@@ -1605,29 +1605,27 @@ def admin_cron_run(command: str = Query(""), name: str = Query("")):
 
 
 @app.get("/api/admin/cron/{index}/history")
-def admin_cron_history(index: int, command: str = Query("")):
-    """Return recent execution history from cron_runs table.
-
-    Merges scheduled runs (from log scanner) and manual runs (from task queue).
-    """
-    # Extract job_name from cron_registry by index
-    job_name = ""
-    resolved = os.path.abspath(CRON_REGISTRY)
-    if os.path.isfile(resolved):
-        try:
-            with open(resolved) as f:
-                data = _json.load(f)
-            jobs = data.get("jobs", [])
-            if 0 <= index < len(jobs):
-                job_name = jobs[index].get("name", "")
-        except Exception:
-            pass
+def admin_cron_history(index: int, command: str = Query(""), name: str = Query("")):
+    """Return recent execution history from cron_runs table."""
+    # Use name param as primary filter (frontend passes job name directly)
+    job_name = name
+    # Fallback: extract from cron_registry by index
+    if not job_name:
+        resolved = os.path.abspath(CRON_REGISTRY)
+        if os.path.isfile(resolved):
+            try:
+                with open(resolved) as f:
+                    data = _json.load(f)
+                jobs = data.get("jobs", [])
+                if 0 <= index < len(jobs):
+                    job_name = jobs[index].get("name", "")
+            except Exception:
+                pass
 
     session = get_session()
     query = session.query(CronRun).order_by(CronRun.started_at.desc())
 
     if job_name:
-        # Match both exact name and hyphen/underscore variants
         query = query.filter(
             (CronRun.job_name == job_name) |
             (CronRun.job_name == job_name.replace("-", "_")) |

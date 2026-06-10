@@ -108,7 +108,8 @@ const CronJobs: React.FC = () => {
     setHistoryLoading(true);
     setHistoryData([]);
     try {
-      const data: HistoryEntry[] = await api.get(`/api/admin/cron/${index}/history`);
+      const name = label.includes('_') || label.includes('-') ? label : '';
+      const data: HistoryEntry[] = await api.get(`/api/admin/cron/${index}/history?name=${encodeURIComponent(name)}`);
       setHistoryData(data || []);
     } catch (err: any) {
       message.error(`Failed to load history: ${err.message}`);
