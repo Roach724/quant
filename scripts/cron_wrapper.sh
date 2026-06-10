@@ -46,6 +46,9 @@ mkdir -p "$LOG_DIR" 2>/dev/null || {
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} START  module=${MODULE} env=${ENV}" >> "$LOGFILE"
 
+# Ensure working directory is the project root
+cd /opt/quant 2>/dev/null || cd /opt/quant-prod 2>/dev/null || true
+
 # ── Concurrency control ──
 # 1. Job-level: prevent the same cron job from running twice
 ( flock -n 9 || {
