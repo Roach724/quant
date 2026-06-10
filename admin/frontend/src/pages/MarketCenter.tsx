@@ -2,6 +2,7 @@ import { Card, Select, Tabs, Spin, Empty, Typography, Space } from 'antd';
 import { useEffect, useState, useCallback } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { api } from '../api';
+import CacheRefresh from '../components/CacheRefresh';
 
 const { Text } = Typography;
 
@@ -180,6 +181,7 @@ function IndexChartCard({ market, symbol }: { market: string; symbol: string }) 
             style={{ width: 70 }}
             options={DAYS_5M}
           />
+          <CacheRefresh module="market:bars:5m" warmup={false} onRefresh={load5m} />
         </Space>
         <Spin spinning={loading5m}>
           {data5m.length === 0 ? (
@@ -206,6 +208,7 @@ function IndexChartCard({ market, symbol }: { market: string; symbol: string }) 
             style={{ width: 70 }}
             options={DAYS_DAILY}
           />
+          <CacheRefresh module="market:bars:1d" warmup={false} onRefresh={loadDaily} />
         </Space>
         <Spin spinning={loadingDaily}>
           {dataDaily.length === 0 ? (
@@ -326,13 +329,16 @@ function StocksPanel({ market }: { market: string }) {
             size="small"
             title={<Text strong>{symbol}</Text>}
             extra={
-              <Select
-                size="small"
-                value={days5m}
-                onChange={setDays5m}
-                style={{ width: 70 }}
-                options={DAYS_5M}
-              />
+              <Space>
+                <Select
+                  size="small"
+                  value={days5m}
+                  onChange={setDays5m}
+                  style={{ width: 70 }}
+                  options={DAYS_5M}
+                />
+                <CacheRefresh module="market:bars:5m" warmup={false} onRefresh={load5m} />
+              </Space>
             }
           >
             <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
@@ -355,13 +361,16 @@ function StocksPanel({ market }: { market: string }) {
             size="small"
             title={<Text strong>{symbol}</Text>}
             extra={
-              <Select
-                size="small"
-                value={daysDaily}
-                onChange={setDaysDaily}
-                style={{ width: 70 }}
-                options={DAYS_DAILY}
-              />
+              <Space>
+                <Select
+                  size="small"
+                  value={daysDaily}
+                  onChange={setDaysDaily}
+                  style={{ width: 70 }}
+                  options={DAYS_DAILY}
+                />
+                <CacheRefresh module="market:bars:1d" warmup={false} onRefresh={loadDaily} />
+              </Space>
             }
           >
             <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>

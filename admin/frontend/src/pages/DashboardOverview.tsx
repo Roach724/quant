@@ -3,6 +3,7 @@ const { Text } = Typography;
 import { useEffect, useState, useCallback } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { api, toLocal } from '../api';
+import CacheRefresh from '../components/CacheRefresh';
 
 export default function DashboardOverview() {
   const [experiments, setExperiments] = useState<any[]>([]);
@@ -117,6 +118,7 @@ export default function DashboardOverview() {
       {/* ── Experiment Cards ── */}
       <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
         <span style={{ fontWeight: 600, fontSize: 16 }}>Experiments</span>
+        <CacheRefresh module="dashboard:experiments" label="刷新实验列表" onRefresh={loadData} />
         <Switch checked={activeOnly} onChange={setActiveOnly} size="small" />
         <span style={{ color: '#999', fontSize: 13 }}>Active Only ({filtered.length}/{experiments.length})</span>
       </div>
@@ -152,8 +154,8 @@ export default function DashboardOverview() {
         <Text style={{ fontSize: 14, fontWeight: 600, display: 'block', marginBottom: 8 }}>🇺🇸 US Market — 5m K-line</Text>
         <Card size="small" title={<Space>US<Select size="small" value={usDays} onChange={setUsDays} style={{ width: 80, marginLeft: 8 }}
           options={[{ value: 1, label: '1d' }, { value: 3, label: '3d' }, { value: 7, label: '7d' }]} /></Space>}
-          extra={<Select size="small" value={usSymbol} onChange={setUsSymbol} showSearch style={{ width: 130 }}
-            options={usSymbols.map(s => ({ value: s, label: s }))} />}
+          extra={<Space><Select size="small" value={usSymbol} onChange={setUsSymbol} showSearch style={{ width: 130 }}
+            options={usSymbols.map(s => ({ value: s, label: s }))} /><CacheRefresh module="market:bars:5m" label="刷新US K线" warmup={false} onRefresh={() => loadChart('us', usSymbol, usDays)} /></Space>}
           style={{ marginBottom: 12 }}>
           <Spin spinning={usLoading}>
             {usData.length === 0 ? <Empty description="No data" /> : <ReactECharts option={makeCandlestickOption(usData, usSymbol)} style={{ height: 350 }} />}
@@ -163,8 +165,8 @@ export default function DashboardOverview() {
         <Text style={{ fontSize: 14, fontWeight: 600, display: 'block', marginBottom: 8, marginTop: 24 }}>🇭🇰 HK Market — 5m K-line</Text>
         <Card size="small" title={<Space>HK<Select size="small" value={hkDays} onChange={setHkDays} style={{ width: 80, marginLeft: 8 }}
           options={[{ value: 1, label: '1d' }, { value: 3, label: '3d' }, { value: 7, label: '7d' }]} /></Space>}
-          extra={<Select size="small" value={hkSymbol} onChange={setHkSymbol} showSearch style={{ width: 130 }}
-            options={hkSymbols.map(s => ({ value: s, label: s }))} />}>
+          extra={<Space><Select size="small" value={hkSymbol} onChange={setHkSymbol} showSearch style={{ width: 130 }}
+            options={hkSymbols.map(s => ({ value: s, label: s }))} /><CacheRefresh module="market:bars:5m" label="刷新HK K线" warmup={false} onRefresh={() => loadChart('hk', hkSymbol, hkDays)} /></Space>}>
           <Spin spinning={hkLoading}>
             {hkData.length === 0 ? <Empty description="No data" /> : <ReactECharts option={makeCandlestickOption(hkData, hkSymbol)} style={{ height: 350 }} />}
           </Spin>
@@ -174,8 +176,8 @@ export default function DashboardOverview() {
         <Text style={{ fontSize: 14, fontWeight: 600, display: 'block', marginBottom: 8, marginTop: 24 }}>🇺🇸 US Indices — 5m K-line</Text>
         <Card size="small" title={<Space>US Index<Select size="small" value={usIndexDays} onChange={setUsIndexDays} style={{ width: 80, marginLeft: 8 }}
           options={[{ value: 1, label: '1d' }, { value: 3, label: '3d' }, { value: 7, label: '7d' }]} /></Space>}
-          extra={<Select size="small" value={usIndexSymbol} onChange={setUsIndexSymbol} style={{ width: 130 }}
-            options={INDEX_SYMBOLS.us.map(s => ({ value: s, label: s.replace('^', '') }))} />}
+          extra={<Space><Select size="small" value={usIndexSymbol} onChange={setUsIndexSymbol} style={{ width: 130 }}
+            options={INDEX_SYMBOLS.us.map(s => ({ value: s, label: s.replace('^', '') }))} /><CacheRefresh module="market:bars:5m" label="刷新US指数" warmup={false} onRefresh={() => loadIndexChart('us', usIndexSymbol, usIndexDays)} /></Space>}
           style={{ marginBottom: 12 }}>
           <Spin spinning={usIndexLoading}>
             {usIndexData.length === 0 ? <Empty description="No data" /> : <ReactECharts option={makeCandlestickOption(usIndexData, usIndexSymbol.replace('^', ''))} style={{ height: 300 }} />}
@@ -185,8 +187,8 @@ export default function DashboardOverview() {
         <Text style={{ fontSize: 14, fontWeight: 600, display: 'block', marginBottom: 8, marginTop: 24 }}>🇭🇰 HK Indices — 5m K-line</Text>
         <Card size="small" title={<Space>HK Index<Select size="small" value={hkIndexDays} onChange={setHkIndexDays} style={{ width: 80, marginLeft: 8 }}
           options={[{ value: 1, label: '1d' }, { value: 3, label: '3d' }, { value: 7, label: '7d' }]} /></Space>}
-          extra={<Select size="small" value={hkIndexSymbol} onChange={setHkIndexSymbol} style={{ width: 150 }}
-            options={INDEX_SYMBOLS.hk.map(s => ({ value: s, label: s }))} />}>
+          extra={<Space><Select size="small" value={hkIndexSymbol} onChange={setHkIndexSymbol} style={{ width: 150 }}
+            options={INDEX_SYMBOLS.hk.map(s => ({ value: s, label: s }))} /><CacheRefresh module="market:bars:5m" label="刷新HK指数" warmup={false} onRefresh={() => loadIndexChart('hk', hkIndexSymbol, hkIndexDays)} /></Space>}>
           <Spin spinning={hkIndexLoading}>
             {hkIndexData.length === 0 ? <Empty description="No data" /> : <ReactECharts option={makeCandlestickOption(hkIndexData, hkIndexSymbol)} style={{ height: 300 }} />}
           </Spin>
