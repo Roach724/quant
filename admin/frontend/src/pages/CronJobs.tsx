@@ -21,7 +21,7 @@ import {
   Popconfirm,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, toLocal } from '../api';
 
@@ -63,6 +63,47 @@ const CronJobs: React.FC = () => {
   const [historyData, setHistoryData] = useState<HistoryEntry[]>([]);
   const [historyTitle, setHistoryTitle] = useState('');
   const [runningTasks, setRunningTasks] = useState<Set<number>>(new Set());
+  const STORAGE_KEY = 'cron_running_tasks';
+
+  // Restore running state on mount (survives page refresh)
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      if (stored.length === 0) return;
+      Promise.all(stored.map((item: any) => api.get(`/api/admin/tasks/${item.task_id}`)))
+        .then((results) => {
+          const stillRunning = new Set<number>();
+          results.forEach((t: any, i: number) => {
+            if (t.status === 'pending' || t.status === 'running') {
+              stillRunning.add(stored[i].job_index);
+            }
+          });
+          if (stillRunning.size > 0) {
+            setRunningTasks(stillRunning);
+            stillRunning.forEach((jobIndex) => {
+              const item = stored.find((s: any) => s.job_index === jobIndex);
+              if (item) pollBg(item.task_id, jobIndex);
+            });
+          }
+        }).catch(() => {});
+    } catch {}
+  }, []);
+
+  const pollBg = async (taskId: number, jobIndex: number) => {
+    for (let i = 0; i < 360; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        const t = await api.get(`/api/admin/tasks/${taskId}`);
+        if (t.status === 'completed') { message.success('Done'); actionRef.current?.reload(); break; }
+        if (t.status === 'failed') { message.error(`Failed: ${(t.result || '').slice(-200)}`); break; }
+      } catch { break; }
+    }
+    setRunningTasks(prev => { const next = new Set(prev); next.delete(jobIndex); return next; });
+    try {
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stored.filter((s: any) => s.job_index !== jobIndex)));
+    } catch {}
+  };
 
   // ── Run ────────────────────────────────────────────────────────────────────
 
@@ -72,23 +113,15 @@ const CronJobs: React.FC = () => {
       const data = await api.post(
         `/api/admin/cron/run?command=${encodeURIComponent(command)}&name=${encodeURIComponent(name || 'cron')}`
       );
-      const hide = message.loading(`Running...`, 0);
-      for (let i = 0; i < 360; i++) {
-        await new Promise(r => setTimeout(r, 1000));
-        const t = await api.get(`/api/admin/tasks/${data.task_id}`);
-        if (t.status === 'completed') { hide(); message.success(`Done`); actionRef.current?.reload(); return; }
-        if (t.status === 'failed') { hide(); message.error(`Failed: ${(t.result || '').slice(-200)}`); return; }
-      }
-      hide();
-      message.warning('Timeout (6 min) — still running in background');
+      try {
+        const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        stored.push({ task_id: data.task_id, job_name: name, job_index: index });
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+      } catch {}
+      pollBg(data.task_id, index);
     } catch (err: any) {
       message.error(`Failed: ${err.message}`);
-    } finally {
-      setRunningTasks(prev => {
-        const next = new Set(prev);
-        next.delete(index);
-        return next;
-      });
+      setRunningTasks(prev => { const next = new Set(prev); next.delete(index); return next; });
     }
   };
 
