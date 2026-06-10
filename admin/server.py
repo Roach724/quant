@@ -81,7 +81,7 @@ def _init_cache_modules():
     _cache_mgr.register_module("factors:list",      ttl=604800)
     _cache_mgr.register_module("models:list",       ttl=604800)
     _cache_mgr.register_module("models:versions",   ttl=604800)
-    _cache_mgr.register_module("cron:list",         ttl=604800)
+    _cache_mgr.register_module("cron:list",         ttl=60)      # 1 min (worker can't invalidate cross-process)
     _cache_mgr.register_module("strategies:list",   ttl=604800)
 
     logger.info("Cache modules registered: %d", len(_cache_mgr.list_modules()))
@@ -1182,7 +1182,7 @@ def _record_cron_run(job_name: str, command: str, trigger_type: str,
                      started_at: datetime = None, finished_at: datetime = None,
                      log_file: str = None, error_tail: str = None):
     """Record a cron execution in the cron_runs table."""
-    from admin.models import get_session
+    from admin.models import get_session, cleanup_session
     session = get_session()
     try:
         run = CronRun(
@@ -1196,6 +1196,8 @@ def _record_cron_run(job_name: str, command: str, trigger_type: str,
         session.commit()
     except Exception:
         logger.exception("_record_cron_run failed")
+    finally:
+        cleanup_session()
 
 
 def _scan_cron_logs_and_sync():
@@ -1506,14 +1508,11 @@ def admin_cron_run(command: str = Query(""), name: str = Query("")):
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     log_file = f"{log_name}_{ts}.log"
 
-    # Record manual run in cron_runs
-    _record_cron_run(
-        job_name=log_name, command=command, trigger_type="manual",
-        status="running", log_file=log_file,
-    )
-
     session = get_session()
-    task = Task(type="shell", params={"cmd": cmd, "cron_command": command, "cron_name": log_name}, status="pending")
+    task = Task(type="shell", params={
+        "cmd": cmd, "cron_command": command, "cron_name": log_name,
+        "cron_trigger": "manual", "cron_started": datetime.now(timezone.utc).isoformat(),
+    }, status="pending")
     session.add(task)
     session.commit()
     return {"task_id": task.id, "log_file": log_file}
