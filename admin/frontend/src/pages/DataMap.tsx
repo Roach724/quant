@@ -88,6 +88,43 @@ const DataMap: React.FC = () => {
   const [backfillTables, setBackfillTables] = useState<string[]>([]);
   const [backfillDates, setBackfillDates] = useState<[string, string] | null>(null);
   const [backfilling, setBackfilling] = useState(false);
+  const BF_STORAGE_KEY = 'backfill_running';
+
+  // Persist backfill state across page refreshes
+  const setBackfillingPersist = (v: boolean, taskIds?: number[]) => {
+    setBackfilling(v);
+    try {
+      if (v && taskIds) {
+        localStorage.setItem(BF_STORAGE_KEY, JSON.stringify(taskIds));
+      } else {
+        localStorage.removeItem(BF_STORAGE_KEY);
+      }
+    } catch {}
+  };
+
+  // Restore backfill state on mount
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(BF_STORAGE_KEY) || 'null');
+      if (stored && Array.isArray(stored) && stored.length > 0) {
+        Promise.all(stored.map((tid: number) => api.get(`/api/admin/tasks/${tid}`)))
+          .then((results) => {
+            const anyActive = results.some((t: any) => t.status === 'pending' || t.status === 'running');
+            if (anyActive) {
+              setBackfilling(true);
+              // Poll until done
+              const activeIds = stored.filter((_: any, i: number) =>
+                results[i].status === 'pending' || results[i].status === 'running'
+              );
+              Promise.all(activeIds.map((tid: number) => pollTask(tid).catch(() => {})))
+                .finally(() => setBackfillingPersist(false));
+            } else {
+              localStorage.removeItem(BF_STORAGE_KEY);
+            }
+          }).catch(() => {});
+      }
+    } catch {}
+  }, []);
   const [backfillSources, setBackfillSources] = useState<{key: string; label: string}[]>([]);
   const [backfillSource, setBackfillSource] = useState('auto');
   const [backfillProgress, setBackfillProgress] = useState<{ done: number; total: number } | null>(null);
@@ -102,7 +139,7 @@ const DataMap: React.FC = () => {
 
   const handleBackfill = async () => {
     if (!backfillDates || backfillTables.length === 0) return;
-    setBackfilling(true);
+    setBackfillingPersist(true);
     try {
       const params = new URLSearchParams({
         tables: backfillTables.join(','),
@@ -112,17 +149,18 @@ const DataMap: React.FC = () => {
       });
       const data = await api.post(`/api/admin/data/backfill?${params.toString()}`);
       message.success(`${data.count || 0} 个回填任务已创建`);
-      if (data.task_ids?.[0]) {
+      if (data.task_ids?.length) {
         setBackfillTaskId(data.task_ids[0]);
         setBackfillProgress(null);
-        // Start polling progress
-        pollBackfillProgress(data.task_ids[0], params.get('tables')?.split(',')[0] || '');
+        localStorage.setItem(BF_STORAGE_KEY, JSON.stringify(data.task_ids));
+        // Poll until all tasks complete
+        await Promise.all(data.task_ids.map((tid: number) => pollTask(tid).catch(() => {})));
       }
       actionRef.current?.reload();
     } catch (err: any) {
       message.error(`回填失败: ${err.message}`);
     } finally {
-      setBackfilling(false);
+      setBackfillingPersist(false);
     }
   };
 
@@ -145,7 +183,7 @@ const DataMap: React.FC = () => {
   useEffect(() => {
     loadCollector();
     loadBackfillOptions();
-    // Resume in-flight tasks on page refresh
+    // Resume in-flight collector actions on page refresh
     (async () => {
       try {
         const d = await api.get('/api/tasks');
@@ -161,44 +199,11 @@ const DataMap: React.FC = () => {
                 loadCollector();
               }
             }
-            if (cmd.includes('backfill')) {
-              setBackfilling(true);
-              try { await pollTask(t.id); } catch {}
-              setBackfilling(false);
-            }
           }
         }
       } catch {}
     })();
   }, []);
-
-  const pollBackfillProgress = async (tid: number, tableKey: string) => {
-    const parts = tableKey.split('_bars_');
-    const mkt = parts[0] || 'us';
-    const freq = parts[1] || '1d';
-    const check = async () => {
-      try {
-        const d = await api.get(`/api/admin/data/backfill/progress?task_id=${tid}&market=${mkt}&freq=${freq}`);
-        if (d.progress) setBackfillProgress(d.progress);
-        if (d.task_status === 'completed') {
-          setBackfillProgress(null); setBackfillTaskId(null); setBackfilling(false);
-          message.success('回填完成');
-          actionRef.current?.reload();
-          return;
-        }
-        if (d.task_status === 'failed') {
-          setBackfillProgress(null); setBackfillTaskId(null); setBackfilling(false);
-          message.error('回填失败');
-          actionRef.current?.reload();
-          return;
-        }
-        setTimeout(check, 3000);
-      } catch {
-        setBackfillProgress(null); setBackfillTaskId(null); setBackfilling(false);
-      }
-    };
-    check();
-  };
 
   const handleCollectorAction = async (action: string) => {
     setCollectorAction(action);
