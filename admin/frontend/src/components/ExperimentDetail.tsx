@@ -1,9 +1,10 @@
-import { Card, Select, Table, Spin, Empty, Row, Col, Statistic, Button } from 'antd';
+import { Card, Select, Table, Spin, Empty, Row, Col, Statistic, Button, Space } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
 import { api, toLocal } from '../api';
+import CacheRefresh from './CacheRefresh';
 
 interface Props {
   type: 'live' | 'prod' | 'debug' | 'paper';
@@ -157,7 +158,13 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
         )}
           <Col flex="auto" />
         <Col>
-          <Button icon={<ReloadOutlined />} onClick={() => { loadExperiments(); if (selectedExp) loadData(selectedExp, selectedRun); }} size="small">刷新</Button>
+          <Space>
+            <CacheRefresh module="dashboard:experiments" warmup={false} onRefresh={loadExperiments} />
+            <CacheRefresh module="dashboard:equity" warmup={false} label="刷新权益" onRefresh={() => selectedExp && loadData(selectedExp, selectedRun)} />
+            <CacheRefresh module="dashboard:trades" warmup={false} label="刷新交易" onRefresh={() => selectedExp && loadData(selectedExp, selectedRun)} />
+            <CacheRefresh module="dashboard:positions" warmup={false} label="刷新持仓" onRefresh={() => selectedExp && loadData(selectedExp, selectedRun)} />
+            <Button icon={<ReloadOutlined />} onClick={() => { loadExperiments(); if (selectedExp) loadData(selectedExp, selectedRun); }} size="small">刷新全部</Button>
+          </Space>
         </Col>
       </Row>
 
@@ -234,17 +241,20 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
         ) : (
           <>
             {/* ── Equity Curve (stacked) ── */}
-            <Card size="small" title="Equity Curve" style={{ marginBottom: 16 }}>
+            <Card size="small" title="Equity Curve" style={{ marginBottom: 16 }}
+              extra={<CacheRefresh module="dashboard:equity" warmup={false} onRefresh={() => loadData(selectedExp, selectedRun)} />}>
               <ReactECharts option={makeEquityOption(equity)} style={{ height: 350 }} />
             </Card>
 
             {/* ── Drawdown ── */}
-            <Card size="small" title="Drawdown" style={{ marginBottom: 16 }}>
+            <Card size="small" title="Drawdown" style={{ marginBottom: 16 }}
+              extra={<CacheRefresh module="dashboard:equity" warmup={false} onRefresh={() => loadData(selectedExp, selectedRun)} />}>
               <ReactECharts option={makeDrawdownOption(equity)} style={{ height: 200 }} />
             </Card>
 
             {/* ── Positions ── */}
-            <Card size="small" title={`Positions (${positions.length})`} style={{ marginBottom: 16 }}>
+            <Card size="small" title={`Positions (${positions.length})`} style={{ marginBottom: 16 }}
+              extra={<CacheRefresh module="dashboard:positions" warmup={false} onRefresh={() => loadData(selectedExp, selectedRun)} />}>
               {positions.length === 0 ? <Empty description="No open positions" /> : (
                 <Table
                   dataSource={positions}
@@ -291,7 +301,8 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
             </Card>
 
             {/* ── Trades ── */}
-            <Card size="small" title={`Trades (${trades.length})`}>
+            <Card size="small" title={`Trades (${trades.length})`}
+              extra={<CacheRefresh module="dashboard:trades" warmup={false} onRefresh={() => loadData(selectedExp, selectedRun)} />}>
               {trades.length === 0 ? <Empty description="No trades" /> : (
                 <Table
                   dataSource={trades.map((t: any, i: number) => ({ ...t, _key: i }))}

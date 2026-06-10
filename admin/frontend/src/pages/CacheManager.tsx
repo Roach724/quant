@@ -82,7 +82,7 @@ export default function CacheManager() {
       title: '模块',
       dataIndex: 'name',
       key: 'name',
-      render: (name: string) => <Text code>{name}</Text>,
+      render: (name: string) => <Text strong style={{ fontFamily: 'monospace', fontSize: 13 }}>{name}</Text>,
     },
     {
       title: 'TTL',
