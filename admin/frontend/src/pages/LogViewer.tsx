@@ -61,8 +61,21 @@ const LogBrowser: React.FC = () => {
         if (data.files) {
           setFileList(data.files);
           if (f && data.files.length > 0) {
-            // Match the requested file (by basename) and select it
-            const match = data.files.find((pf: string) => pf.endsWith('/' + f) || pf === f);
+            // Smart match: task name → latest timestamp
+            let match = data.files.find((pf: string) => pf.endsWith('/' + f) || pf === f);
+            if (!match) {
+              // Extract task name: strip _YYYYMMDD_HHMMSS.log suffix
+              const taskName = f.replace(/[_\-]\d{8}[_\-]\d{6}\.log$/, '').replace(/\.log$/, '');
+              const candidates = data.files.filter((pf: string) => {
+                const base = pf.split('/').pop() || '';
+                return base.startsWith(taskName.replace(/-/g, '_')) || base.startsWith(taskName.replace(/_/g, '-'));
+              });
+              // Pick the one with the latest timestamp in filename
+              if (candidates.length > 0) {
+                candidates.sort().reverse();
+                match = candidates[0];
+              }
+            }
             setSelectedFile(match || data.files[0]);
           } else if (!f && data.files.length > 0) {
             setSelectedFile(data.files[0]);
