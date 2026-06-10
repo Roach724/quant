@@ -2,20 +2,22 @@ import { Card, Row, Col, Tag, Spin, Statistic } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import CacheRefresh from '../components/CacheRefresh';
 
 export default function DashboardPipeline() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const d = await api.get('/api/admin/dashboard/pipeline');
-        setData(d);
-      } catch (e) { console.error('pipeline load failed', e); }
-      finally { setLoading(false); }
-    })();
-  }, []);
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const d = await api.get('/api/admin/dashboard/pipeline');
+      setData(d);
+    } catch (e) { console.error('pipeline load failed', e); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { loadData(); }, []);
 
   const usLatest = data?.us ? new Date(data.us) : null;
   const hkLatest = data?.hk ? new Date(data.hk) : null;
@@ -28,7 +30,10 @@ export default function DashboardPipeline() {
 
   return (
     <div>
-      <div style={{ marginBottom: 16, fontWeight: 600, fontSize: 16 }}>Data Pipeline Health</div>
+      <div style={{ marginBottom: 16, fontWeight: 600, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+        Data Pipeline Health
+        <CacheRefresh module="dashboard:pipeline" warmup={false} onRefresh={loadData} />
+      </div>
       <Spin spinning={loading}>
         <Row gutter={[16, 16]}>
           {/* US */}
