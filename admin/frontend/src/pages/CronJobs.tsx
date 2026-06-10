@@ -36,22 +36,30 @@ interface CronJob {
   description: string;
   latest_log?: string | null;
   last_run?: string | null;
+  last_status?: string | null;
+  last_trigger?: string | null;
 }
 
 interface HistoryEntry {
   id: number;
+  job_name: string;
   status: string;
-  created_at: string | null;
+  trigger_type: string;
+  exit_code: number | null;
   started_at: string | null;
   finished_at: string | null;
-  result: string;
+  log_file: string | null;
+  error_tail: string | null;
 }
 
 const statusColor: Record<string, string> = {
   pending: 'default',
   running: 'processing',
+  success: 'green',
+  completed: 'green',
   done: 'green',
   failed: 'red',
+  skipped: 'orange',
 };
 
 const CronJobs: React.FC = () => {
@@ -106,15 +114,13 @@ const CronJobs: React.FC = () => {
 
   // ── History ────────────────────────────────────────────────────────────────
 
-  const handleHistory = async (index: number, label: string, command: string) => {
+  const handleHistory = async (index: number, label: string, _command: string) => {
     setHistoryTitle(`Execution History — ${label}`);
     setHistoryOpen(true);
     setHistoryLoading(true);
     setHistoryData([]);
     try {
-      const data: HistoryEntry[] = await api.get(
-        `/api/admin/cron/${index}/history?command=${encodeURIComponent(command)}`
-      );
+      const data: HistoryEntry[] = await api.get(`/api/admin/cron/${index}/history`);
       setHistoryData(data || []);
     } catch (err: any) {
       message.error(`Failed to load history: ${err.message}`);
@@ -125,35 +131,48 @@ const CronJobs: React.FC = () => {
 
   const historyColumns: ColumnsType<HistoryEntry> = [
     {
-      title: 'Task ID',
+      title: 'ID',
       dataIndex: 'id',
-      width: 80,
+      width: 60,
       key: 'id',
     },
     {
-      title: 'Status',
+      title: '任务名',
+      dataIndex: 'job_name',
+      width: 160,
+      key: 'job_name',
+      ellipsis: true,
+    },
+    {
+      title: '状态',
       dataIndex: 'status',
-      width: 90,
+      width: 80,
       key: 'status',
       render: (s: string) => (
         <Tag color={statusColor[s] || 'default'}>{s}</Tag>
       ),
     },
     {
-      title: 'Created',
-      dataIndex: 'created_at',
-      width: 170,
-      key: 'created_at',
-      render: (v: string | null) => v || '-',
+      title: '触发',
+      dataIndex: 'trigger_type',
+      width: 70,
+      key: 'trigger_type',
+      render: (v: string) => v === 'manual' ? '🏷️ 手动' : '⏰ 调度',
     },
     {
-      title: 'Duration',
+      title: '开始时间',
+      dataIndex: 'started_at',
+      width: 170,
+      key: 'started_at',
+      render: (v: string | null) => toLocal(v),
+    },
+    {
+      title: '耗时',
       key: 'duration',
-      width: 100,
+      width: 80,
       render: (_: any, r: HistoryEntry) => {
         if (r.started_at && r.finished_at) {
-          const ms =
-            new Date(r.finished_at).getTime() - new Date(r.started_at).getTime();
+          const ms = new Date(r.finished_at).getTime() - new Date(r.started_at).getTime();
           const s = (ms / 1000).toFixed(1);
           return `${s}s`;
         }
@@ -161,10 +180,19 @@ const CronJobs: React.FC = () => {
       },
     },
     {
-      title: 'Result',
-      dataIndex: 'result',
-      key: 'result',
+      title: '退出码',
+      dataIndex: 'exit_code',
+      width: 70,
+      key: 'exit_code',
+      render: (v: number | null) => v != null ? <Tag color={v === 0 ? 'green' : 'red'}>{v}</Tag> : '-',
+    },
+    {
+      title: '日志文件',
+      dataIndex: 'log_file',
+      width: 200,
+      key: 'log_file',
       ellipsis: true,
+      render: (v: string | null) => v ? v.split('/').pop() : '-',
     },
   ];
 
@@ -283,8 +311,16 @@ const CronJobs: React.FC = () => {
       title: '最近运行',
       dataIndex: 'last_run',
       key: 'last_run',
-      width: 160,
-      render: (_, r) => toLocal(r.last_run),
+      width: 200,
+      render: (_: any, r: CronJob) => (
+        <Space direction="vertical" size={0}>
+          <span>{toLocal(r.last_run)}</span>
+          <Space size={4}>
+            {r.last_status ? <Tag color={statusColor[r.last_status] || 'default'} style={{ fontSize: 11, lineHeight: '16px' }}>{r.last_status}</Tag> : null}
+            {r.last_trigger ? <Tag style={{ fontSize: 11, lineHeight: '16px' }}>{r.last_trigger === 'manual' ? '🏷️ 手动' : '⏰ 调度'}</Tag> : null}
+          </Space>
+        </Space>
+      ),
     },
     {
       title: 'Enabled',
