@@ -6,12 +6,15 @@ via subprocess, and updates the row to "done" / "failed".
 
 import subprocess
 import time
+import os
+import glob
 from datetime import datetime, timezone
 
 from admin.models import get_session, Task, CronRun
 
 PROJECT_ROOT = "/opt/quant"
 POLL_INTERVAL = 2  # seconds
+LOG_DIR = "/var/log/quant/prod/cron"
 
 
 def run_one(task: Task) -> None:
@@ -52,6 +55,16 @@ def run_one(task: Task) -> None:
                 from datetime import datetime as _dt
                 started_str = (t.params or {}).get("cron_started", "")
                 started_at = _dt.fromisoformat(started_str) if started_str else t.started_at
+                # Find actual log file (can't predict wrapper's timestamp)
+                actual_log = None
+                try:
+                    pattern = os.path.join(LOG_DIR, f"{cron_name}_*.log")
+                    candidates = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+                    if candidates:
+                        actual_log = candidates[0]
+                except Exception:
+                    pass
+
                 run = CronRun(
                     job_name=cron_name,
                     command=(t.params or {}).get("cron_command", ""),
@@ -60,7 +73,7 @@ def run_one(task: Task) -> None:
                     exit_code=proc.returncode,
                     started_at=started_at or datetime.now(timezone.utc),
                     finished_at=datetime.now(timezone.utc),
-                    log_file=(t.params or {}).get("cron_log_file", "") or None,
+                    log_file=actual_log,
                     error_tail=(stderr or "")[:500] if proc.returncode != 0 else None,
                 )
                 session.add(run)
