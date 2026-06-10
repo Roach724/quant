@@ -930,18 +930,14 @@ def admin_data_backfill(
     if not selected:
         selected = [f"{market}_bars_5m"]
 
-    # Load symbols from SSOT for the market
     import yaml as _y2
     symbols_yaml_path = os.path.join(os.path.dirname(__file__), "..", "config", "symbols.yaml")
-    symbols_list: list[str] = []
+    ssot: dict = {}
     try:
         with open(symbols_yaml_path) as sf:
-            ssot = _y2.safe_load(sf)
-        market_syms = ssot.get("markets", {}).get(market, {}).get("symbols", [])
-        symbols_list = [s for s in market_syms if isinstance(s, str)]
+            ssot = _y2.safe_load(sf) or {}
     except Exception:
         pass
-    symbols_str = ",".join(symbols_list) if symbols_list else ""
 
     # Auto-resolve source by market if not explicitly set
     resolved_source = source
@@ -953,6 +949,12 @@ def admin_data_backfill(
         mkt, freq = parts
         if mkt not in ("us", "hk"):
             continue
+
+        # Load symbols from SSOT per-table (correct market from table key)
+        market_syms = ssot.get("markets", {}).get(mkt, {}).get("symbols", [])
+        symbols_list = [s for s in market_syms if isinstance(s, str)]
+        symbols_str = ",".join(symbols_list) if symbols_list else ""
+
         src = resolved_source if resolved_source != "auto" else ("yfinance" if mkt == "us" else "futu_stock")
         mkdir_log = f"mkdir -p /var/log/quant/prod/backfill"
         log_file = f"/var/log/quant/prod/backfill/{mkt}_{freq}.log"
