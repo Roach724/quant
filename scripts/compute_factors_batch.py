@@ -349,10 +349,10 @@ def main():
         help="Factor source to compute (default: all)",
     )
     parser.add_argument(
-        "--start", default="2020-01-01", help="Start date YYYY-MM-DD"
+        "--start", default=None, help="Start date YYYY-MM-DD (default: 30 days ago)"
     )
     parser.add_argument(
-        "--end", default="2026-05-30", help="End date YYYY-MM-DD"
+        "--end", default=None, help="End date YYYY-MM-DD (default: today)"
     )
     parser.add_argument(
         "--market", default="us", help="Market code (default: us)"
@@ -366,10 +366,17 @@ def main():
                         help="Incremental mode: only compute last 30 days")
     args = parser.parse_args()
 
+    # Dynamic defaults: today for end, 30 days ago for start
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if args.end is None:
+        args.end = today
+    if args.start is None:
+        args.start = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+
     if args.incremental:
         end_dt = datetime.strptime(args.end, "%Y-%m-%d")
-        args.start = (end_dt - timedelta(days=30)).strftime("%Y-%m-%d")
-        log.info("Incremental mode: computing %s → %s", args.start, args.end)
+        args.start = (end_dt - timedelta(days=14)).strftime("%Y-%m-%d")
+        log.info("Incremental mode: computing %s → %s (last 14 days)", args.start, args.end)
 
     log.info("=" * 60)
     log.info("Batch Factor Computation")
