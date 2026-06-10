@@ -1,4 +1,4 @@
-import { Card, Select, Table, Spin, Empty, Row, Col, Statistic, Button, Space } from 'antd';
+import { Card, Select, Table, Spin, Empty, Row, Col, Statistic, Button } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -158,13 +158,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
         )}
           <Col flex="auto" />
         <Col>
-          <Space>
-            <CacheRefresh module="dashboard:experiments" warmup={false} onRefresh={loadExperiments} />
-            <CacheRefresh module="dashboard:equity" warmup={false} label="刷新权益" onRefresh={() => selectedExp && loadData(selectedExp, selectedRun)} />
-            <CacheRefresh module="dashboard:trades" warmup={false} label="刷新交易" onRefresh={() => selectedExp && loadData(selectedExp, selectedRun)} />
-            <CacheRefresh module="dashboard:positions" warmup={false} label="刷新持仓" onRefresh={() => selectedExp && loadData(selectedExp, selectedRun)} />
-            <Button icon={<ReloadOutlined />} onClick={() => { loadExperiments(); if (selectedExp) loadData(selectedExp, selectedRun); }} size="small">刷新全部</Button>
-          </Space>
+          <Button icon={<ReloadOutlined />} onClick={() => { loadExperiments(); if (selectedExp) loadData(selectedExp, selectedRun); }} size="small">刷新全部</Button>
         </Col>
       </Row>
 
