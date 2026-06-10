@@ -39,13 +39,14 @@ const LogBrowser: React.FC = () => {
   const [fileList, setFileList] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<string>('');
   const [loading, setLoading] = useState(false);
-  const [live, setLive] = useState(true);
+  const [live, setLive] = useState(!urlFile);  // static mode when opening a specific file
   const [timeRange, setTimeRange] = useState<[string, string] | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const linesRef = useRef<LogLine[]>([]);
   linesRef.current = lines;
   const scrollToBottom = useCallback(() => { if (containerRef.current) containerRef.current.scrollTop = containerRef.current.scrollHeight; }, []);
+  const scrollToTop = useCallback(() => { if (containerRef.current) containerRef.current.scrollTop = 0; }, []);
 
   const fetchLogs = useCallback(async (mod: string, lvl: string, s: string, tr: [string, string] | null, f: string = '') => {
     setLoading(true);
@@ -73,7 +74,7 @@ const LogBrowser: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => { if (!live) scrollToBottom(); }, [lines, live, scrollToBottom]);
+  useEffect(() => { if (!live) scrollToTop(); }, [lines, live, scrollToTop]);
 
   useEffect(() => {
     if (!live) { if (wsRef.current) { wsRef.current.close(); wsRef.current = null; } return; }
