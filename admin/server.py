@@ -1352,20 +1352,32 @@ def _scan_cron_logs_and_sync():
                     run["finished_at"] = datetime.fromtimestamp(log_path.stat().st_mtime, tz=timezone.utc)
                     run["exit_code"] = -1  # hanging/timeout
 
-        # Upsert: update existing running records or insert new ones
+        # Upsert: update existing records or insert new ones
         for run in runs:
             try:
+                run_ts = run.get("started_at")
                 existing = session.query(CronRun).filter(
                     CronRun.job_name == run["job_name"],
                     CronRun.log_file == run.get("log_file"),
                 ).first()
+                # Fallback: match by job_name + close timestamp (≤2 min) —
+                # catches manual runs that created CronRun before log file existed
+                if existing is None and run_ts:
+                    from datetime import timedelta
+                    existing = session.query(CronRun).filter(
+                        CronRun.job_name == run["job_name"],
+                        CronRun.started_at >= run_ts - timedelta(minutes=2),
+                        CronRun.started_at <= run_ts + timedelta(minutes=2),
+                    ).first()
                 if existing:
-                    # Update existing record (e.g. running → success/failed)
+                    # Update existing record (e.g. running → success/failed, add log_file)
                     if existing.status == "running" and run["status"] != "running":
                         existing.status = run["status"]
                         existing.exit_code = run.get("exit_code")
                         existing.finished_at = run.get("finished_at")
-                        session.commit()
+                    if not existing.log_file and run.get("log_file"):
+                        existing.log_file = run.get("log_file")
+                    session.commit()
                 else:
                     _record_cron_run(
                         job_name=run["job_name"],
