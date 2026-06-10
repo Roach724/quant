@@ -28,28 +28,21 @@ fi
 
 ENV="${QUANT_ENV:-prod}"
 
-# Primary log path (unified structured)
+# Log directory — always use timestamped naming
 LOG_DIR="/var/log/quant/${ENV}/${MODULE}"
 LOGFILE="${LOG_DIR}/${JOB_NAME}_$(date +%Y%m%d_%H%M%S).log"
-
-# Fallback: legacy path
-LEGACY_DIR="/home/quant/logs"
-LEGACY_LOGFILE="${LEGACY_DIR}/${JOB_NAME}.log"
-ALERTFILE="${LEGACY_DIR}/quant_alerts.log"
+ALERTFILE="/var/log/quant/${ENV}/quant_alerts.log"
 
 LOCKFILE="/tmp/cron_${JOB_NAME}.lock"
-GLOBAL_SEM="/tmp/cron_global.sem"
 MAX_CONCURRENT=3
 
-# Try primary log dir; fall back to legacy
-if mkdir -p "$LOG_DIR" 2>/dev/null && [ -w "$LOG_DIR" ]; then
-    USE_LEGACY=false
-else
-    mkdir -p "$LEGACY_DIR" 2>/dev/null || true
-    LOG_DIR="$LEGACY_DIR"
-    LOGFILE="$LEGACY_LOGFILE"
-    USE_LEGACY=true
-fi
+# Ensure log directory exists and is writable
+mkdir -p "$LOG_DIR" 2>/dev/null || {
+    # Last resort: try /tmp
+    LOG_DIR="/tmp/quant_cron_logs"
+    mkdir -p "$LOG_DIR" 2>/dev/null || true
+    LOGFILE="${LOG_DIR}/${JOB_NAME}_$(date +%Y%m%d_%H%M%S).log"
+}
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} START  module=${MODULE} env=${ENV}" >> "$LOGFILE"
 
