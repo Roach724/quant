@@ -87,11 +87,36 @@ def _init_cache_modules():
     logger.info("Cache modules registered: %d", len(_cache_mgr.list_modules()))
 
 
+def _cleanup_stuck_cron_runs():
+    """Mark orphaned 'running' CronRun records as failed.
+
+    Runs at startup to clean up status records that were left in 'running'
+    state by a previous server crash or incomplete log scan.
+    """
+    from admin.models import get_session
+    session = get_session()
+    try:
+        cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        count = session.query(CronRun).filter(
+            CronRun.status == "running",
+            CronRun.started_at < cutoff,  # only clean up records from previous days
+        ).update({
+            "status": "failed",
+            "finished_at": datetime.now(timezone.utc),
+        }, synchronize_session=False)
+        session.commit()
+        if count:
+            logger.info("Startup heal: %d stuck CronRun records marked failed", count)
+    except Exception:
+        logger.exception("CronRun cleanup failed (non-fatal)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     _startup_auto_heal()
     _init_cache_modules()
+    _cleanup_stuck_cron_runs()
     yield
     from admin.models import cleanup_session
     cleanup_session()
@@ -1201,37 +1226,64 @@ def _record_cron_run(job_name: str, command: str, trigger_type: str,
 
 
 def _scan_cron_logs_and_sync():
-    """Scan cron log files and insert missing run records.
+    """Scan cron log files and insert/update run records.
 
     Parses cron_wrapper.sh structured log lines:
       [TIMESTAMP] JOB_NAME START  module=...
       [TIMESTAMP] JOB_NAME OK  module=...
       [TIMESTAMP] JOB_NAME FAILED (exit=N)  module=...
       [TIMESTAMP] JOB_NAME SKIPPED (reason)  module=...
+
+    Skips files modified <60s ago (still being written).
+    Re-scans files with "running" records to pick up status changes.
     """
-    import fnmatch
     from admin.models import get_session
+    import time as _time
     log_dir = Path("/var/log/quant/prod/cron")
     if not log_dir.is_dir():
         return
 
-    # Get already-recorded log files
+    now_ts = _time.time()
     session = get_session()
-    recorded_files = set()
+
+    # Find files that have "running" records (need re-scan)
+    stuck_files: set[str] = set()
     try:
         for row in session.query(CronRun.log_file).filter(
-            CronRun.log_file.isnot(None)
+            CronRun.status == "running",
+            CronRun.log_file.isnot(None),
         ).all():
             if row[0]:
-                recorded_files.add(os.path.basename(row[0]))
+                stuck_files.add(os.path.basename(row[0]))
     except Exception:
         pass
 
-    # Scan log files — only *.log (not archives)
+    # Find already-fully-recorded files (all runs have final status)
+    recorded_files: set[str] = set()
+    try:
+        for row in session.query(CronRun.log_file).filter(
+            CronRun.log_file.isnot(None),
+        ).all():
+            fname = os.path.basename(row[0]) if row[0] else ""
+            if fname and fname not in stuck_files:
+                recorded_files.add(fname)
+    except Exception:
+        pass
+
     for log_path in sorted(log_dir.glob("*.log")):
         fname = log_path.name
-        if fname in recorded_files:
+
+        # Skip files still being written (<60s since last modification)
+        try:
+            if now_ts - log_path.stat().st_mtime < 60:
+                continue
+        except Exception:
             continue
+
+        # Skip already-fully-recorded files (unless they have stuck runs)
+        if fname in recorded_files and fname not in stuck_files:
+            continue
+
         try:
             text = log_path.read_text(errors="replace")
         except Exception:
@@ -1264,7 +1316,6 @@ def _scan_cron_logs_and_sync():
                         "status": "running", "log_file": str(log_path),
                     })
                 elif action in ("OK", "FAILED", "SKIPPED"):
-                    # Match against the most recent START for this job_name in this file
                     status_map = {"OK": "success", "FAILED": "failed", "SKIPPED": "skipped"}
                     status = status_map.get(action, "failed")
                     exit_code = None
@@ -1272,7 +1323,7 @@ def _scan_cron_logs_and_sync():
                         ec_m = re.search(r'exit=(\d+)', line)
                         if ec_m:
                             exit_code = int(ec_m.group(1))
-                    # Find matching START
+                    # Match against most recent START for this job_name
                     for run in reversed(runs):
                         if run["job_name"] == job_name and run["status"] == "running":
                             run["status"] = status
@@ -1280,7 +1331,6 @@ def _scan_cron_logs_and_sync():
                             run["exit_code"] = exit_code
                             break
                     else:
-                        # Orphan OK/FAILED — still record
                         runs.append({
                             "job_name": job_name, "started_at": ts,
                             "finished_at": ts, "status": status,
@@ -1288,19 +1338,31 @@ def _scan_cron_logs_and_sync():
                         })
             i += 1
 
-        # Insert discovered runs
+        # Upsert: update existing running records or insert new ones
         for run in runs:
             try:
-                _record_cron_run(
-                    job_name=run["job_name"],
-                    command="",
-                    trigger_type="scheduled",
-                    status=run["status"],
-                    exit_code=run.get("exit_code"),
-                    started_at=run.get("started_at"),
-                    finished_at=run.get("finished_at"),
-                    log_file=run.get("log_file"),
-                )
+                existing = session.query(CronRun).filter(
+                    CronRun.job_name == run["job_name"],
+                    CronRun.log_file == run.get("log_file"),
+                ).first()
+                if existing:
+                    # Update existing record (e.g. running → success/failed)
+                    if existing.status == "running" and run["status"] != "running":
+                        existing.status = run["status"]
+                        existing.exit_code = run.get("exit_code")
+                        existing.finished_at = run.get("finished_at")
+                        session.commit()
+                else:
+                    _record_cron_run(
+                        job_name=run["job_name"],
+                        command="",
+                        trigger_type="scheduled",
+                        status=run["status"],
+                        exit_code=run.get("exit_code"),
+                        started_at=run.get("started_at"),
+                        finished_at=run.get("finished_at"),
+                        log_file=run.get("log_file"),
+                    )
             except Exception:
                 pass
 
