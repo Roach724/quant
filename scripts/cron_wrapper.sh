@@ -71,9 +71,13 @@ if [ "$ACQUIRED_SEM" = false ]; then
     exit 0
 fi
 
-# Run the command, capture all output
-"$@" >> "$LOGFILE" 2>&1
+# Run the command with timeout (2h), capture all output
+timeout 7200 "$@" >> "$LOGFILE" 2>&1
 RC=$?
+# timeout exit code is 124 when the command is killed
+if [ $RC -eq 124 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} TIMEOUT (2h)  module=${MODULE} env=${ENV}" >> "$LOGFILE"
+fi
 
 ) 9>"$LOCKFILE"
 

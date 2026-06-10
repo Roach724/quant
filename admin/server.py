@@ -91,22 +91,27 @@ def _cleanup_stuck_cron_runs():
     """Mark orphaned 'running' CronRun records as failed.
 
     Runs at startup to clean up status records that were left in 'running'
-    state by a previous server crash or incomplete log scan.
+    state by a previous server crash, hanging task, or incomplete log scan.
     """
     from admin.models import get_session
     session = get_session()
     try:
-        cutoff = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        # Mark running records older than 2 hours as failed (hanging tasks)
+        cutoff = datetime.now(timezone.utc).replace(
+            hour=datetime.now(timezone.utc).hour - 2 if datetime.now(timezone.utc).hour >= 2 else 0,
+            minute=0, second=0, microsecond=0,
+        )
         count = session.query(CronRun).filter(
             CronRun.status == "running",
-            CronRun.started_at < cutoff,  # only clean up records from previous days
+            CronRun.started_at < cutoff,
         ).update({
             "status": "failed",
+            "exit_code": -1,
             "finished_at": datetime.now(timezone.utc),
         }, synchronize_session=False)
         session.commit()
         if count:
-            logger.info("Startup heal: %d stuck CronRun records marked failed", count)
+            logger.info("Startup heal: %d stuck CronRun records marked failed (started before %s)", count, cutoff.isoformat())
     except Exception:
         logger.exception("CronRun cleanup failed (non-fatal)")
 
@@ -1337,6 +1342,15 @@ def _scan_cron_logs_and_sync():
                             "exit_code": exit_code, "log_file": str(log_path),
                         })
             i += 1
+
+        # If file is old and has unfinished STARTs, mark them failed (hanging task)
+        file_age_hours = (now_ts - log_path.stat().st_mtime) / 3600
+        if file_age_hours > 4:
+            for run in runs:
+                if run["status"] == "running" and run.get("finished_at") is None:
+                    run["status"] = "failed"
+                    run["finished_at"] = datetime.fromtimestamp(log_path.stat().st_mtime, tz=timezone.utc)
+                    run["exit_code"] = -1  # hanging/timeout
 
         # Upsert: update existing running records or insert new ones
         for run in runs:
