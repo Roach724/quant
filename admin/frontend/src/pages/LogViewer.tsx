@@ -55,7 +55,20 @@ const LogBrowser: React.FC = () => {
       if (tr && tr[0]) params.set('start', tr[0]); if (tr && tr[1]) params.set('end', tr[1]);
       if (f) params.set('file', f);
       const data = await api.get(`/api/admin/logs?${params.toString()}`);
-      if (!data.error) { setLines(data.lines || []); setFileName(data.file || null); if (data.files) { setFileList(data.files); if (!f && data.files.length > 0) setSelectedFile(data.files[0]); } }
+      if (!data.error) {
+        setLines(data.lines || []);
+        setFileName(data.file || null);
+        if (data.files) {
+          setFileList(data.files);
+          if (f && data.files.length > 0) {
+            // Match the requested file (by basename) and select it
+            const match = data.files.find((pf: string) => pf.endsWith('/' + f) || pf === f);
+            setSelectedFile(match || data.files[0]);
+          } else if (!f && data.files.length > 0) {
+            setSelectedFile(data.files[0]);
+          }
+        }
+      }
     } catch { } finally { setLoading(false); }
   }, []);
 
@@ -111,7 +124,7 @@ const LogBrowser: React.FC = () => {
           if (dates && dates[0] && dates[1]) { const tr: [string, string] = [dates[0].toISOString(), dates[1].toISOString()]; setTimeRange(tr); fetchLogs(module, level, search, tr); }
           else { setTimeRange(null); fetchLogs(module, level, search, null); }
         }} style={{ width: 360 }} placeholder={['开始时间', '结束时间']} />
-        <Button icon={<ReloadOutlined />} onClick={() => fetchLogs(module, level, search, timeRange)} loading={loading}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => fetchLogs(module, level, search, timeRange, selectedFile)} loading={loading}>刷新</Button>
         <Space><Switch checked={live} onChange={setLive} /><Text style={{ fontSize: 12 }}>Live</Text></Space>
         {fileName && <Text type="secondary" style={{ fontSize: 11 }}>{fileName}</Text>}
       </div>
