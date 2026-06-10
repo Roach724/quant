@@ -3,7 +3,6 @@ import {
   PlusOutlined,
   EditOutlined,
   HistoryOutlined,
-  ReloadOutlined,
   FileTextOutlined,
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
@@ -19,7 +18,6 @@ import {
   Drawer,
   Table,
   Tag,
-  Tooltip,
   Popconfirm,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -375,12 +373,6 @@ const CronJobs: React.FC = () => {
           >
             新建任务
           </Button>,
-          <Tooltip key="refresh" title="刷新">
-            <Button
-              icon={<ReloadOutlined />}
-              onClick={() => actionRef.current?.reload()}
-            />
-          </Tooltip>,
         ]}
         request={async () => {
           const allJobs: CronJob[] = await api.get('/api/admin/cron');
