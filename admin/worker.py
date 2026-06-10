@@ -31,6 +31,26 @@ def run_one(task: Task) -> None:
         session.commit()
 
         command = (t.params or {}).get("cmd") or (t.params or {}).get("command", "echo no command")
+
+        # Create CronRun entry for manual triggers BEFORE running (so log link works during execution)
+        cron_name = (t.params or {}).get("cron_name", "")
+        cron_trigger = (t.params or {}).get("cron_trigger", "")
+        cron_run_id = None
+        if cron_name and cron_trigger == "manual":
+            try:
+                run = CronRun(
+                    job_name=cron_name,
+                    command=(t.params or {}).get("cron_command", ""),
+                    trigger_type="manual",
+                    status="running",
+                    started_at=datetime.now(timezone.utc),
+                )
+                session.add(run)
+                session.commit()
+                cron_run_id = run.id
+            except Exception:
+                pass
+
         proc = subprocess.Popen(
             command,
             shell=True,
@@ -47,36 +67,36 @@ def run_one(task: Task) -> None:
         t.finished_at = datetime.now(timezone.utc)
         session.commit()
 
-        # Record CronRun for manual triggers (create final record directly)
-        cron_name = (t.params or {}).get("cron_name", "")
-        cron_trigger = (t.params or {}).get("cron_trigger", "")
+        # Update CronRun entry for manual triggers with final status + actual log file
         if cron_name and cron_trigger == "manual":
             try:
-                from datetime import datetime as _dt
-                started_str = (t.params or {}).get("cron_started", "")
-                started_at = _dt.fromisoformat(started_str) if started_str else t.started_at
-                # Find actual log file (can't predict wrapper's timestamp)
-                actual_log = None
+                # Find the pre-created record (by id) or query by name+running
+                existing = None
+                if cron_run_id:
+                    existing = session.get(CronRun, cron_run_id)
+                if existing is None:
+                    from datetime import datetime as _dt
+                    started_str = (t.params or {}).get("cron_started", "")
+                    started_at = _dt.fromisoformat(started_str) if started_str else t.started_at
+                    existing = CronRun(
+                        job_name=cron_name,
+                        command=(t.params or {}).get("cron_command", ""),
+                        trigger_type="manual",
+                        started_at=started_at or datetime.now(timezone.utc),
+                    )
+                    session.add(existing)
+                # Find actual log file
                 try:
                     pattern = os.path.join(LOG_DIR, f"{cron_name}_*.log")
                     candidates = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
                     if candidates:
-                        actual_log = candidates[0]
+                        existing.log_file = candidates[0]
                 except Exception:
                     pass
-
-                run = CronRun(
-                    job_name=cron_name,
-                    command=(t.params or {}).get("cron_command", ""),
-                    trigger_type="manual",
-                    status="success" if proc.returncode == 0 else "failed",
-                    exit_code=proc.returncode,
-                    started_at=started_at or datetime.now(timezone.utc),
-                    finished_at=datetime.now(timezone.utc),
-                    log_file=actual_log,
-                    error_tail=(stderr or "")[:500] if proc.returncode != 0 else None,
-                )
-                session.add(run)
+                existing.status = "success" if proc.returncode == 0 else "failed"
+                existing.exit_code = proc.returncode
+                existing.finished_at = datetime.now(timezone.utc)
+                existing.error_tail = (stderr or "")[:500] if proc.returncode != 0 else None
                 session.commit()
             except Exception:
                 pass

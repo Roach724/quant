@@ -1423,16 +1423,16 @@ def admin_cron_list():
     last_runs: dict[str, dict] = {}
     try:
         session = get_session()
+        # Include running records too (for live log link), but completed first
         rows = session.query(
             CronRun.job_name,
             CronRun.status,
             CronRun.finished_at,
             CronRun.trigger_type,
             CronRun.log_file,
-        ).filter(
-            CronRun.finished_at.isnot(None)
         ).order_by(
-            CronRun.finished_at.desc()
+            CronRun.finished_at.is_(None),  # NULLs last (running after completed)
+            CronRun.finished_at.desc(),
         ).limit(500).all()
         for row in rows:
             if row[0] not in last_runs:
