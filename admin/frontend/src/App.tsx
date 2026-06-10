@@ -6,6 +6,7 @@ import {
   DashboardOutlined,
   LineChartOutlined,
   DollarOutlined,
+  DatabaseOutlined,
 } from '@ant-design/icons';
 import ProLayout from '@ant-design/pro-layout';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
@@ -19,6 +20,7 @@ import DataMap from './pages/DataMap';
 import LogViewer from './pages/LogViewer';
 import CronJobs from './pages/CronJobs';
 import Models from './pages/Models';
+import CacheManager from './pages/CacheManager';
 
 const menuData = [
   { path: '/market', name: '行情中心', icon: <LineChartOutlined /> },
@@ -29,6 +31,7 @@ const menuData = [
   { path: '/data', name: '数据中心', icon: <CloudServerOutlined /> },
   { path: '/logs', name: '日志中心', icon: <FileTextOutlined /> },
   { path: '/cron', name: '调度中心', icon: <ClockCircleOutlined /> },
+  { path: '/cache', name: '缓存管理', icon: <DatabaseOutlined /> },
 ];
 
 function AppLayout() {
@@ -63,6 +66,7 @@ function AppLayout() {
         <Route path="/data" element={<DataMap />} />
         <Route path="/logs" element={<LogViewer />} />
         <Route path="/cron" element={<CronJobs />} />
+        <Route path="/cache" element={<CacheManager />} />
         {/* Backward compat */}
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/experiments" element={<ExperimentDashboard />} />

@@ -6,7 +6,12 @@ import requests
 import pandas as pd
 from contextlib import asynccontextmanager
 
+from common.cache_subsystem import get_cache_manager
+
 logger = logging.getLogger(__name__)
+
+# ── Cache subsystem singleton (per-process) ─────────────────────────────────
+_cache_mgr = get_cache_manager()
 
 from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,10 +56,42 @@ def _startup_auto_heal():
         logger.exception("Startup auto-heal failed (non-fatal)")
 
 
+# ── Cache module registration ────────────────────────────────────────────────
+
+def _init_cache_modules():
+    """Register all 17 cache modules.  Called once at server startup."""
+
+    # ── Group A: experiment data (TTL = 1 h) ───────────────────────────────
+    _cache_mgr.register_module("dashboard:experiments", ttl=3600)
+    _cache_mgr.register_module("dashboard:equity", ttl=3600)
+    _cache_mgr.register_module("dashboard:trades", ttl=3600)
+    _cache_mgr.register_module("dashboard:positions", ttl=3600)
+    _cache_mgr.register_module("dashboard:paper_runs", ttl=3600)
+    _cache_mgr.register_module("dashboard:paper_run_detail", ttl=3600)
+    _cache_mgr.register_module("dashboard:experiment_runs", ttl=3600)
+
+    # ── Group B: market & real-time data ────────────────────────────────────
+    _cache_mgr.register_module("market:bars:5m", ttl=300)        # 5 min
+    _cache_mgr.register_module("market:bars:1d", ttl=86400)      # 24 h
+    _cache_mgr.register_module("dashboard:pipeline", ttl=3600)   # 1 h
+
+    # ── Group C: low-frequency metadata (TTL = 7 d) ─────────────────────────
+    _cache_mgr.register_module("data:tables",       ttl=604800)
+    _cache_mgr.register_module("market:symbols",    ttl=604800)
+    _cache_mgr.register_module("factors:list",      ttl=604800)
+    _cache_mgr.register_module("models:list",       ttl=604800)
+    _cache_mgr.register_module("models:versions",   ttl=604800)
+    _cache_mgr.register_module("cron:list",         ttl=604800)
+    _cache_mgr.register_module("strategies:list",   ttl=604800)
+
+    logger.info("Cache modules registered: %d", len(_cache_mgr.list_modules()))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     _startup_auto_heal()
+    _init_cache_modules()
     yield
     from admin.models import cleanup_session
     cleanup_session()
@@ -80,6 +117,75 @@ async def db_session_cleanup(request, call_next):
     finally:
         from admin.models import cleanup_session
         cleanup_session()
+
+
+# ── Cache management API ────────────────────────────────────────────────────
+
+_CACHE_INVALIDATE_SCHEMA = type("CacheInvalidate", (BaseModel,), {
+    "module": (str, "*"),
+    "key": (Optional[str], None),
+    "__annotations__": {"module": str, "key": Optional[str]},
+})
+
+class CacheRefreshRequest(BaseModel):
+    module: str
+    params: dict = {}
+
+
+@app.get("/api/admin/cache/modules")
+def cache_modules():
+    """List all registered cache modules with stats."""
+    return _cache_mgr.stats()
+
+
+@app.post("/api/admin/cache/invalidate")
+def cache_invalidate(body: dict = Body(...)):
+    """Invalidate cache by module name or glob pattern.
+
+    Body: {"module": "dashboard:*", "key": null}
+    """
+    pattern = body.get("module", "*")
+    key = body.get("key")
+    if key:
+        mod = _cache_mgr.get(pattern)
+        if mod is None:
+            return {"invalidated": 0, "modules_affected": []}
+        count = mod.invalidate(key)
+        return {"invalidated": count, "modules_affected": [pattern]}
+    affected = _cache_mgr.invalidate(pattern)
+    return {
+        "invalidated": sum(affected.values()),
+        "modules_affected": list(affected.keys()),
+    }
+
+
+@app.post("/api/admin/cache/refresh")
+async def cache_refresh(body: CacheRefreshRequest):
+    """Invalidate a module's cache and re-warm it immediately.
+
+    Body: {"module": "dashboard:experiments", "params": {"type": "live"}}
+
+    Returns the freshly computed data (same shape as the original API).
+    """
+    import time as _time
+    mod = _cache_mgr.get(body.module)
+    if mod is None:
+        raise HTTPException(404, f"Cache module '{body.module}' not found")
+    if mod._warmup_fn is None:
+        mod.invalidate()
+        return {"module": body.module, "from_cache": False, "data": None,
+                "message": "invalidated (no warmup registered)"}
+    t0 = _time.monotonic()
+    try:
+        data = await mod.refresh(**body.params)
+    except Exception as exc:
+        raise HTTPException(500, f"Warmup failed: {exc}")
+    return {
+        "module": body.module,
+        "from_cache": False,
+        "data": data,
+        "took_ms": round((_time.monotonic() - t0) * 1000),
+    }
 
 
 # ── Request / response schemas ────────────────────────────────────────────────
@@ -715,6 +821,8 @@ def admin_experiment_delete(exp_id: str):
     except Exception as e:
         results["registry"] = str(e)[:80]
 
+        _cache_mgr.invalidate("dashboard:experiments")
+        _cache_mgr.invalidate("dashboard:*")
     return {"status": "ok", "details": results}
 
 
@@ -804,48 +912,49 @@ def admin_data_f10():
 @app.get("/api/admin/data/tables")
 def admin_data_tables():
     """Return all BQ tables with row counts, schemas, last write times."""
-    # Use a simple module-level cache with long TTL to avoid repeated INFO_SCHEMA queries
-    import time as _time
-    cache_key = "_bq_tables_cache"
-    now = _time.time()
-    if hasattr(admin_data_tables, cache_key):
-        cached_data, cached_ts = getattr(admin_data_tables, cache_key)
-        if now - cached_ts < 86400:  # 24-hour TTL
-            return cached_data
+    cache = _cache_mgr.get("data:tables")
+    key = "tables"
 
-    client = bigquery.Client(project="deductive-notch-495015-c2")
-    query = """
-        SELECT table_name, creation_time
-        FROM quant.INFORMATION_SCHEMA.TABLES
-        ORDER BY table_name
-    """
-    rows = client.query(query).result()
-    tables = []
-    for r in rows:
-        name = r.table_name
-        try:
-            cnt = list(client.query(f"SELECT COUNT(*) AS cnt FROM quant.{name}").result())[0].cnt
-        except Exception:
-            cnt = 0
-        try:
-            ts = list(client.query(f"SELECT MAX(timestamp) AS latest FROM quant.{name}").result())[0].latest
-            latest_str = ts.isoformat() if ts else None
-        except Exception:
-            latest_str = None
-        try:
-            cols = client.query(
-                f"SELECT column_name, data_type FROM quant.INFORMATION_SCHEMA.COLUMNS "
-                f"WHERE table_name='{name}' ORDER BY ordinal_position"
-            ).result()
-            schema_cols = [{"name": c.column_name, "type": c.data_type} for c in cols]
-        except Exception:
-            schema_cols = []
-        tables.append({
-            "table_name": name, "row_count": cnt,
-            "last_write": latest_str, "schema": schema_cols,
-        })
-    setattr(admin_data_tables, cache_key, (tables, now))
-    return tables
+    def _query():
+        client = bigquery.Client(project="deductive-notch-495015-c2")
+        query = """
+            SELECT table_name, creation_time
+            FROM quant.INFORMATION_SCHEMA.TABLES
+            ORDER BY table_name
+        """
+        rows = client.query(query).result()
+        tables = []
+        for r in rows:
+            name = r.table_name
+            try:
+                cnt = list(client.query(f"SELECT COUNT(*) AS cnt FROM quant.{name}").result())[0].cnt
+            except Exception:
+                cnt = 0
+            try:
+                ts = list(client.query(f"SELECT MAX(timestamp) AS latest FROM quant.{name}").result())[0].latest
+                latest_str = ts.isoformat() if ts else None
+            except Exception:
+                latest_str = None
+            try:
+                cols = client.query(
+                    f"SELECT column_name, data_type FROM quant.INFORMATION_SCHEMA.COLUMNS "
+                    f"WHERE table_name='{name}' ORDER BY ordinal_position"
+                ).result()
+                schema_cols = [{"name": c.column_name, "type": c.data_type} for c in cols]
+            except Exception:
+                schema_cols = []
+            tables.append({
+                "table_name": name, "row_count": cnt,
+                "last_write": latest_str, "schema": schema_cols,
+            })
+        return tables
+
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    result = _query()
+    cache.set(key, result)
+    return result
 
 
 @app.get("/api/admin/data/collectors")
@@ -1070,6 +1179,11 @@ def _normalize_to_wrapper(command: str, job_name: str) -> str:
 @app.get("/api/admin/cron")
 def admin_cron_list():
     """Read cron jobs from persistent file (/var/data/crontab.txt)."""
+    cache = _cache_mgr.get("cron:list")
+    cached = cache.get("cron")
+    if cached is not None:
+        return cached
+
     Crontab_File = "/var/data/crontab.txt"
     # Load registry for metadata (names, descriptions)
     registry_jobs = {}
@@ -1087,10 +1201,14 @@ def admin_cron_list():
 
     # Read from persistent crontab file
     if not os.path.isfile(Crontab_File):
-        return list(registry_jobs.values()) if registry_jobs else []
+        result = list(registry_jobs.values()) if registry_jobs else []
+        cache.set("cron", result)
+        return result
     raw = open(Crontab_File).read().strip()
     if not raw:
-        return list(registry_jobs.values()) if registry_jobs else []
+        result = list(registry_jobs.values()) if registry_jobs else []
+        cache.set("cron", result)
+        return result
 
     lines = raw.split("\n")
     jobs = []
@@ -1147,6 +1265,8 @@ def admin_cron_list():
                 "latest_log": latest.name if latest else None,
                 "last_run": datetime.fromtimestamp(latest.stat().st_mtime, tz=timezone.utc).isoformat() if latest else None,
             })
+
+    cache.set("cron", jobs)
     return jobs
 
 
@@ -1186,6 +1306,7 @@ def admin_cron_save(jobs: list[dict]):
 
     # Sync to system crontab (for cron daemon inside container)
     subprocess.run(["crontab", Crontab_File], capture_output=True)
+    _cache_mgr.invalidate("cron:list")
     return {"status": "ok"}
 
 
@@ -1208,6 +1329,7 @@ def admin_cron_add(job: dict = Body(...)):
     })
     with open(resolved, "w") as f:
         _json.dump(data, f, indent=2, ensure_ascii=False)
+    _cache_mgr.invalidate("cron:list")
     return {"status": "ok"}
 
 
@@ -1228,6 +1350,7 @@ def admin_cron_update(index: int, job: dict = Body(...)):
             target[key] = job[key]
     with open(resolved, "w") as f:
         _json.dump(data, f, indent=2, ensure_ascii=False)
+    _cache_mgr.invalidate("cron:list")
     return {"status": "ok", "job": target}
 
 
@@ -1462,10 +1585,13 @@ def admin_log_delete(module: str = Query("collector"), file: str = Query("")):
 @app.get("/api/admin/models")
 def admin_models():
     """List registered models with versions from MLflow."""
+    cache = _cache_mgr.get("models:list")
+    cached = cache.get("models")
+    if cached is not None:
+        return cached
     try:
         models = ModelRegistry.list_all_models()
-        # Return only name + basic version info (no metrics needed here)
-        return [{
+        result = [{
             "name": m["name"],
             "versions": [{
                 "version": v["version"],
@@ -1473,6 +1599,8 @@ def admin_models():
                 "run_id": v["run_id"],
             } for v in m["versions"]],
         } for m in models]
+        cache.set("models", result)
+        return result
     except Exception as e:
         return {"error": str(e)}
 
@@ -1480,8 +1608,13 @@ def admin_models():
 @app.get("/api/admin/models/{name}/history")
 def admin_model_history(name: str):
     """Return training run history for a model with key metrics."""
+    cache = _cache_mgr.get("models:versions")
+    key = f"history:{name}"
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
     versions = ModelRegistry.get_model_versions(name)
-    return [{
+    result = [{
         "version": v["version"],
         "run_id": v["run_id"],
         "rmse": v.get("rmse"),
@@ -1490,6 +1623,8 @@ def admin_model_history(name: str):
         "n_features": v.get("n_features", 0),
         "n_trials": 0,
     } for v in versions]
+    cache.set(key, result)
+    return result
 
 
 @app.post("/api/admin/models/train")
@@ -1534,8 +1669,13 @@ def admin_train_model(model_name: str, market: str = "us", skip_tuning: bool = F
 @app.get("/api/admin/models/{name}/versions")
 def admin_model_versions(name: str):
     """Get all versions of a model with metrics."""
+    cache = _cache_mgr.get("models:versions")
+    key = f"versions:{name}"
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
     versions = ModelRegistry.get_model_versions(name)
-    return [{
+    result = [{
         "version": v["version"],
         "stage": v["stage"],
         "run_id": v["run_id"],
@@ -1545,6 +1685,8 @@ def admin_model_versions(name: str):
         "dataset": v.get("dataset", ""),
         "training_time": v.get("training_time"),
     } for v in versions]
+    cache.set(key, result)
+    return result
 
 
 @app.post("/api/admin/models/{name}/stage")
@@ -1552,6 +1694,8 @@ def admin_model_stage(name: str, version: str = "", stage: str = ""):
     """Transition a model version to a new stage."""
     try:
         ModelRegistry.promote(name, int(version), stage)
+        _cache_mgr.invalidate("models:list")
+        _cache_mgr.invalidate(f"models:versions")
         return {"status": "ok", "name": name, "version": version, "stage": stage}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1562,6 +1706,8 @@ def admin_model_version_delete(name: str, version: int):
     """Delete a model version from MLflow registry."""
     try:
         ModelRegistry.delete_version(name, version)
+        _cache_mgr.invalidate("models:list")
+        _cache_mgr.invalidate("models:versions")
         return {"status": "ok", "name": name, "version": version}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1570,6 +1716,10 @@ def admin_model_version_delete(name: str, version: int):
 @app.get("/api/admin/strategies")
 def admin_strategies():
     """List strategy files in strategies/ directory."""
+    cache = _cache_mgr.get("strategies:list")
+    cached = cache.get("list")
+    if cached is not None:
+        return cached
     files = glob.glob("/opt/quant/strategies/*.py")
     result = []
     for f in sorted(files):
@@ -1581,17 +1731,25 @@ def admin_strategies():
             "created_at": ctime if ctime < mtime else mtime,
             "updated_at": mtime,
         })
+    cache.set("list", result)
     return result
 
 
 @app.get("/api/admin/strategies/{name}")
 def admin_strategy_read(name: str):
     """Read a strategy source file."""
+    cache = _cache_mgr.get("strategies:list")
+    key = f"content:{name}"
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
     path = f"/opt/quant/strategies/{name}"
     if not os.path.isfile(path) or not name.endswith(".py"):
         return {"error": "Invalid strategy name"}, 400
     with open(path) as f:
-        return {"name": name, "source": f.read()}
+        result = {"name": name, "source": f.read()}
+    cache.set(key, result)
+    return result
 
 
 @app.put("/api/admin/strategies/{name}")
@@ -1602,6 +1760,7 @@ def admin_strategy_save(name: str, body: dict = Body(...)):
         return {"error": "Invalid strategy name"}, 400
     with open(path, "w") as f:
         f.write(body.get("source", ""))
+    _cache_mgr.invalidate("strategies:list")
     return {"status": "saved"}
 
 
@@ -1615,6 +1774,7 @@ def admin_strategy_delete(name: str):
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
     shutil.move(path, path + ".del")
+    _cache_mgr.invalidate("strategies:list")
     return {"status": "ok", "backup": name + ".del"}
 
 
@@ -1623,6 +1783,11 @@ def admin_strategy_delete(name: str):
 @app.get("/api/admin/factors")
 def admin_factors():
     """List all factors with market coverage from factor_values."""
+    cache = _cache_mgr.get("factors:list")
+    cached = cache.get("factors")
+    if cached is not None:
+        return cached
+
     reg = FactorRegistry()
     markets = ["us", "hk", "crypto"]
     active_frames = []
@@ -1684,6 +1849,7 @@ def admin_factors():
             "coverage": coverage.get(fid, []),
             "latest_ic": _clean(row.get("latest_ic_mean")),
         })
+    cache.set("factors", result)
     return result
 
 
@@ -1696,6 +1862,7 @@ def admin_factor_toggle(factor_id: str, active: bool = True):
         reg.activate(factor_id)
     else:
         reg.deactivate(factor_id)
+    _cache_mgr.invalidate("factors:list")
     return {"status": "ok", "factor_id": factor_id, "active": active}
 
 
@@ -2290,48 +2457,52 @@ def _db_row_to_dict(r, names):
 # ---------------------------------------------------------------------------
 @app.get("/api/admin/dashboard/experiments")
 async def dash_experiments(type: str = ""):
-    client = _DB_BQ()
-    prefix_filter = ""
-    if type:
-        prefix_filter = f"AND exp_id LIKE '{type}_%'"
-    # 1. Query BQ for experiments with equity data
-    query = f"""
-        SELECT * EXCEPT (rn)
-        FROM (
-            SELECT *,
-                   ROW_NUMBER() OVER (PARTITION BY exp_id ORDER BY ts DESC) AS rn
-            FROM {_DB_TABLE("experiment_equity")}
-            WHERE NOT STARTS_WITH(exp_id, "test_") {prefix_filter}
-        )
-        WHERE rn = 1
-        ORDER BY ts DESC
-    """
-    equity_map: dict[str, dict] = {}
-    try:
-        rows = client.query(query).result()
-        for row in rows:
-            equity_map[row.exp_id] = {
-                "exp_id": row.exp_id, "ts": _db_serialize(row.ts),
-                "bar": row.bar, "equity": row.equity, "cash": row.cash,
-                "portfolio_value": row.portfolio_value, "daily_pnl": row.daily_pnl,
-                "drawdown": row.drawdown,
-            }
-    except Exception as exc:
-        logging.getLogger(__name__).error("dash_experiments query error: %s", exc)
+    cache = _cache_mgr.get("dashboard:experiments")
+    key = f"list:{type or 'all'}"
 
-    # 2. Also include registry experiments that have no equity yet
-    from live.experiment_manager import ExperimentManager
-    mgr = ExperimentManager()
-    for exp in mgr.list(exp_type=type or None):
-        if "test" in exp.id:
-            continue
-        if exp.id not in equity_map:
-            equity_map[exp.id] = {
-                "exp_id": exp.id, "ts": exp.created_at,
-                "bar": 0, "equity": 0, "cash": 0,
-                "portfolio_value": 0, "daily_pnl": 0, "drawdown": 0,
-            }
-    return sorted(equity_map.values(), key=lambda x: x["ts"], reverse=True)
+    async def _query():
+        client = _DB_BQ()
+        prefix_filter = ""
+        if type:
+            prefix_filter = f"AND exp_id LIKE '{type}_%'"
+        query = f"""
+            SELECT * EXCEPT (rn)
+            FROM (
+                SELECT *,
+                       ROW_NUMBER() OVER (PARTITION BY exp_id ORDER BY ts DESC) AS rn
+                FROM {_DB_TABLE("experiment_equity")}
+                WHERE NOT STARTS_WITH(exp_id, "test_") {prefix_filter}
+            )
+            WHERE rn = 1
+            ORDER BY ts DESC
+        """
+        equity_map: dict[str, dict] = {}
+        try:
+            rows = client.query(query).result()
+            for row in rows:
+                equity_map[row.exp_id] = {
+                    "exp_id": row.exp_id, "ts": _db_serialize(row.ts),
+                    "bar": row.bar, "equity": row.equity, "cash": row.cash,
+                    "portfolio_value": row.portfolio_value, "daily_pnl": row.daily_pnl,
+                    "drawdown": row.drawdown,
+                }
+        except Exception as exc:
+            logging.getLogger(__name__).error("dash_experiments query error: %s", exc)
+
+        from live.experiment_manager import ExperimentManager
+        mgr = ExperimentManager()
+        for exp in mgr.list(exp_type=type or None):
+            if "test" in exp.id:
+                continue
+            if exp.id not in equity_map:
+                equity_map[exp.id] = {
+                    "exp_id": exp.id, "ts": exp.created_at,
+                    "bar": 0, "equity": 0, "cash": 0,
+                    "portfolio_value": 0, "daily_pnl": 0, "drawdown": 0,
+                }
+        return sorted(equity_map.values(), key=lambda x: x["ts"], reverse=True)
+
+    return await cache.get_or_compute_async(key, _query)
 
 
 # ---------------------------------------------------------------------------
@@ -2339,35 +2510,41 @@ async def dash_experiments(type: str = ""):
 # ---------------------------------------------------------------------------
 @app.get("/api/admin/dashboard/experiments/meta")
 async def dash_experiments_meta():
-    from pathlib import Path
-    import os as _os
-    _quant_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    exp_dir = Path(_quant_root) / "output/live/experiments"
-    if not exp_dir.exists():
-        return []
-    result = []
-    for exp_path in sorted(exp_dir.iterdir()):
-        if not exp_path.is_dir():
-            continue
-        exp_file = exp_path / "experiment.json"
-        if not exp_file.exists():
-            continue
-        try:
-            meta = _json.loads(exp_file.read_text())
-            sessions_file = exp_path / "investment_sessions.json"
-            sessions = []
-            if sessions_file.exists():
-                sessions = _json.loads(sessions_file.read_text())
-            result.append({
-                "exp_id": meta.get("experiment_id", exp_path.name),
-                "name": meta.get("name", ""),
-                "status": meta.get("status", "unknown"),
-                "created_at": meta.get("created_at", ""),
-                "sessions": len(sessions),
-            })
-        except Exception:
-            pass
-    return result
+    cache = _cache_mgr.get("dashboard:experiments")
+    key = "meta"
+
+    async def _query():
+        from pathlib import Path
+        import os as _os
+        _quant_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        exp_dir = Path(_quant_root) / "output/live/experiments"
+        if not exp_dir.exists():
+            return []
+        result = []
+        for exp_path in sorted(exp_dir.iterdir()):
+            if not exp_path.is_dir():
+                continue
+            exp_file = exp_path / "experiment.json"
+            if not exp_file.exists():
+                continue
+            try:
+                meta = _json.loads(exp_file.read_text())
+                sessions_file = exp_path / "investment_sessions.json"
+                sessions = []
+                if sessions_file.exists():
+                    sessions = _json.loads(sessions_file.read_text())
+                result.append({
+                    "exp_id": meta.get("experiment_id", exp_path.name),
+                    "name": meta.get("name", ""),
+                    "status": meta.get("status", "unknown"),
+                    "created_at": meta.get("created_at", ""),
+                    "sessions": len(sessions),
+                })
+            except Exception:
+                pass
+        return result
+
+    return await cache.get_or_compute_async(key, _query)
 
 
 # ---------------------------------------------------------------------------
@@ -2375,8 +2552,45 @@ async def dash_experiments_meta():
 # ---------------------------------------------------------------------------
 @app.get("/api/admin/dashboard/equity/{exp_id}")
 async def dash_equity_series(exp_id: str, run_id: str = ""):
-    client = _DB_BQ()
-    if not run_id:
+    cache = _cache_mgr.get("dashboard:equity")
+
+    async def _query():
+        client = _DB_BQ()
+        _run_id = run_id
+        if not _run_id:
+            latest_q = f"""
+                SELECT run_id FROM {_DB_TABLE("experiment_equity")}
+                WHERE exp_id = @exp_id
+                ORDER BY ts DESC LIMIT 1
+            """
+            latest_rows = list(client.query(latest_q, job_config=bigquery.QueryJobConfig(
+                query_parameters=[bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id)]
+            )).result())
+            if latest_rows:
+                _run_id = latest_rows[0].run_id or ""
+        run_filter = f"AND run_id = '{_run_id}'" if _run_id else ""
+        query = f"""
+            SELECT ts, bar, equity, cash, portfolio_value, daily_pnl, drawdown, run_id
+            FROM {_DB_TABLE("experiment_equity")}
+            WHERE exp_id = @exp_id {run_filter}
+            ORDER BY bar ASC
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id)]
+        )
+        try:
+            rows = client.query(query, job_config=job_config).result()
+            return [_db_row_to_dict(r, ["ts", "bar", "equity", "cash",
+                                         "portfolio_value", "daily_pnl", "drawdown", "run_id"])
+                    for r in rows]
+        except Exception as exc:
+            logging.getLogger(__name__).error("dash_equity_series query error for %s: %s", exp_id, exc)
+            return []
+
+    # Resolve run_id for cache key (same BQ query for latest run_id)
+    _run_id = run_id
+    if not _run_id:
+        client = _DB_BQ()
         latest_q = f"""
             SELECT run_id FROM {_DB_TABLE("experiment_equity")}
             WHERE exp_id = @exp_id
@@ -2386,25 +2600,9 @@ async def dash_equity_series(exp_id: str, run_id: str = ""):
             query_parameters=[bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id)]
         )).result())
         if latest_rows:
-            run_id = latest_rows[0].run_id or ""
-    run_filter = f"AND run_id = '{run_id}'" if run_id else ""
-    query = f"""
-        SELECT ts, bar, equity, cash, portfolio_value, daily_pnl, drawdown, run_id
-        FROM {_DB_TABLE("experiment_equity")}
-        WHERE exp_id = @exp_id {run_filter}
-        ORDER BY bar ASC
-    """
-    job_config = bigquery.QueryJobConfig(
-        query_parameters=[bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id)]
-    )
-    try:
-        rows = client.query(query, job_config=job_config).result()
-        return [_db_row_to_dict(r, ["ts", "bar", "equity", "cash",
-                                     "portfolio_value", "daily_pnl", "drawdown", "run_id"])
-                for r in rows]
-    except Exception as exc:
-        logging.getLogger(__name__).error("dash_equity_series query error for %s: %s", exp_id, exc)
-        return []
+            _run_id = latest_rows[0].run_id or ""
+    key = f"{exp_id}:{_run_id}"
+    return await cache.get_or_compute_async(key, _query)
 
 
 # ---------------------------------------------------------------------------
@@ -2412,45 +2610,65 @@ async def dash_equity_series(exp_id: str, run_id: str = ""):
 # ---------------------------------------------------------------------------
 @app.get("/api/admin/dashboard/trades/{exp_id}")
 async def dash_trades(exp_id: str, limit: int = 200, run_id: str = ""):
-    client = _DB_BQ()
-    if not run_id:
-        latest_q = f"""
-            SELECT run_id FROM {_DB_TABLE("experiment_trades")}
-            WHERE exp_id = '{exp_id}'
-            ORDER BY ts DESC LIMIT 1
+    cache = _cache_mgr.get("dashboard:trades")
+
+    async def _query():
+        client = _DB_BQ()
+        _run_id = run_id
+        if not _run_id:
+            latest_q = f"""
+                SELECT run_id FROM {_DB_TABLE("experiment_trades")}
+                WHERE exp_id = '{exp_id}'
+                ORDER BY ts DESC LIMIT 1
+            """
+            latest_rows = list(client.query(latest_q).result())
+            if latest_rows:
+                _run_id = latest_rows[0].run_id or ""
+        run_filter = f"AND run_id = @run_id" if _run_id else ""
+        query = f"""
+            SELECT ts, bar, symbol, side, qty, price, commission
+            FROM {_DB_TABLE("experiment_trades")}
+            WHERE exp_id = @exp_id {run_filter}
+            ORDER BY ts DESC
+            LIMIT @limit
         """
-        latest_rows = list(client.query(latest_q).result())
-        if latest_rows:
-            run_id = latest_rows[0].run_id or ""
-    run_filter = f"AND run_id = @run_id" if run_id else ""
-    query = f"""
-        SELECT ts, bar, symbol, side, qty, price, commission
-        FROM {_DB_TABLE("experiment_trades")}
-        WHERE exp_id = @exp_id {run_filter}
-        ORDER BY ts DESC
-        LIMIT @limit
-    """
-    params = [
-        bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id),
-        bigquery.ScalarQueryParameter("limit", "INT64", limit),
-    ]
-    if run_id:
-        params.append(bigquery.ScalarQueryParameter("run_id", "STRING", run_id))
-    job_config = bigquery.QueryJobConfig(query_parameters=params)
-    try:
-        rows = client.query(query, job_config=job_config).result()
-        result = []
-        for r in rows:
-            d = _db_row_to_dict(r, ["ts", "bar", "symbol", "side",
-                                     "qty", "price", "commission"])
-            if "hk" in exp_id and d.get("symbol"):
-                from common.normalize import normalize_symbol
-                d["symbol"] = normalize_symbol(d["symbol"], "hk")
-            result.append(d)
-        return result
-    except Exception as exc:
-        logging.getLogger(__name__).error("dash_trades query error for %s: %s", exp_id, exc)
-        return []
+        params = [
+            bigquery.ScalarQueryParameter("exp_id", "STRING", exp_id),
+            bigquery.ScalarQueryParameter("limit", "INT64", limit),
+        ]
+        if _run_id:
+            params.append(bigquery.ScalarQueryParameter("run_id", "STRING", _run_id))
+        job_config = bigquery.QueryJobConfig(query_parameters=params)
+        try:
+            rows = client.query(query, job_config=job_config).result()
+            result = []
+            for r in rows:
+                d = _db_row_to_dict(r, ["ts", "bar", "symbol", "side",
+                                         "qty", "price", "commission"])
+                if "hk" in exp_id and d.get("symbol"):
+                    from common.normalize import normalize_symbol
+                    d["symbol"] = normalize_symbol(d["symbol"], "hk")
+                result.append(d)
+            return result
+        except Exception as exc:
+            logging.getLogger(__name__).error("dash_trades query error for %s: %s", exp_id, exc)
+            return []
+
+    # Resolve run_id for cache key
+    _run_id = run_id
+    if not _run_id:
+        try:
+            client = _DB_BQ()
+            latest_rows = list(client.query(f"""
+                SELECT run_id FROM {_DB_TABLE("experiment_trades")}
+                WHERE exp_id = '{exp_id}' ORDER BY ts DESC LIMIT 1
+            """).result())
+            if latest_rows:
+                _run_id = latest_rows[0].run_id or ""
+        except Exception:
+            pass
+    key = f"{exp_id}:{_run_id}:{limit}"
+    return await cache.get_or_compute_async(key, _query)
 
 
 # ---------------------------------------------------------------------------
@@ -2458,93 +2676,114 @@ async def dash_trades(exp_id: str, limit: int = 200, run_id: str = ""):
 # ---------------------------------------------------------------------------
 @app.get("/api/admin/dashboard/experiments/{exp_id}/positions")
 async def dash_experiment_positions(exp_id: str, run_id: str = ""):
-    from collections import defaultdict
-    client = _DB_BQ()
-    if not run_id:
-        latest_q = f"""
-            SELECT run_id FROM {_DB_TABLE("experiment_trades")}
-            WHERE exp_id = '{exp_id}'
-            ORDER BY ts DESC LIMIT 1
-        """
-        latest_rows = list(client.query(latest_q).result())
-        if latest_rows:
-            run_id = latest_rows[0].run_id or ""
-    run_filter = f"AND run_id = '{run_id}'" if run_id else ""
-    trades_q = f"""
-        SELECT symbol, side, qty, price, ts
-        FROM {_DB_TABLE("experiment_trades")}
-        WHERE exp_id = '{exp_id}' {run_filter}
-        ORDER BY ts
-    """
-    rows = list(client.query(trades_q).result())
-    if not rows:
-        return []
+    cache = _cache_mgr.get("dashboard:positions")
 
-    lots = defaultdict(list)
-    for r in rows:
-        sym = r.symbol
-        qty = float(r.qty)
-        price = float(r.price)
-        if r.side == "buy":
-            lots[sym].append({"qty": qty, "price": price})
-        else:
-            remaining = qty
-            while remaining > 0 and lots[sym]:
-                lot = lots[sym][0]
-                if lot["qty"] <= remaining:
-                    remaining -= lot["qty"]
-                    lots[sym].pop(0)
-                else:
-                    lot["qty"] -= remaining
-                    remaining = 0
-
-    if not lots:
-        return []
-
-    result = []
-    for sym, sym_lots in lots.items():
-        total_qty = sum(l["qty"] for l in sym_lots)
-        if total_qty <= 0:
-            continue
-        total_cost = sum(l["qty"] * l["price"] for l in sym_lots)
-        avg_cost = total_cost / total_qty
-
-        us_prefix = sym.startswith("US.")
-        if us_prefix:
-            market = "us"
-            bare = sym[3:]
-        elif sym.startswith("HK."):
-            market = "hk"
-            bare = sym[3:]
-        else:
-            market = "hk" if "hk" in exp_id else "us"
-            bare = sym
-        from common.normalize import normalize_symbol, queryize_symbol
-        bq_sym = queryize_symbol(bare, market)
-        table = _DB_TABLE(f"{market}_bars_5m")
+    # Resolve run_id for cache key
+    _run_id = run_id
+    if not _run_id:
         try:
-            price_q = f"""
-                SELECT close FROM `{table}`
-                WHERE symbol = '{bq_sym}'
-                ORDER BY timestamp DESC LIMIT 1
-            """
-            price_rows = list(client.query(price_q).result())
-            current_price = float(price_rows[0].close) if price_rows else avg_cost
+            client = _DB_BQ()
+            latest_rows = list(client.query(f"""
+                SELECT run_id FROM {_DB_TABLE("experiment_trades")}
+                WHERE exp_id = '{exp_id}' ORDER BY ts DESC LIMIT 1
+            """).result())
+            if latest_rows:
+                _run_id = latest_rows[0].run_id or ""
         except Exception:
-            current_price = avg_cost
+            pass
+    key = f"{exp_id}:{_run_id}"
 
-        pnl = (current_price - avg_cost) * total_qty
-        pnl_pct = (current_price - avg_cost) / avg_cost * 100 if avg_cost > 0 else 0
-        result.append({
-            "symbol": bare,
-            "qty": round(total_qty, 2),
-            "avg_cost": round(avg_cost, 2),
-            "current_price": round(current_price, 2),
-            "market_value": round(total_qty * current_price, 2),
-            "pnl": round(pnl, 2),
-            "pnl_pct": round(pnl_pct, 2),
-        })
-    return result
+    async def _query():
+        from collections import defaultdict
+        client = _DB_BQ()
+        _inner_run_id = run_id
+        if not _inner_run_id:
+            latest_q = f"""
+                SELECT run_id FROM {_DB_TABLE("experiment_trades")}
+                WHERE exp_id = '{exp_id}'
+                ORDER BY ts DESC LIMIT 1
+            """
+            latest_rows = list(client.query(latest_q).result())
+            if latest_rows:
+                _inner_run_id = latest_rows[0].run_id or ""
+        run_filter = f"AND run_id = '{_inner_run_id}'" if _inner_run_id else ""
+        trades_q = f"""
+            SELECT symbol, side, qty, price, ts
+            FROM {_DB_TABLE("experiment_trades")}
+            WHERE exp_id = '{exp_id}' {run_filter}
+            ORDER BY ts
+        """
+        rows = list(client.query(trades_q).result())
+        if not rows:
+            return []
+
+        lots = defaultdict(list)
+        for r in rows:
+            sym = r.symbol
+            qty = float(r.qty)
+            price = float(r.price)
+            if r.side == "buy":
+                lots[sym].append({"qty": qty, "price": price})
+            else:
+                remaining = qty
+                while remaining > 0 and lots[sym]:
+                    lot = lots[sym][0]
+                    if lot["qty"] <= remaining:
+                        remaining -= lot["qty"]
+                        lots[sym].pop(0)
+                    else:
+                        lot["qty"] -= remaining
+                        remaining = 0
+
+        if not lots:
+            return []
+
+        result = []
+        for sym, sym_lots in lots.items():
+            total_qty = sum(l["qty"] for l in sym_lots)
+            if total_qty <= 0:
+                continue
+            total_cost = sum(l["qty"] * l["price"] for l in sym_lots)
+            avg_cost = total_cost / total_qty
+
+            us_prefix = sym.startswith("US.")
+            if us_prefix:
+                market = "us"
+                bare = sym[3:]
+            elif sym.startswith("HK."):
+                market = "hk"
+                bare = sym[3:]
+            else:
+                market = "hk" if "hk" in exp_id else "us"
+                bare = sym
+            from common.normalize import normalize_symbol, queryize_symbol
+            bq_sym = queryize_symbol(bare, market)
+            table = _DB_TABLE(f"{market}_bars_5m")
+            try:
+                price_q = f"""
+                    SELECT close FROM `{table}`
+                    WHERE symbol = '{bq_sym}'
+                    ORDER BY timestamp DESC LIMIT 1
+                """
+                price_rows = list(client.query(price_q).result())
+                current_price = float(price_rows[0].close) if price_rows else avg_cost
+            except Exception:
+                current_price = avg_cost
+
+            pnl = (current_price - avg_cost) * total_qty
+            pnl_pct = (current_price - avg_cost) / avg_cost * 100 if avg_cost > 0 else 0
+            result.append({
+                "symbol": bare,
+                "qty": round(total_qty, 2),
+                "avg_cost": round(avg_cost, 2),
+                "current_price": round(current_price, 2),
+                "market_value": round(total_qty * current_price, 2),
+                "pnl": round(pnl, 2),
+                "pnl_pct": round(pnl_pct, 2),
+            })
+        return result
+
+    return await cache.get_or_compute_async(key, _query)
 
 
 # ---------------------------------------------------------------------------
@@ -2553,20 +2792,26 @@ async def dash_experiment_positions(exp_id: str, run_id: str = ""):
 @app.get("/api/admin/dashboard/experiments/{exp_id}/runs")
 async def dash_experiment_runs(exp_id: str):
     """Return run history from registry (SSOT, synced with Lab)."""
-    from live.experiment_manager import ExperimentManager
-    mgr = ExperimentManager()
-    try:
-        mgr.auto_heal(exp_id)
-        runs = mgr.runs(exp_id)
-        return [{
-            "run_id": r.run_id,
-            "status": r.status,
-            "started_at": r.started_at,
-            "ended_at": r.ended_at,
-            "base_run": r.base_run,
-        } for r in runs]
-    except KeyError:
-        return []
+    cache = _cache_mgr.get("dashboard:experiment_runs")
+    key = exp_id
+
+    async def _query():
+        from live.experiment_manager import ExperimentManager
+        mgr = ExperimentManager()
+        try:
+            mgr.auto_heal(exp_id)
+            runs = mgr.runs(exp_id)
+            return [{
+                "run_id": r.run_id,
+                "status": r.status,
+                "started_at": r.started_at,
+                "ended_at": r.ended_at,
+                "base_run": r.base_run,
+            } for r in runs]
+        except KeyError:
+            return []
+
+    return await cache.get_or_compute_async(key, _query)
 
 
 # ── Paper Run Dashboard API ──
@@ -2574,203 +2819,217 @@ async def dash_experiment_runs(exp_id: str):
 @app.get("/api/admin/dashboard/paper-runs")
 async def dash_paper_runs(limit: int = 50):
     """List paper runs: BQ completed results + registry active experiments."""
-    results = []
-    
-    # 1. Active paper experiments from registry (source of truth)
-    try:
-        from live.experiment_manager import ExperimentManager
-        mgr = ExperimentManager()
-        for exp in mgr.list(exp_type="paper"):
-            if exp.has_active_run and exp.active_run:
-                results.append({
-                    "run_id": exp.active_run.run_id,
-                    "name": exp.name or exp.id,
-                    "strategy": exp.strategy,
-                    "market": exp.market,
-                    "status": "running",
-                    "n_periods": 0,
-                    "created_at": exp.active_run.started_at,
-                    "error_msg": None,
-                    "_source": "registry",
-                })
-    except Exception as e:
-        logging.getLogger(__name__).warning("paper-runs registry query: %s", e)
+    cache = _cache_mgr.get("dashboard:paper_runs")
+    key = f"list:{limit}"
 
-    # 2. Completed paper runs from BQ
-    try:
-        client = _DB_BQ()
-        query = f"""
-            SELECT run_id, name, strategy, market, status, n_periods,
-                   created_at, error_msg
-            FROM (
-              SELECT *, ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY created_at DESC) AS rn
-              FROM {_DB_TABLE("paper_runs")}
-            )
-            WHERE rn = 1
-            ORDER BY created_at DESC
-            LIMIT {min(limit, 200)}
-        """
-        rows = client.query(query).result()
-        names = ["run_id", "name", "strategy", "market", "status",
-                 "n_periods", "created_at", "error_msg"]
-        for r in rows:
-            d = _db_row_to_dict(r, names)
-            d["_source"] = "bq"
-            # Don't duplicate registry runs
-            if not any(e["run_id"] == d["run_id"] for e in results):
-                results.append(d)
-    except Exception as e:
-        logging.getLogger(__name__).error("dash_paper_runs query failed: %s", e)
+    async def _query():
+        results = []
+        # 1. Active paper experiments from registry (source of truth)
+        try:
+            from live.experiment_manager import ExperimentManager
+            mgr = ExperimentManager()
+            for exp in mgr.list(exp_type="paper"):
+                if exp.has_active_run and exp.active_run:
+                    results.append({
+                        "run_id": exp.active_run.run_id,
+                        "name": exp.name or exp.id,
+                        "strategy": exp.strategy,
+                        "market": exp.market,
+                        "status": "running",
+                        "n_periods": 0,
+                        "created_at": exp.active_run.started_at,
+                        "error_msg": None,
+                        "_source": "registry",
+                    })
+        except Exception as e:
+            logging.getLogger(__name__).warning("paper-runs registry query: %s", e)
 
-    return results
+        # 2. Completed paper runs from BQ
+        try:
+            client = _DB_BQ()
+            query = f"""
+                SELECT run_id, name, strategy, market, status, n_periods,
+                       created_at, error_msg
+                FROM (
+                  SELECT *, ROW_NUMBER() OVER (PARTITION BY run_id ORDER BY created_at DESC) AS rn
+                  FROM {_DB_TABLE("paper_runs")}
+                )
+                WHERE rn = 1
+                ORDER BY created_at DESC
+                LIMIT {min(limit, 200)}
+            """
+            rows = client.query(query).result()
+            names = ["run_id", "name", "strategy", "market", "status",
+                     "n_periods", "created_at", "error_msg"]
+            for r in rows:
+                d = _db_row_to_dict(r, names)
+                d["_source"] = "bq"
+                if not any(e["run_id"] == d["run_id"] for e in results):
+                    results.append(d)
+        except Exception as e:
+            logging.getLogger(__name__).error("dash_paper_runs query failed: %s", e)
+
+        return results
+
+    return await cache.get_or_compute_async(key, _query)
 
 
 @app.get("/api/admin/dashboard/paper-runs/{run_id}")
 async def dash_paper_run_detail(run_id: str):
-    client = _DB_BQ()
-    try:
-        run_query = f"""
-            SELECT run_id, name, strategy, market, status, n_periods,
-                   config_json, created_at, error_msg
-            FROM {_DB_TABLE("paper_runs")}
-            WHERE run_id = '{run_id}'
-            ORDER BY created_at DESC LIMIT 1
-        """
-        run_rows = list(client.query(run_query).result())
-        if not run_rows:
-            return {"error": "not found", "run_id": run_id}
-        run_names = ["run_id", "name", "strategy", "market", "status",
-                     "n_periods", "config_json", "created_at", "error_msg"]
-        run = _db_row_to_dict(run_rows[0], run_names)
+    cache = _cache_mgr.get("dashboard:paper_run_detail")
+    key = run_id
 
-        metrics = {}
+    async def _query():
+        client = _DB_BQ()
         try:
-            m_query = f"""
-                SELECT *
-                FROM {_DB_TABLE("paper_metrics")}
+            run_query = f"""
+                SELECT run_id, name, strategy, market, status, n_periods,
+                       config_json, created_at, error_msg
+                FROM {_DB_TABLE("paper_runs")}
                 WHERE run_id = '{run_id}'
+                ORDER BY created_at DESC LIMIT 1
             """
-            m_rows = list(client.query(m_query).result())
-            if m_rows:
-                m_names = ["run_id", "total_return", "annual_return", "annual_vol",
-                          "sharpe", "sortino", "max_drawdown", "calmar",
-                          "win_rate", "total_trades", "profit_factor",
-                          "start_equity", "end_equity", "computed_at"]
-                metrics = _db_row_to_dict(m_rows[0], m_names)
+            run_rows = list(client.query(run_query).result())
+            if not run_rows:
+                return {"error": "not found", "run_id": run_id}
+            run_names = ["run_id", "name", "strategy", "market", "status",
+                         "n_periods", "config_json", "created_at", "error_msg"]
+            run = _db_row_to_dict(run_rows[0], run_names)
+
+            metrics = {}
+            try:
+                m_query = f"""
+                    SELECT *
+                    FROM {_DB_TABLE("paper_metrics")}
+                    WHERE run_id = '{run_id}'
+                """
+                m_rows = list(client.query(m_query).result())
+                if m_rows:
+                    m_names = ["run_id", "total_return", "annual_return", "annual_vol",
+                              "sharpe", "sortino", "max_drawdown", "calmar",
+                              "win_rate", "total_trades", "profit_factor",
+                              "start_equity", "end_equity", "computed_at"]
+                    metrics = _db_row_to_dict(m_rows[0], m_names)
+            except Exception as e:
+                logging.getLogger(__name__).error("dash_paper_metrics query failed: %s", e)
+                metrics = {"error": str(e)}
+
+            equity = []
+            try:
+                e_query = f"""
+                    SELECT ts, bar, equity, cash, portfolio_value, daily_pnl, drawdown
+                    FROM {_DB_TABLE("experiment_equity")}
+                    WHERE exp_id = '{run_id}'
+                    ORDER BY bar
+                """
+                e_rows = client.query(e_query).result()
+                e_names = ["ts", "bar", "equity", "cash", "portfolio_value", "daily_pnl", "drawdown"]
+                equity = [_db_row_to_dict(r, e_names) for r in e_rows]
+            except Exception:
+                pass
+
+            trades = []
+            try:
+                t_query = f"""
+                    SELECT ts, bar, symbol, side, qty, price, commission
+                    FROM {_DB_TABLE("experiment_trades")}
+                    WHERE exp_id = '{run_id}'
+                    ORDER BY bar
+                    LIMIT 500
+                """
+                t_rows = client.query(t_query).result()
+                t_names = ["ts", "bar", "symbol", "side", "qty", "price", "commission"]
+                trades = [_db_row_to_dict(r, t_names) for r in t_rows]
+                if run.get("market", "").lower() == "hk":
+                    for t in trades:
+                        if t.get("symbol"):
+                            from common.normalize import normalize_symbol
+                            t["symbol"] = normalize_symbol(t["symbol"], "hk")
+            except Exception:
+                pass
+
+            return {"run": run, "metrics": metrics, "equity": equity, "trades": trades}
         except Exception as e:
-            logging.getLogger(__name__).error("dash_paper_metrics query failed: %s", e)
-            metrics = {"error": str(e)}
+            logging.getLogger(__name__).error("dash_paper_run_detail failed: %s", e)
+            return {"error": str(e), "run_id": run_id}
 
-        equity = []
-        try:
-            e_query = f"""
-                SELECT ts, bar, equity, cash, portfolio_value, daily_pnl, drawdown
-                FROM {_DB_TABLE("experiment_equity")}
-                WHERE exp_id = '{run_id}'
-                ORDER BY bar
-            """
-            e_rows = client.query(e_query).result()
-            e_names = ["ts", "bar", "equity", "cash", "portfolio_value", "daily_pnl", "drawdown"]
-            equity = [_db_row_to_dict(r, e_names) for r in e_rows]
-        except Exception:
-            pass
-
-        trades = []
-        try:
-            t_query = f"""
-                SELECT ts, bar, symbol, side, qty, price, commission
-                FROM {_DB_TABLE("experiment_trades")}
-                WHERE exp_id = '{run_id}'
-                ORDER BY bar
-                LIMIT 500
-            """
-            t_rows = client.query(t_query).result()
-            t_names = ["ts", "bar", "symbol", "side", "qty", "price", "commission"]
-            trades = [_db_row_to_dict(r, t_names) for r in t_rows]
-            if run.get("market", "").lower() == "hk":
-                for t in trades:
-                    if t.get("symbol"):
-                        from common.normalize import normalize_symbol
-                        t["symbol"] = normalize_symbol(t["symbol"], "hk")
-        except Exception:
-            pass
-
-        return {"run": run, "metrics": metrics, "equity": equity, "trades": trades}
-    except Exception as e:
-        logging.getLogger(__name__).error("dash_paper_run_detail failed: %s", e)
-        return {"error": str(e), "run_id": run_id}
+    return await cache.get_or_compute_async(key, _query)
 
 
 # ── Pipeline (data freshness) API ──
 
 @app.get("/api/admin/dashboard/pipeline")
 async def dash_pipeline():
-    client = _DB_BQ()
-    result: dict = {
-        "us": None, "hk": None,
-        "us_open": False, "hk_open": False,
-        "ts": datetime.now(timezone.utc).isoformat(),
-    }
-    now = datetime.now(timezone.utc)
-    result["us_open"] = (
-        now.weekday() < 5 and
-        datetime(now.year, now.month, now.day, 13, 30, tzinfo=timezone.utc) <= now <=
-        datetime(now.year, now.month, now.day, 20, 0, tzinfo=timezone.utc)
-    )
-    result["hk_open"] = (
-        now.weekday() < 5 and
-        datetime(now.year, now.month, now.day, 1, 30, tzinfo=timezone.utc) <= now <=
-        datetime(now.year, now.month, now.day, 8, 0, tzinfo=timezone.utc)
-    )
-    try:
-        q = f"""
-            SELECT MAX(
-              TIMESTAMP(DATETIME(timestamp), "America/New_York")
-            ) AS latest FROM {_DB_TABLE("us_bars_5m")}
-            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
-        """
-        rows = list(client.query(q).result())
-        if rows and rows[0].latest:
-            result["us"] = _db_serialize(rows[0].latest)
-    except Exception as exc:
-        logging.getLogger(__name__).error("dash_pipeline us query error: %s", exc)
-    try:
-        q = f"""
-            SELECT MAX(
-              TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)
-            ) AS latest FROM {_DB_TABLE("hk_bars_5m")}
-            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
-        """
-        rows = list(client.query(q).result())
-        if rows and rows[0].latest:
-            result["hk"] = _db_serialize(rows[0].latest)
-    except Exception as exc:
-        logging.getLogger(__name__).error("dash_pipeline hk query error: %s", exc)
-    try:
-        # HK index pipeline
-        q = f"""
-            SELECT MAX(timestamp) AS latest
-            FROM {_DB_TABLE("hk_bars_index_5m")}
-            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
-        """
-        rows = list(client.query(q).result())
-        if rows and rows[0].latest:
-            result["hk_index"] = _db_serialize(rows[0].latest)
-    except Exception as exc:
-        logging.getLogger(__name__).error("dash_pipeline hk_index query error: %s", exc)
-    try:
-        # US index pipeline
-        q = f"""
-            SELECT MAX(timestamp) AS latest
-            FROM {_DB_TABLE("us_bars_index_5m")}
-            WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
-        """
-        rows = list(client.query(q).result())
-        if rows and rows[0].latest:
-            result["us_index"] = _db_serialize(rows[0].latest)
-    except Exception as exc:
-        logging.getLogger(__name__).error("dash_pipeline us_index query error: %s", exc)
-    return result
+    cache = _cache_mgr.get("dashboard:pipeline")
+    key = "pipeline"
+
+    async def _query():
+        client = _DB_BQ()
+        result: dict = {
+            "us": None, "hk": None,
+            "us_open": False, "hk_open": False,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        now = datetime.now(timezone.utc)
+        result["us_open"] = (
+            now.weekday() < 5 and
+            datetime(now.year, now.month, now.day, 13, 30, tzinfo=timezone.utc) <= now <=
+            datetime(now.year, now.month, now.day, 20, 0, tzinfo=timezone.utc)
+        )
+        result["hk_open"] = (
+            now.weekday() < 5 and
+            datetime(now.year, now.month, now.day, 1, 30, tzinfo=timezone.utc) <= now <=
+            datetime(now.year, now.month, now.day, 8, 0, tzinfo=timezone.utc)
+        )
+        try:
+            q = f"""
+                SELECT MAX(
+                  TIMESTAMP(DATETIME(timestamp), "America/New_York")
+                ) AS latest FROM {_DB_TABLE("us_bars_5m")}
+                WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
+            """
+            rows = list(client.query(q).result())
+            if rows and rows[0].latest:
+                result["us"] = _db_serialize(rows[0].latest)
+        except Exception as exc:
+            logging.getLogger(__name__).error("dash_pipeline us query error: %s", exc)
+        try:
+            q = f"""
+                SELECT MAX(
+                  TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)
+                ) AS latest FROM {_DB_TABLE("hk_bars_5m")}
+                WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
+            """
+            rows = list(client.query(q).result())
+            if rows and rows[0].latest:
+                result["hk"] = _db_serialize(rows[0].latest)
+        except Exception as exc:
+            logging.getLogger(__name__).error("dash_pipeline hk query error: %s", exc)
+        try:
+            q = f"""
+                SELECT MAX(timestamp) AS latest
+                FROM {_DB_TABLE("hk_bars_index_5m")}
+                WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
+            """
+            rows = list(client.query(q).result())
+            if rows and rows[0].latest:
+                result["hk_index"] = _db_serialize(rows[0].latest)
+        except Exception as exc:
+            logging.getLogger(__name__).error("dash_pipeline hk_index query error: %s", exc)
+        try:
+            q = f"""
+                SELECT MAX(timestamp) AS latest
+                FROM {_DB_TABLE("us_bars_index_5m")}
+                WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
+            """
+            rows = list(client.query(q).result())
+            if rows and rows[0].latest:
+                result["us_index"] = _db_serialize(rows[0].latest)
+        except Exception as exc:
+            logging.getLogger(__name__).error("dash_pipeline us_index query error: %s", exc)
+        return result
+
+    return await cache.get_or_compute_async(key, _query)
 
 
 def _load_symbols_config():
@@ -2785,59 +3044,74 @@ def _load_symbols_config():
 
 @app.get("/api/admin/dashboard/market/symbols/{market}")
 async def dash_market_symbols(market: str):
-    import yaml
-    from pathlib import Path
-    import os as _os
-    _quant_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    config_path = Path(_quant_root) / "config/symbols.yaml"
-    cfg = yaml.safe_load(config_path.read_text())
-    syms = cfg.get("markets", {}).get(market, {}).get("symbols", [])
-    prefix = f"{'US' if market == 'us' else 'HK'}."
-    return [s.replace(prefix, "") for s in syms if s.startswith(prefix)]
+    cache = _cache_mgr.get("market:symbols")
+    key = market
+
+    async def _query():
+        import yaml
+        from pathlib import Path
+        import os as _os
+        _quant_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        config_path = Path(_quant_root) / "config/symbols.yaml"
+        cfg = yaml.safe_load(config_path.read_text())
+        syms = cfg.get("markets", {}).get(market, {}).get("symbols", [])
+        prefix = f"{'US' if market == 'us' else 'HK'}."
+        return [s.replace(prefix, "") for s in syms if s.startswith(prefix)]
+
+    return await cache.get_or_compute_async(key, _query)
 
 
 @app.get("/api/admin/dashboard/market/{market}/{symbol}")
 async def dash_market_bars(market: str, symbol: str, limit: int = 78, days: int = 2, freq: str = "5m"):
-    client = _DB_BQ()
-    cfg = _load_symbols_config()
-    index_syms = cfg.get("indices", {}).get(market, {}).get("symbols", [])
-    is_index = symbol in index_syms or (market == "us" and symbol.startswith("^"))
-    suffix = f"_index_{freq}" if is_index else f"_{freq}"
-    table = _DB_TABLE(f"{market}_bars{suffix}")
-    full_symbol = symbol if is_index else f"{'US' if market == 'us' else 'HK'}.{symbol}"
-    window_days = max(days, 2) + 2
+    # Route to correct cache module based on freq
+    cache_name = f"market:bars:{freq}"  # "market:bars:5m" or "market:bars:1d"
+    cache = _cache_mgr.get(cache_name)
+    if cache is None:
+        cache = _cache_mgr.get("market:bars:5m")  # fallback
+    key = f"{market}:{symbol}:{limit}"
 
-    # Determine time expression based on freq + index type
-    if freq == "1d" and is_index:
-        ts_expr = "TIMESTAMP(date)"
-        window_clause = f"date >= DATE_SUB(CURRENT_DATE(), INTERVAL {window_days} DAY)"
-    elif freq == "1d":
-        ts_expr = "timestamp"
-        window_clause = f"timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {window_days} DAY)"
-    elif market == "hk":
-        ts_expr = "TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)"
-        window_clause = f"{ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {window_days} DAY)"
-    else:
-        ts_expr = 'TIMESTAMP(DATETIME(timestamp), "America/New_York")'
-        window_clause = f"{ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {window_days} DAY)"
+    async def _query():
+        client = _DB_BQ()
+        cfg = _load_symbols_config()
+        index_syms = cfg.get("indices", {}).get(market, {}).get("symbols", [])
+        is_index = symbol in index_syms or (market == "us" and symbol.startswith("^"))
+        suffix = f"_index_{freq}" if is_index else f"_{freq}"
+        table = _DB_TABLE(f"{market}_bars{suffix}")
+        full_symbol = symbol if is_index else f"{'US' if market == 'us' else 'HK'}.{symbol}"
+        window_days = max(days, 2) + 2
 
-    query = f"""
-        WITH dedup AS (
-          SELECT {ts_expr} AS timestamp, open, high, low, close, volume,
-            ROW_NUMBER() OVER (PARTITION BY symbol, {ts_expr} ORDER BY _ingest_time DESC NULLS LAST) AS rn
-          FROM `{table}`
-          WHERE symbol = '{full_symbol}'
-            AND {window_clause}
-        )
-        SELECT timestamp, open, high, low, close, volume
-        FROM dedup WHERE rn = 1
-        ORDER BY timestamp DESC
-        LIMIT {limit}
-    """
-    rows = list(client.query(query).result())
-    rows.reverse()
-    return [{"ts": _db_serialize(r.timestamp), "o": r.open, "h": r.high,
-             "l": r.low, "c": r.close, "v": r.volume} for r in rows]
+        if freq == "1d" and is_index:
+            ts_expr = "TIMESTAMP(date)"
+            window_clause = f"date >= DATE_SUB(CURRENT_DATE(), INTERVAL {window_days} DAY)"
+        elif freq == "1d":
+            ts_expr = "timestamp"
+            window_clause = f"timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {window_days} DAY)"
+        elif market == "hk":
+            ts_expr = "TIMESTAMP_SUB(timestamp, INTERVAL 8 HOUR)"
+            window_clause = f"{ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {window_days} DAY)"
+        else:
+            ts_expr = 'TIMESTAMP(DATETIME(timestamp), "America/New_York")'
+            window_clause = f"{ts_expr} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {window_days} DAY)"
+
+        query = f"""
+            WITH dedup AS (
+              SELECT {ts_expr} AS timestamp, open, high, low, close, volume,
+                ROW_NUMBER() OVER (PARTITION BY symbol, {ts_expr} ORDER BY _ingest_time DESC NULLS LAST) AS rn
+              FROM `{table}`
+              WHERE symbol = '{full_symbol}'
+                AND {window_clause}
+            )
+            SELECT timestamp, open, high, low, close, volume
+            FROM dedup WHERE rn = 1
+            ORDER BY timestamp DESC
+            LIMIT {limit}
+        """
+        rows = list(client.query(query).result())
+        rows.reverse()
+        return [{"ts": _db_serialize(r.timestamp), "o": r.open, "h": r.high,
+                 "l": r.low, "c": r.close, "v": r.volume} for r in rows]
+
+    return await cache.get_or_compute_async(key, _query)
 
 
 # ── Static + SPA fallback (production build, after all API routes) ────────────
