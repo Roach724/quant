@@ -36,8 +36,6 @@ interface CronJob {
   description: string;
   latest_log?: string | null;
   last_run?: string | null;
-  last_status?: string | null;
-  last_trigger?: string | null;
 }
 
 interface HistoryEntry {
@@ -51,16 +49,6 @@ interface HistoryEntry {
   log_file: string | null;
   error_tail: string | null;
 }
-
-const statusColor: Record<string, string> = {
-  pending: 'default',
-  running: 'processing',
-  success: 'green',
-  completed: 'green',
-  done: 'green',
-  failed: 'red',
-  skipped: 'orange',
-};
 
 const CronJobs: React.FC = () => {
   const actionRef = useRef<ActionType | undefined>(undefined);
@@ -133,24 +121,15 @@ const CronJobs: React.FC = () => {
     {
       title: 'ID',
       dataIndex: 'id',
-      width: 60,
+      width: 50,
       key: 'id',
     },
     {
       title: '任务名',
       dataIndex: 'job_name',
-      width: 160,
+      width: 150,
       key: 'job_name',
       ellipsis: true,
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      width: 80,
-      key: 'status',
-      render: (s: string) => (
-        <Tag color={statusColor[s] || 'default'}>{s}</Tag>
-      ),
     },
     {
       title: '触发',
@@ -162,37 +141,27 @@ const CronJobs: React.FC = () => {
     {
       title: '开始时间',
       dataIndex: 'started_at',
-      width: 170,
+      width: 160,
       key: 'started_at',
       render: (v: string | null) => toLocal(v),
     },
     {
-      title: '耗时',
-      key: 'duration',
-      width: 80,
-      render: (_: any, r: HistoryEntry) => {
-        if (r.started_at && r.finished_at) {
-          const ms = new Date(r.finished_at).getTime() - new Date(r.started_at).getTime();
-          const s = (ms / 1000).toFixed(1);
-          return `${s}s`;
-        }
-        return '-';
-      },
-    },
-    {
       title: '退出码',
       dataIndex: 'exit_code',
-      width: 70,
+      width: 65,
       key: 'exit_code',
       render: (v: number | null) => v != null ? <Tag color={v === 0 ? 'green' : 'red'}>{v}</Tag> : '-',
     },
     {
       title: '日志文件',
       dataIndex: 'log_file',
-      width: 200,
+      width: 220,
       key: 'log_file',
-      ellipsis: true,
-      render: (v: string | null) => v ? v.split('/').pop() : '-',
+      render: (v: string | null) => (
+        <div style={{ wordBreak: 'break-all', whiteSpace: 'normal', fontSize: 12 }}>
+          {v ? v.split('/').pop() : '-'}
+        </div>
+      ),
     },
   ];
 
@@ -311,16 +280,8 @@ const CronJobs: React.FC = () => {
       title: '最近运行',
       dataIndex: 'last_run',
       key: 'last_run',
-      width: 200,
-      render: (_: any, r: CronJob) => (
-        <Space direction="vertical" size={0}>
-          <span>{toLocal(r.last_run)}</span>
-          <Space size={4}>
-            {r.last_status ? <Tag color={statusColor[r.last_status] || 'default'} style={{ fontSize: 11, lineHeight: '16px' }}>{r.last_status}</Tag> : null}
-            {r.last_trigger ? <Tag style={{ fontSize: 11, lineHeight: '16px' }}>{r.last_trigger === 'manual' ? '🏷️ 手动' : '⏰ 调度'}</Tag> : null}
-          </Space>
-        </Space>
-      ),
+      width: 160,
+      render: (_: unknown, r: CronJob) => <span>{toLocal(r.last_run)}</span>,
     },
     {
       title: 'Enabled',
