@@ -1482,8 +1482,6 @@ def admin_cron_list():
                 "description": meta.get("description", ""),
                 "latest_log": lr.get("log_file", "").split("/")[-1] if lr and lr.get("log_file") else None,
                 "last_run": lr["finished_at"].isoformat() if lr and lr.get("finished_at") else None,
-                "last_status": lr.get("status") if lr else None,
-                "last_trigger": lr.get("trigger_type") if lr else None,
             })
 
     cache.set("cron", jobs)
