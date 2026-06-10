@@ -60,6 +60,7 @@ def run_one(task: Task) -> None:
                     exit_code=proc.returncode,
                     started_at=started_at or datetime.now(timezone.utc),
                     finished_at=datetime.now(timezone.utc),
+                    log_file=(t.params or {}).get("cron_log_file", "") or None,
                     error_tail=(stderr or "")[:500] if proc.returncode != 0 else None,
                 )
                 session.add(run)
