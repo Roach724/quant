@@ -63,6 +63,22 @@ class MlConfig(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class CronRun(Base):
+    """Unified run history for all cron jobs — manual and scheduled."""
+    __tablename__ = "cron_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_name = Column(String(200), nullable=False, index=True)
+    command = Column(Text, nullable=True)
+    trigger_type = Column(String(20), nullable=False, default="scheduled")  # "manual" | "scheduled"
+    status = Column(String(20), nullable=False, default="running")  # "running" | "success" | "failed" | "skipped"
+    exit_code = Column(Integer, nullable=True)
+    started_at = Column(DateTime, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    log_file = Column(String(500), nullable=True)
+    error_tail = Column(String(500), nullable=True)  # last 500 chars of error output
+
+
 def init_db():
     Base.metadata.create_all(engine)
 

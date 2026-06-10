@@ -22,7 +22,7 @@ from typing import Optional, Any
 
 from google.cloud import bigquery
 
-from admin.models import init_db, get_session, Task
+from admin.models import init_db, get_session, Task, CronRun
 from live.experiment_manager import ExperimentManager
 from factors.registry import FactorRegistry
 
@@ -1066,7 +1066,8 @@ def admin_data_backfill(
 
         src = resolved_source if resolved_source != "auto" else ("yfinance" if mkt == "us" else "futu_stock")
         mkdir_log = f"mkdir -p /var/log/quant/prod/backfill"
-        log_file = f"/var/log/quant/prod/backfill/{mkt}_{freq}.log"
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        log_file = f"/var/log/quant/prod/backfill/backfill_{mkt}_{freq}_{ts}.log"
         cmd = (f"{mkdir_log} && cd /opt/quant && PYTHONPATH=/opt/quant "
                f"python3 collectors/backfill.py "
                f"--symbols \"{symbols_str}\" --frequency {freq} --source {src} --market {mkt} --start {start} --end {end} "
@@ -1176,6 +1177,132 @@ def _normalize_to_wrapper(command: str, job_name: str) -> str:
     return f"docker exec quant /opt/quant-prod/scripts/cron_wrapper.sh {job_name} {cmd}"
 
 
+def _record_cron_run(job_name: str, command: str, trigger_type: str,
+                     status: str, exit_code: int = None,
+                     started_at: datetime = None, finished_at: datetime = None,
+                     log_file: str = None, error_tail: str = None):
+    """Record a cron execution in the cron_runs table."""
+    from admin.models import get_session
+    session = get_session()
+    try:
+        run = CronRun(
+            job_name=job_name, command=command, trigger_type=trigger_type,
+            status=status, exit_code=exit_code,
+            started_at=started_at or datetime.now(timezone.utc),
+            finished_at=finished_at or (datetime.now(timezone.utc) if status != "running" else None),
+            log_file=log_file, error_tail=(error_tail or "")[:500] if error_tail else None,
+        )
+        session.add(run)
+        session.commit()
+    except Exception:
+        logger.exception("_record_cron_run failed")
+
+
+def _scan_cron_logs_and_sync():
+    """Scan cron log files and insert missing run records.
+
+    Parses cron_wrapper.sh structured log lines:
+      [TIMESTAMP] JOB_NAME START  module=...
+      [TIMESTAMP] JOB_NAME OK  module=...
+      [TIMESTAMP] JOB_NAME FAILED (exit=N)  module=...
+      [TIMESTAMP] JOB_NAME SKIPPED (reason)  module=...
+    """
+    import fnmatch
+    from admin.models import get_session
+    log_dir = Path("/var/log/quant/prod/cron")
+    if not log_dir.is_dir():
+        return
+
+    # Get already-recorded log files
+    session = get_session()
+    recorded_files = set()
+    try:
+        for row in session.query(CronRun.log_file).filter(
+            CronRun.log_file.isnot(None)
+        ).all():
+            if row[0]:
+                recorded_files.add(os.path.basename(row[0]))
+    except Exception:
+        pass
+
+    # Scan log files — only *.log (not archives)
+    for log_path in sorted(log_dir.glob("*.log")):
+        fname = log_path.name
+        if fname in recorded_files:
+            continue
+        try:
+            text = log_path.read_text(errors="replace")
+        except Exception:
+            continue
+        if not text.strip():
+            continue
+
+        # Parse structured lines
+        lines = text.splitlines()
+        runs: list[dict] = []
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            m = re.match(
+                r'^\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s+(\S+)\s+(START|OK|FAILED|SKIPPED)',
+                line,
+            )
+            if m:
+                ts_str = m.group(1)
+                job_name = m.group(2)
+                action = m.group(3)
+                try:
+                    ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    ts = datetime.now(timezone.utc)
+
+                if action == "START":
+                    runs.append({
+                        "job_name": job_name, "started_at": ts,
+                        "status": "running", "log_file": str(log_path),
+                    })
+                elif action in ("OK", "FAILED", "SKIPPED"):
+                    # Match against the most recent START for this job_name in this file
+                    status_map = {"OK": "success", "FAILED": "failed", "SKIPPED": "skipped"}
+                    status = status_map.get(action, "failed")
+                    exit_code = None
+                    if action == "FAILED":
+                        ec_m = re.search(r'exit=(\d+)', line)
+                        if ec_m:
+                            exit_code = int(ec_m.group(1))
+                    # Find matching START
+                    for run in reversed(runs):
+                        if run["job_name"] == job_name and run["status"] == "running":
+                            run["status"] = status
+                            run["finished_at"] = ts
+                            run["exit_code"] = exit_code
+                            break
+                    else:
+                        # Orphan OK/FAILED — still record
+                        runs.append({
+                            "job_name": job_name, "started_at": ts,
+                            "finished_at": ts, "status": status,
+                            "exit_code": exit_code, "log_file": str(log_path),
+                        })
+            i += 1
+
+        # Insert discovered runs
+        for run in runs:
+            try:
+                _record_cron_run(
+                    job_name=run["job_name"],
+                    command="",
+                    trigger_type="scheduled",
+                    status=run["status"],
+                    exit_code=run.get("exit_code"),
+                    started_at=run.get("started_at"),
+                    finished_at=run.get("finished_at"),
+                    log_file=run.get("log_file"),
+                )
+            except Exception:
+                pass
+
+
 @app.get("/api/admin/cron")
 def admin_cron_list():
     """Read cron jobs from persistent file (/var/data/crontab.txt)."""
@@ -1212,19 +1339,32 @@ def admin_cron_list():
 
     lines = raw.split("\n")
     jobs = []
-    # Scan log dir for latest log per job name
-    log_dir = Path("/var/log/quant/prod/cron")
-    log_files = {}
-    if log_dir.exists():
-        for lf in sorted(log_dir.iterdir(), reverse=True):
-            if lf.suffix == ".gz":
-                continue
-            base = lf.stem.split(".log")[0]
-            m = re.search(r'[_-]\d{8}', base)
-            if m:
-                base = base[:m.start()]
-            if base not in log_files:
-                log_files[base] = lf
+
+    # Query cron_runs table for last_run per job_name
+    _scan_cron_logs_and_sync()
+    last_runs: dict[str, dict] = {}
+    try:
+        session = get_session()
+        rows = session.query(
+            CronRun.job_name,
+            CronRun.status,
+            CronRun.finished_at,
+            CronRun.trigger_type,
+            CronRun.log_file,
+        ).filter(
+            CronRun.finished_at.isnot(None)
+        ).order_by(
+            CronRun.finished_at.desc()
+        ).limit(500).all()
+        for row in rows:
+            if row[0] not in last_runs:
+                last_runs[row[0]] = {
+                    "status": row[1], "finished_at": row[2],
+                    "trigger_type": row[3], "log_file": row[4],
+                }
+    except Exception:
+        pass
+
     for i, line in enumerate(lines):
         line = line.strip()
         if not line or line.startswith("#"):
@@ -1242,18 +1382,18 @@ def admin_cron_list():
             if not job_name:
                 wrapper_parts = cmd.split()
                 if ">>" in cmd:
-                    wrapper_parts = cmd.split(">>")[0].split()  # strip log redirect
+                    wrapper_parts = cmd.split(">>")[0].split()
                 for j, p in enumerate(wrapper_parts):
                     if p.endswith("cron_wrapper.sh") and j + 1 < len(wrapper_parts):
                         job_name = wrapper_parts[j + 1]
                         break
-                # For direct commands, use script basename
                 if not job_name:
                     for p in reversed(wrapper_parts):
                         if p.endswith(".py") or p.endswith(".sh"):
                             job_name = p.rsplit("/", 1)[-1].replace(".py", "").replace(".sh", "")
                             break
-            latest = log_files.get(job_name) or log_files.get(job_name.replace("-", "_"))
+            # Get last_run from cron_runs table (try exact name, then normalized)
+            lr = last_runs.get(job_name) or last_runs.get(job_name.replace("-", "_")) or last_runs.get(job_name.replace("_", "-"))
             jobs.append({
                 "index": i,
                 "raw": line,
@@ -1262,8 +1402,10 @@ def admin_cron_list():
                 "command": cmd,
                 "name": job_name,
                 "description": meta.get("description", ""),
-                "latest_log": latest.name if latest else None,
-                "last_run": datetime.fromtimestamp(latest.stat().st_mtime, tz=timezone.utc).isoformat() if latest else None,
+                "latest_log": lr.get("log_file", "").split("/")[-1] if lr and lr.get("log_file") else None,
+                "last_run": lr["finished_at"].isoformat() if lr and lr.get("finished_at") else None,
+                "last_status": lr.get("status") if lr else None,
+                "last_trigger": lr.get("trigger_type") if lr else None,
             })
 
     cache.set("cron", jobs)
@@ -1357,45 +1499,68 @@ def admin_cron_update(index: int, job: dict = Body(...)):
 @app.post("/api/admin/cron/run")
 def admin_cron_run(command: str = Query(""), name: str = Query("")):
     """Manually trigger a cron command via task queue."""
-    # Normalize to cron_wrapper.sh for consistent timestamped logging
     cmd = _normalize_to_wrapper(command.strip(), name or "cron")
     if cmd.startswith("docker exec quant "):
         cmd = cmd[len("docker exec quant "):]
     log_name = name or "cron"
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     log_file = f"{log_name}_{ts}.log"
+
+    # Record manual run in cron_runs
+    _record_cron_run(
+        job_name=log_name, command=command, trigger_type="manual",
+        status="running", log_file=log_file,
+    )
+
     session = get_session()
-    task = Task(type="shell", params={"cmd": cmd, "cron_command": command}, status="pending")
+    task = Task(type="shell", params={"cmd": cmd, "cron_command": command, "cron_name": log_name}, status="pending")
     session.add(task)
     session.commit()
-    return {"task_id": task.id, "log_file": log_name + "_" + ts + ".log"}
+    return {"task_id": task.id, "log_file": log_file}
 
 
 @app.get("/api/admin/cron/{index}/history")
 def admin_cron_history(index: int, command: str = Query("")):
-    """Return recent execution history filtered by cron command."""
+    """Return recent execution history from cron_runs table.
+
+    Merges scheduled runs (from log scanner) and manual runs (from task queue).
+    """
+    # Extract job_name from cron_registry by index
+    job_name = ""
+    resolved = os.path.abspath(CRON_REGISTRY)
+    if os.path.isfile(resolved):
+        try:
+            with open(resolved) as f:
+                data = _json.load(f)
+            jobs = data.get("jobs", [])
+            if 0 <= index < len(jobs):
+                job_name = jobs[index].get("name", "")
+        except Exception:
+            pass
+
     session = get_session()
-    query = session.query(Task).order_by(Task.created_at.desc()).limit(50)
-    if command:
-        # Filter by cron_command stored in params JSON
-        tasks = [
-            t for t in query.all()
-            if t.params and t.params.get("cron_command") == command
-        ]
-    else:
-        # Legacy fallback: only tasks with cron_command set
-        tasks = [
-            t for t in query.all()
-            if t.params and "cron_command" in (t.params or {})
-        ]
+    query = session.query(CronRun).order_by(CronRun.started_at.desc())
+
+    if job_name:
+        # Match both exact name and hyphen/underscore variants
+        query = query.filter(
+            (CronRun.job_name == job_name) |
+            (CronRun.job_name == job_name.replace("-", "_")) |
+            (CronRun.job_name == job_name.replace("_", "-"))
+        )
+
+    runs = query.limit(50).all()
     return [{
-        "id": t.id,
-        "status": t.status,
-        "created_at": t.created_at.isoformat() if t.created_at else None,
-        "started_at": t.started_at.isoformat() if t.started_at else None,
-        "finished_at": t.finished_at.isoformat() if t.finished_at else None,
-        "result": (t.result or "")[:200],
-    } for t in tasks]
+        "id": r.id,
+        "job_name": r.job_name,
+        "status": r.status,
+        "trigger_type": r.trigger_type,
+        "exit_code": r.exit_code,
+        "started_at": r.started_at.isoformat() if r.started_at else None,
+        "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+        "log_file": r.log_file,
+        "error_tail": r.error_tail,
+    } for r in runs]
 
 
 # ── Log Browser ───────────────────────────────────────────────────────────────
