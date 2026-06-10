@@ -30,7 +30,7 @@ ENV="${QUANT_ENV:-prod}"
 
 # Log directory — always use timestamped naming
 LOG_DIR="/var/log/quant/${ENV}/${MODULE}"
-LOGFILE="${LOG_DIR}/${JOB_NAME}_$(date +%Y%m%d_%H%M%S).log"
+LOGFILE="${LOG_DIR}/${JOB_NAME}_$(date -u +%Y%m%d_%H%M%S).log"
 ALERTFILE="/var/log/quant/${ENV}/quant_alerts.log"
 
 LOCKFILE="/tmp/cron_${JOB_NAME}.lock"
@@ -41,7 +41,7 @@ mkdir -p "$LOG_DIR" 2>/dev/null || {
     # Last resort: try /tmp
     LOG_DIR="/tmp/quant_cron_logs"
     mkdir -p "$LOG_DIR" 2>/dev/null || true
-    LOGFILE="${LOG_DIR}/${JOB_NAME}_$(date +%Y%m%d_%H%M%S).log"
+    LOGFILE="${LOG_DIR}/${JOB_NAME}_$(date -u +%Y%m%d_%H%M%S).log"
 }
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} START  module=${MODULE} env=${ENV}" >> "$LOGFILE"
