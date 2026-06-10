@@ -8,10 +8,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
-from admin.models import get_session, Task
-from common.cache_subsystem import get_cache_manager
-
-_cache_mgr = get_cache_manager()
+from admin.models import get_session, Task, CronRun
 
 PROJECT_ROOT = "/opt/quant"
 POLL_INTERVAL = 2  # seconds
@@ -47,24 +44,26 @@ def run_one(task: Task) -> None:
         t.finished_at = datetime.now(timezone.utc)
         session.commit()
 
-        # Update corresponding CronRun entry for manual runs
+        # Record CronRun for manual triggers (create final record directly)
         cron_name = (t.params or {}).get("cron_name", "")
-        if cron_name:
+        cron_trigger = (t.params or {}).get("cron_trigger", "")
+        if cron_name and cron_trigger == "manual":
             try:
-                from admin.models import CronRun
-                run = session.query(CronRun).filter(
-                    CronRun.job_name == cron_name,
-                    CronRun.status == "running",
-                    CronRun.trigger_type == "manual",
-                ).order_by(CronRun.started_at.desc()).first()
-                if run:
-                    run.status = "success" if proc.returncode == 0 else "failed"
-                    run.exit_code = proc.returncode
-                    run.finished_at = datetime.now(timezone.utc)
-                    run.error_tail = (stderr or "")[:500] if proc.returncode != 0 else None
-                    session.commit()
-                    # Invalidate cron cache so last_run updates
-                    _cache_mgr.invalidate("cron:list")
+                from datetime import datetime as _dt
+                started_str = (t.params or {}).get("cron_started", "")
+                started_at = _dt.fromisoformat(started_str) if started_str else t.started_at
+                run = CronRun(
+                    job_name=cron_name,
+                    command=(t.params or {}).get("cron_command", ""),
+                    trigger_type="manual",
+                    status="success" if proc.returncode == 0 else "failed",
+                    exit_code=proc.returncode,
+                    started_at=started_at or datetime.now(timezone.utc),
+                    finished_at=datetime.now(timezone.utc),
+                    error_tail=(stderr or "")[:500] if proc.returncode != 0 else None,
+                )
+                session.add(run)
+                session.commit()
             except Exception:
                 pass
 
