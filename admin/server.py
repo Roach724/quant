@@ -1621,14 +1621,24 @@ def admin_cron_update(index: int, job: dict = Body(...)):
                 _json.dump(data, f, indent=2, ensure_ascii=False)
 
     # Always sync crontab (works even for jobs not in registry)
-    if "schedule" in job or "command" in job:
+    if "schedule" in job or "command" in job or "enabled" in job:
         Crontab_File = "/var/data/crontab.txt"
-        if os.path.isfile(Crontab_File) and new_schedule:
+        if os.path.isfile(Crontab_File):
             lines = open(Crontab_File).readlines()
             if 0 <= index < len(lines):
-                parts = lines[index].strip().split(None, 5)
-                if len(parts) >= 6:
-                    lines[index] = f"{new_schedule} {parts[5]}\n"
+                if "enabled" in job and not job["enabled"]:
+                    # Disable: prefix line with # to comment it out
+                    if not lines[index].startswith("#"):
+                        lines[index] = "# " + lines[index]
+                elif "enabled" in job and job["enabled"]:
+                    # Enable: remove leading #  (if commented out)
+                    lines[index] = lines[index].lstrip("# ").lstrip()
+                    if not lines[index].endswith("\n"):
+                        lines[index] += "\n"
+                elif "schedule" in job and new_schedule:
+                    parts = lines[index].strip().lstrip("# ").split(None, 5)
+                    if len(parts) >= 6:
+                        lines[index] = f"{new_schedule} {parts[5]}\n"
             with open(Crontab_File, "w") as f:
                 f.writelines(lines)
             subprocess.run(["crontab", Crontab_File], capture_output=True)
