@@ -241,6 +241,8 @@ const CronJobs: React.FC = () => {
       if (editingIndex !== null) {
         await api.put(`/api/admin/cron/${editingIndex}`, values);
         message.success('Job updated');
+        // Force full page reload to guarantee fresh data
+        setTimeout(() => window.location.reload(), 500);
       } else {
         await api.post('/api/admin/cron/add', values);
         message.success('Job created');
