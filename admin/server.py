@@ -116,12 +116,25 @@ def _cleanup_stuck_cron_runs():
         logger.exception("CronRun cleanup failed (non-fatal)")
 
 
+
+def _sync_crontab():
+    """Install /var/data/crontab.txt to system crontab on startup."""
+    crontab_file = "/var/data/crontab.txt"
+    if os.path.isfile(crontab_file):
+        try:
+            subprocess.run(["crontab", crontab_file], capture_output=True, timeout=10)
+            logger.info("Crontab synced from %s", crontab_file)
+        except Exception:
+            logger.exception("Crontab sync failed (non-fatal)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     _startup_auto_heal()
     _init_cache_modules()
     _cleanup_stuck_cron_runs()
+    _sync_crontab()
     yield
     from admin.models import cleanup_session
     cleanup_session()
