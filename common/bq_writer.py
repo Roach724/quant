@@ -88,33 +88,41 @@ def write_rows_to_bq(
     total = len(rows)
     logger.info("Writing %d rows to %s", total, table_ref)
 
+    # Chunk rows to avoid BQ 413 (payload too large)
+    CHUNK_SIZE = 10000
     written = 0
-    for attempt in range(MAX_RETRIES):
-        try:
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(client.insert_rows_json, table_ref, rows)
-                errors = future.result(timeout=30)
-            if errors:
-                error_msgs = [e.get("errors", e) for e in errors]
-                raise RuntimeError(f"Insert errors: {error_msgs[:3]}")
-            written = total
-            break
-        except concurrent.futures.TimeoutError:
-            logger.error("BQ write timed out after 30s (attempt %d/%d)", attempt + 1, MAX_RETRIES)
-            client = bigquery.Client(project=project)
-        except (gapi_exceptions.ServiceUnavailable, gapi_exceptions.ResourceExhausted, RuntimeError) as e:
-            if attempt < MAX_RETRIES - 1:
-                wait = RETRY_BASE_S * (2 ** attempt)
-                logger.warning(
-                    "BQ write attempt %d/%d failed (%s), retrying in %.0fs",
-                    attempt + 1, MAX_RETRIES, e, wait,
-                )
-                time.sleep(wait)
-                client = bigquery.Client(project=project)  # fresh client
-            else:
-                logger.error("BQ write failed after %d attempts: %s", MAX_RETRIES, e)
-                raise
+    for chunk_start in range(0, total, CHUNK_SIZE):
+        chunk = rows[chunk_start:chunk_start + CHUNK_SIZE]
+        chunk_end = min(chunk_start + CHUNK_SIZE, total)
+
+        for attempt in range(MAX_RETRIES):
+            try:
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(client.insert_rows_json, table_ref, chunk)
+                    errors = future.result(timeout=30)
+                if errors:
+                    error_msgs = [e.get("errors", e) for e in errors]
+                    raise RuntimeError(f"Insert errors: {error_msgs[:3]}")
+                written += len(chunk)
+                break
+            except concurrent.futures.TimeoutError:
+                logger.error("BQ write timed out after 30s (attempt %d/%d, chunk %d-%d/%d)",
+                             attempt + 1, MAX_RETRIES, chunk_start, chunk_end, total)
+                client = bigquery.Client(project=project)
+            except (gapi_exceptions.ServiceUnavailable, gapi_exceptions.ResourceExhausted, RuntimeError) as e:
+                if attempt < MAX_RETRIES - 1:
+                    wait = RETRY_BASE_S * (2 ** attempt)
+                    logger.warning(
+                        "BQ write chunk %d-%d/%d attempt %d/%d failed (%s), retrying in %.0fs",
+                        chunk_start, chunk_end, total, attempt + 1, MAX_RETRIES, e, wait,
+                    )
+                    time.sleep(wait)
+                    client = bigquery.Client(project=project)
+                else:
+                    logger.error("BQ write chunk %d-%d/%d failed after %d attempts: %s",
+                                 chunk_start, chunk_end, total, MAX_RETRIES, e)
+                    raise
 
     logger.info("BQ write complete: %d rows → %s", written, table_ref)
 
