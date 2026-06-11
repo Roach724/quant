@@ -1124,9 +1124,12 @@ def admin_data_backfill(
         mkdir_log = f"mkdir -p /var/log/quant/prod/backfill"
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         log_file = f"/var/log/quant/prod/backfill/backfill_{mkt}_{freq}_{ts}.log"
+        table_name = key  # e.g., "us_bars_index_5m" or "us_bars_5m"
+        table_flag = f"--table {table_name} " if "_bars_index_" in key else ""
         cmd = (f"{mkdir_log} && cd /opt/quant && PYTHONPATH=/opt/quant "
                f"python3 collectors/backfill.py "
                + ("--replace " if mode == "replace" else "") +
+               f"{table_flag}"
                f"--symbols \"{symbols_str}\" --frequency {freq} --source {src} {market_flag}--start {start} --end {end} "
                f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
                f"| tee -a {log_file}")
