@@ -1595,8 +1595,6 @@ def admin_cron_update(index: int, job: dict = Body(...)):
     if not (0 <= index < len(data.get("jobs", []))):
         return {"error": "Invalid index"}, 400
     target = data["jobs"][index]
-    old_schedule = target.get("schedule", "")
-    old_command = target.get("command", "")
     # Partial update: only overwrite fields present in request
     for key in ("name", "description", "schedule", "command", "enabled"):
         if key in job:
@@ -1604,11 +1602,10 @@ def admin_cron_update(index: int, job: dict = Body(...)):
     with open(resolved, "w") as f:
         _json.dump(data, f, indent=2, ensure_ascii=False)
 
-    # Sync crontab file if schedule or command changed
-    new_schedule = target.get("schedule", "")
-    new_command = target.get("command", "")
-    if new_schedule != old_schedule or new_command != old_command:
+    # Sync crontab file if schedule/command in request
+    if "schedule" in job or "command" in job:
         Crontab_File = "/var/data/crontab.txt"
+        new_schedule = target.get("schedule", "")
         if os.path.isfile(Crontab_File):
             lines = open(Crontab_File).readlines()
             if 0 <= index < len(lines):
