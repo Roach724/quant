@@ -38,10 +38,19 @@ class Portfolio:
     def __init__(self, initial_capital: float):
         self.initial_capital = initial_capital
         self.cash = initial_capital
+        self._peak_equity = initial_capital
         self.positions: dict[str, Position] = {}
         self._last_prices: dict[str, float] = {}
         self._equity: list[float] = []
         self._timestamps: list[datetime] = []
+
+    @property
+    def drawdown(self) -> float:
+        """Current drawdown from peak equity (negative = underwater)."""
+        current = self._mark_to_market({})
+        if self._peak_equity > 0:
+            return (current - self._peak_equity) / self._peak_equity
+        return 0.0
 
     @property
     def total_equity(self) -> float:
@@ -81,8 +90,11 @@ class Portfolio:
         close_data = bar_data.get("close", {})
         for sym, price in close_data.items():
             self._last_prices[sym] = float(price)
+        current = self._mark_to_market(bar_data)
+        if current > self._peak_equity:
+            self._peak_equity = current
         self._timestamps.append(ts)
-        self._equity.append(self._mark_to_market(bar_data))
+        self._equity.append(current)
 
     @property
     def equity_curve(self) -> pd.Series:
