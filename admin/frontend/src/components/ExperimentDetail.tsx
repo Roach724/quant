@@ -46,15 +46,16 @@ function computeSharpe(dailyReturns: number[]): number {
   return std > 0 ? (mean / std) * Math.sqrt(252) : 0;
 }
 
-function computeCalmar(equity: number[], drawdowns: number[]): number {
+function computeCalmar(equity: number[], drawdowns: number[], ts: string[]): number {
   // Annualized return / abs(max drawdown)
-  if (equity.length < 2 || drawdowns.length === 0) return 0;
+  // Matches engine/metrics.py: n_years = (last_date - first_date).days / 365.25
+  if (equity.length < 2 || drawdowns.length === 0 || ts.length < 2) return 0;
   const totalRet = (equity[equity.length - 1] - equity[0]) / equity[0];
-  // Approximate years from number of bars (assume 78 bars/day × 252 days)
-  // Better: use actual date range
-  const nBars = equity.length;
-  const estYears = Math.max(nBars / (78 * 252), 1 / 252);
-  const annRet = (1 + totalRet) ** (1 / estYears) - 1;
+  const firstMs = new Date(ts[0]).getTime();
+  const lastMs = new Date(ts[ts.length - 1]).getTime();
+  const daysDiff = (lastMs - firstMs) / (1000 * 60 * 60 * 24);
+  const nYears = Math.max(daysDiff / 365.25, 1 / 252);
+  const annRet = (1 + totalRet) ** (1 / nYears) - 1;
   const maxDD = Math.min(...drawdowns);
   return Math.abs(maxDD) > 1e-10 ? annRet / Math.abs(maxDD) : 0;
 }
@@ -157,7 +158,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
   const maxDrawdown = drawdowns.length > 0 ? Math.min(...drawdowns) : 0;
   const cumReturnPct = cumReturns.length > 0 ? cumReturns[cumReturns.length - 1] : 0;
   const sharpeRatio = useMemo(() => computeSharpe(dailyReturns), [dailyReturns]);
-  const calmarRatio = useMemo(() => computeCalmar(eqValues, drawdowns), [eqValues, drawdowns]);
+  const calmarRatio = useMemo(() => computeCalmar(eqValues, drawdowns, tsValues), [eqValues, drawdowns, tsValues]);
   const winRate = (() => {
     const lots: Record<string, { qty: number; price: number }[]> = {};
     let wins = 0, losses = 0;
@@ -281,7 +282,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
         </Col>
         <Col xs={12} sm={6} md={3}>
           <Card size="small">
-            <Statistic title="Max Drawdown" value={(maxDrawdown * 100).toFixed(2) + '%'}
+            <Statistic title="Max Drawdown" value={(Math.abs(maxDrawdown) * 100).toFixed(2) + '%'}
               valueStyle={{ color: '#cf1322' }} />
           </Card>
         </Col>
