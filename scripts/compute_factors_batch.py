@@ -99,15 +99,39 @@ def write_factor_values(
     source: str,
     factor_names: list[str],
     market: str,
+    replace_start: str | None = None,
+    replace_end: str | None = None,
 ) -> int:
     """Write factor values to BigQuery factor_values table.
 
     Converts wide-format DataFrame (symbol + date + factor columns) into
     long-format rows suitable for the factor_values table schema.
 
+    If replace_start and replace_end are provided, existing rows in that
+    date range are DELETE'd before writing (idempotent).
+
     Returns the number of rows written.
     """
     client = bigquery.Client(project=PROJECT)
+
+    # Dedup: DELETE existing data in date range before writing
+    if replace_start and replace_end:
+        factor_pattern = f"{market}_%"
+        log.info(
+            "Deleting existing factors: source=%s market=%s %s → %s",
+            source, market, replace_start, replace_end,
+        )
+        del_query = f"""
+        DELETE FROM `{FACTOR_VALUES_TABLE}`
+        WHERE factor_id LIKE '{factor_pattern}'
+          AND source_builder = '{source}'
+          AND date BETWEEN '{replace_start}' AND '{replace_end}'
+        """
+        try:
+            client.query(del_query).result()
+            log.info("  DELETE completed")
+        except Exception as e:
+            log.warning("  DELETE failed (non-fatal): %s", e)
 
     rows: list[dict] = []
     for _, row in df.iterrows():
@@ -230,7 +254,8 @@ def compute_tech_factors(
 
     n_written = 0
     if write_to_bq and write_names:
-        n_written = write_factor_values(processed, "tech", write_names, market)
+        n_written = write_factor_values(processed, "tech", write_names, market,
+                                         replace_start=start, replace_end=end)
 
     return len(tfb.factor_names), n_written
 
@@ -330,7 +355,8 @@ def compute_fundamental_factors(
     
     n_written = 0
     if write_to_bq and write_names:
-        n_written = write_factor_values(processed, "fundamental", write_names, market)
+        n_written = write_factor_values(processed, "fundamental", write_names, market,
+                                         replace_start=start, replace_end=end)
     
     return len(write_names), n_written
 
