@@ -1611,17 +1611,12 @@ def admin_cron_update(index: int, job: dict = Body(...)):
         Crontab_File = "/var/data/crontab.txt"
         if os.path.isfile(Crontab_File):
             lines = open(Crontab_File).readlines()
-            updated = []
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-                if stripped and not stripped.startswith("#"):
-                    parts = stripped.split(None, 5)
-                    if len(parts) >= 6 and parts[5] == old_command:
-                        updated.append(f"{new_schedule} {new_command}\n")
-                        continue
-                updated.append(line)
+            if 0 <= index < len(lines):
+                parts = lines[index].strip().split(None, 5)
+                if len(parts) >= 6:
+                    lines[index] = f"{new_schedule} {parts[5]}\n"
             with open(Crontab_File, "w") as f:
-                f.writelines(updated)
+                f.writelines(lines)
             subprocess.run(["crontab", Crontab_File], capture_output=True)
 
     _cache_mgr.invalidate("cron:list")
