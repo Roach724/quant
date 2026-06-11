@@ -9,11 +9,11 @@ REGISTRY = "/var/quant/experiments/registry.json"
 
 MIGRATIONS = [
     {"old_id": "exp1_ml_v2",       "type": "live", "market": "us", "strategy": "ml",  "version": 2,
-     "name": "MLPredStrategy us_tech v2", "config": "live/configs/exp1_ml_us.yaml"},
+     "name": "MLPrediction us_tech v2", "config": "live/configs/exp1_ml_us.yaml"},
     {"old_id": "exp2_simple_momentum","type": "live", "market": "us", "strategy": "mom", "version": 1,
      "name": "SimpleMomentum US (control)", "config": "live/configs/exp2_momentum_us.yaml"},
     {"old_id": "exp3_ml_hk",       "type": "live", "market": "hk", "strategy": "ml",  "version": 3,
-     "name": "MLPredStrategy hk_tech v3", "config": "live/configs/exp3_ml_hk.yaml"},
+     "name": "MLPrediction hk_tech v3", "config": "live/configs/exp3_ml_hk.yaml"},
     {"old_id": "exp4_momentum_hk", "type": "live", "market": "hk", "strategy": "mom", "version": 2,
      "name": "SimpleMomentum HK (control)", "config": "live/configs/exp4_momentum_hk.yaml"},
 ]
