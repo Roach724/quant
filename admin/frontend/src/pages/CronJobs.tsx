@@ -213,22 +213,23 @@ const CronJobs: React.FC = () => {
 
   // ── Open create / edit modal ───────────────────────────────────────────────
 
+  const [editingJob, setEditingJob] = useState<CronJob | null>(null);
+
+  // Reset form when editing job changes (applies initialValues)
+  useEffect(() => {
+    if (modalOpen) form.resetFields();
+  }, [editingJob, modalOpen]);
+
   const openCreate = () => {
     setEditingIndex(null);
+    setEditingJob(null);
     form.resetFields();
-    form.setFieldsValue({ enabled: true });
     setModalOpen(true);
   };
 
   const openEdit = (index: number, job: CronJob) => {
     setEditingIndex(index);
-    form.setFieldsValue({
-      name: job.name || '',
-      description: job.description || '',
-      schedule: job.schedule || '',
-      command: job.command || '',
-      enabled: job.enabled,
-    });
+    setEditingJob(job);
     setModalOpen(true);
   };
 
@@ -427,7 +428,9 @@ const CronJobs: React.FC = () => {
         }}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+        <Form form={form} layout="vertical" style={{ marginTop: 16 }}
+          initialValues={editingJob || { enabled: true }}
+        >
           <Form.Item
             name="name"
             label="Name"
