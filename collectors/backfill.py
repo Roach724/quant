@@ -137,7 +137,7 @@ def _backfill_us(
                         sym_rows += len(df)
                         if local_dir:
                             _write_local(df, local_dir, market, frequency)
-                        write_bars_to_bq(_prefix_symbols(df), table_id=f"{market}_bars_{frequency}")
+                        write_bars_to_bq(_prefix_symbols(df), table_id=table_id or f"{market}_bars_{frequency}")
                     chunk_start = chunk_end
                     if chunk_start < end_dt:
                         time.sleep(0.1)  # small pause between chunks for same symbol
@@ -178,6 +178,7 @@ def _backfill_hk(
     gcs_bucket: str | None,
     local_dir: str | None,
     chunk_days: int = 365,
+    table_id: str = None,
 ):
     """Backfill HK stocks: per-symbol serial processing with yfinance→akshare fallback.
 
@@ -215,7 +216,7 @@ def _backfill_hk(
                         sym_rows += len(df)
                         if local_dir:
                             _write_local(df, local_dir, market, frequency)
-                        write_bars_to_bq(_prefix_symbols(df), table_id=f"{market}_bars_{frequency}")
+                        write_bars_to_bq(_prefix_symbols(df), table_id=table_id or f"{market}_bars_{frequency}")
                     chunk_start = chunk_end
                     if chunk_start < end_dt:
                         time.sleep(0.1)  # small pause between chunks for same symbol
@@ -260,6 +261,7 @@ def backfill(
     market: str = None,
     replace: bool = False,
     skip_existing: bool = True,
+    table_id: str = None,
 ):
     """Fetch historical bars in chunks and write to GCS or local storage.
 
@@ -300,6 +302,7 @@ def backfill(
             gcs_bucket=gcs_bucket,
             local_dir=local_dir,
             chunk_days=chunk_days,
+            table_id=table_id,
         )
         return
 
@@ -317,6 +320,7 @@ def backfill(
             gcs_bucket=gcs_bucket,
             local_dir=local_dir,
             chunk_days=chunk_days,
+            table_id=table_id,
         )
         return
 
@@ -366,7 +370,7 @@ def backfill(
             logger.warning("No data returned for %s → %s", chunk_start, chunk_end)
         else:
             total_rows += len(df)
-            write_bars_to_bq(df, table_id=f"{storage_market}_bars_{frequency}")
+            write_bars_to_bq(df, table_id=table_id or f"{storage_market}_bars_{frequency}")
             logger.info("  Wrote %d rows -> BQ table %s", len(df), f"{storage_market}_bars_{frequency}")
 
         chunk_start = chunk_end
@@ -428,6 +432,8 @@ if __name__ == "__main__":
                         help="Delete existing data in date range before backfill (DANGER: may lose data if API incomplete)")
     parser.add_argument("--skip-existing", action="store_true", default=True,
                         help="Skip rows already in BQ (default, safe)")
+    parser.add_argument("--table", default="",
+                        help="Override BQ table name (default: {market}_bars_{freq})")
     args = parser.parse_args()
 
     if not args.start or not args.end:
@@ -479,4 +485,5 @@ if __name__ == "__main__":
         market=args.market or None,
         replace=args.replace,
         skip_existing=args.skip_existing,
+        table_id=args.table or None,
     )
