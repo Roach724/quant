@@ -80,11 +80,12 @@ US_MAX_RETRIES = 2
 US_PROGRESS_INTERVAL = 50  # log every N symbols
 
 
-def _replace_existing_bars(market: str, frequency: str, start: str, end: str):
+def _replace_existing_bars(market: str, frequency: str, start: str, end: str, table_id: str = None):
     """Delete existing bars in date range for idempotent backfill."""
     from google.cloud import bigquery as _bq
     client = _bq.Client(project="deductive-notch-495015-c2")
-    table_ref = f"deductive-notch-495015-c2.quant.{market}_bars_{frequency}"
+    table_name = table_id or f"{market}_bars_{frequency}"
+    table_ref = f"deductive-notch-495015-c2.quant.{table_name}"
     logger.info("Replace mode: deleting existing data from %s (%s → %s)", table_ref, start, end)
     query = f"""
     DELETE FROM `{table_ref}`
@@ -284,7 +285,7 @@ def backfill(
     # --- Replace mode: delete existing data in date range before writing ---
     if replace:
         storage_market = market if market else ("us" if source in ("yfinance", "alpaca", "futu_stock") else "hk" if source == "yfinancehk" else "crypto")
-        _replace_existing_bars(storage_market, frequency, start, end)
+        _replace_existing_bars(storage_market, frequency, start, end, table_id=table_id)
     elif not skip_existing:
         logger.info("Append mode (skip_existing=False): all rows will be inserted")
 
