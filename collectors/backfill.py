@@ -259,6 +259,7 @@ def backfill(
     source: str = "yfinance",
     market: str = None,
     replace: bool = False,
+    skip_existing: bool = True,
 ):
     """Fetch historical bars in chunks and write to GCS or local storage.
 
@@ -282,6 +283,8 @@ def backfill(
     if replace:
         storage_market = market if market else ("us" if source in ("yfinance", "alpaca", "futu_stock") else "hk" if source == "yfinancehk" else "crypto")
         _replace_existing_bars(storage_market, frequency, start, end)
+    elif not skip_existing:
+        logger.info("Append mode (skip_existing=False): all rows will be inserted")
 
     # --- HK: per-symbol serial processing with fallback ---
     if source == "yfinancehk":
