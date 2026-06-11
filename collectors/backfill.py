@@ -80,6 +80,24 @@ US_MAX_RETRIES = 2
 US_PROGRESS_INTERVAL = 50  # log every N symbols
 
 
+def _replace_existing_bars(market: str, frequency: str, start: str, end: str):
+    """Delete existing bars in date range for idempotent backfill."""
+    from google.cloud import bigquery as _bq
+    client = _bq.Client(project="deductive-notch-495015-c2")
+    table_ref = f"deductive-notch-495015-c2.quant.{market}_bars_{frequency}"
+    logger.info("Replace mode: deleting existing data from %s (%s → %s)", table_ref, start, end)
+    query = f"""
+    DELETE FROM `{table_ref}`
+    WHERE DATE(timestamp) BETWEEN '{start}' AND '{end}'
+    """
+    try:
+        job = client.query(query)
+        job.result()
+        logger.info("  DELETE completed: %d rows removed", job.num_dml_affected_rows)
+    except Exception as e:
+        logger.warning("  DELETE failed (table may not exist yet): %s", e)
+
+
 def _backfill_us(
     adapter: YFinanceUSAdapter,
     symbols: list[str],
@@ -240,6 +258,7 @@ def backfill(
     frequency: str = "1m",
     source: str = "yfinance",
     market: str = None,
+    replace: bool = False,
 ):
     """Fetch historical bars in chunks and write to GCS or local storage.
 
@@ -258,6 +277,11 @@ def backfill(
                 start, end, total_days, len(symbols), frequency, source)
     logger.info("Symbols: %s", symbols[:20] if len(symbols) > 20 else symbols)
     logger.info("Writing directly to BigQuery")
+
+    # --- Replace mode: delete existing data in date range before writing ---
+    if replace:
+        storage_market = market if market else ("us" if source in ("yfinance", "alpaca", "futu_stock") else "hk" if source == "yfinancehk" else "crypto")
+        _replace_existing_bars(storage_market, frequency, start, end)
 
     # --- HK: per-symbol serial processing with fallback ---
     if source == "yfinancehk":
@@ -397,6 +421,8 @@ if __name__ == "__main__":
                                  "futu_stock", "futu_crypto"],
                         help="Data source adapter (default: yfinance)")
     parser.add_argument("--market", default="", choices=["us", "hk", ""], help="Filter symbols by market prefix (e.g. --market us for US. only)")
+    parser.add_argument("--replace", action="store_true",
+                        help="Delete existing data in date range before backfill (idempotent)")
     args = parser.parse_args()
 
     if not args.start or not args.end:
