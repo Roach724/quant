@@ -80,11 +80,12 @@ US_MAX_RETRIES = 2
 US_PROGRESS_INTERVAL = 50  # log every N symbols
 
 
-def _replace_existing_bars(market: str, frequency: str, start: str, end: str):
+def _replace_existing_bars(market: str, frequency: str, start: str, end: str, table_id: str = None):
     """Delete existing bars in date range for idempotent backfill."""
     from google.cloud import bigquery as _bq
     client = _bq.Client(project="deductive-notch-495015-c2")
-    table_ref = f"deductive-notch-495015-c2.quant.{market}_bars_{frequency}"
+    table_name = table_id or f"{market}_bars_{frequency}"
+    table_ref = f"deductive-notch-495015-c2.quant.{table_name}"
     logger.info("Replace mode: deleting existing data from %s (%s → %s)", table_ref, start, end)
     query = f"""
     DELETE FROM `{table_ref}`
@@ -137,7 +138,7 @@ def _backfill_us(
                         sym_rows += len(df)
                         if local_dir:
                             _write_local(df, local_dir, market, frequency)
-                        write_bars_to_bq(_prefix_symbols(df), table_id=f"{market}_bars_{frequency}")
+                        write_bars_to_bq(_prefix_symbols(df), table_id=table_id or f"{market}_bars_{frequency}")
                     chunk_start = chunk_end
                     if chunk_start < end_dt:
                         time.sleep(0.1)  # small pause between chunks for same symbol
@@ -178,6 +179,7 @@ def _backfill_hk(
     gcs_bucket: str | None,
     local_dir: str | None,
     chunk_days: int = 365,
+    table_id: str = None,
 ):
     """Backfill HK stocks: per-symbol serial processing with yfinance→akshare fallback.
 
@@ -215,7 +217,7 @@ def _backfill_hk(
                         sym_rows += len(df)
                         if local_dir:
                             _write_local(df, local_dir, market, frequency)
-                        write_bars_to_bq(_prefix_symbols(df), table_id=f"{market}_bars_{frequency}")
+                        write_bars_to_bq(_prefix_symbols(df), table_id=table_id or f"{market}_bars_{frequency}")
                     chunk_start = chunk_end
                     if chunk_start < end_dt:
                         time.sleep(0.1)  # small pause between chunks for same symbol
@@ -260,6 +262,7 @@ def backfill(
     market: str = None,
     replace: bool = False,
     skip_existing: bool = True,
+    table_id: str = None,
 ):
     """Fetch historical bars in chunks and write to GCS or local storage.
 
@@ -282,7 +285,7 @@ def backfill(
     # --- Replace mode: delete existing data in date range before writing ---
     if replace:
         storage_market = market if market else ("us" if source in ("yfinance", "alpaca", "futu_stock") else "hk" if source == "yfinancehk" else "crypto")
-        _replace_existing_bars(storage_market, frequency, start, end)
+        _replace_existing_bars(storage_market, frequency, start, end, table_id=table_id)
     elif not skip_existing:
         logger.info("Append mode (skip_existing=False): all rows will be inserted")
 
@@ -300,6 +303,7 @@ def backfill(
             gcs_bucket=gcs_bucket,
             local_dir=local_dir,
             chunk_days=chunk_days,
+            table_id=table_id,
         )
         return
 
@@ -317,6 +321,7 @@ def backfill(
             gcs_bucket=gcs_bucket,
             local_dir=local_dir,
             chunk_days=chunk_days,
+            table_id=table_id,
         )
         return
 
@@ -366,7 +371,7 @@ def backfill(
             logger.warning("No data returned for %s → %s", chunk_start, chunk_end)
         else:
             total_rows += len(df)
-            write_bars_to_bq(df, table_id=f"{storage_market}_bars_{frequency}")
+            write_bars_to_bq(df, table_id=table_id or f"{storage_market}_bars_{frequency}")
             logger.info("  Wrote %d rows -> BQ table %s", len(df), f"{storage_market}_bars_{frequency}")
 
         chunk_start = chunk_end
@@ -428,6 +433,8 @@ if __name__ == "__main__":
                         help="Delete existing data in date range before backfill (DANGER: may lose data if API incomplete)")
     parser.add_argument("--skip-existing", action="store_true", default=True,
                         help="Skip rows already in BQ (default, safe)")
+    parser.add_argument("--table", default="",
+                        help="Override BQ table name (default: {market}_bars_{freq})")
     args = parser.parse_args()
 
     if not args.start or not args.end:
@@ -479,4 +486,5 @@ if __name__ == "__main__":
         market=args.market or None,
         replace=args.replace,
         skip_existing=args.skip_existing,
+        table_id=args.table or None,
     )
