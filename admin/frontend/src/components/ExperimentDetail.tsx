@@ -1,10 +1,63 @@
 import { Card, Select, Table, Spin, Empty, Row, Col, Statistic, Button } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
 import { api, toLocal } from '../api';
 import CacheRefresh from './CacheRefresh';
+
+/* ── Metric helpers (compute from equity curve, independent of BQ drawdown column) ── */
+
+function computeDrawdown(equity: number[]): number[] {
+  let peak = -Infinity;
+  return equity.map((e) => {
+    if (e > peak) peak = e;
+    return peak > 0 ? (e - peak) / peak : 0;
+  });
+}
+
+function computeCumReturn(equity: number[]): number[] {
+  const init = equity[0];
+  if (!init || init === 0) return equity.map(() => 0);
+  return equity.map((e) => (e / init - 1) * 100);
+}
+
+function computeDailyReturns(equity: number[], ts: string[]): number[] {
+  // Group by date, take last equity of each day → daily returns
+  const byDate = new Map<string, number>();
+  for (let i = 0; i < ts.length; i++) {
+    const date = (ts[i] || '').slice(0, 10); // YYYY-MM-DD
+    byDate.set(date, equity[i]);
+  }
+  const daily = [...byDate.values()];
+  if (daily.length < 2) return [];
+  const rets: number[] = [];
+  for (let i = 1; i < daily.length; i++) {
+    if (daily[i - 1] !== 0) rets.push((daily[i] - daily[i - 1]) / daily[i - 1]);
+  }
+  return rets;
+}
+
+function computeSharpe(dailyReturns: number[]): number {
+  if (dailyReturns.length < 2) return 0;
+  const mean = dailyReturns.reduce((s, r) => s + r, 0) / dailyReturns.length;
+  const variance = dailyReturns.reduce((s, r) => s + (r - mean) ** 2, 0) / (dailyReturns.length - 1);
+  const std = Math.sqrt(variance);
+  return std > 0 ? (mean / std) * Math.sqrt(252) : 0;
+}
+
+function computeCalmar(equity: number[], drawdowns: number[]): number {
+  // Annualized return / abs(max drawdown)
+  if (equity.length < 2 || drawdowns.length === 0) return 0;
+  const totalRet = (equity[equity.length - 1] - equity[0]) / equity[0];
+  // Approximate years from number of bars (assume 78 bars/day × 252 days)
+  // Better: use actual date range
+  const nBars = equity.length;
+  const estYears = Math.max(nBars / (78 * 252), 1 / 252);
+  const annRet = (1 + totalRet) ** (1 / estYears) - 1;
+  const maxDD = Math.min(...drawdowns);
+  return Math.abs(maxDD) > 1e-10 ? annRet / Math.abs(maxDD) : 0;
+}
 
 interface Props {
   type: 'live' | 'prod' | 'debug' | 'paper';
@@ -92,9 +145,19 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
   const first = equity.length > 0 ? equity[0] : null;
   const initialCapital = first ? Number(first.cash ?? first.equity ?? 0) : 0;
   const totalPnl = last ? Number(last.equity ?? 0) - initialCapital : 0;
-  const maxDrawdown = equity.length > 0 ? Math.min(...equity.map((d: any) => Number(d.drawdown ?? 0))) : 0;
   const unrealizedPnl = positions.reduce((s: number, p: any) => s + Number(p.pnl ?? 0), 0);
   const realizedPnl = totalPnl - unrealizedPnl;
+
+  // Compute metrics from equity curve (not from BQ drawdown column)
+  const eqValues = useMemo(() => equity.map((d: any) => Number(d.equity ?? 0)), [equity]);
+  const tsValues = useMemo(() => equity.map((d: any) => d.ts ?? ''), [equity]);
+  const drawdowns = useMemo(() => computeDrawdown(eqValues), [eqValues]);
+  const cumReturns = useMemo(() => computeCumReturn(eqValues), [eqValues]);
+  const dailyReturns = useMemo(() => computeDailyReturns(eqValues, tsValues), [eqValues, tsValues]);
+  const maxDrawdown = drawdowns.length > 0 ? Math.min(...drawdowns) : 0;
+  const cumReturnPct = cumReturns.length > 0 ? cumReturns[cumReturns.length - 1] : 0;
+  const sharpeRatio = useMemo(() => computeSharpe(dailyReturns), [dailyReturns]);
+  const calmarRatio = useMemo(() => computeCalmar(eqValues, drawdowns), [eqValues, drawdowns]);
   const winRate = (() => {
     const lots: Record<string, { qty: number; price: number }[]> = {};
     let wins = 0, losses = 0;
@@ -162,7 +225,7 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
         </Col>
       </Row>
 
-      {/* ── Metric Cards: PnL Decomposition ── */}
+      {/* ── Metric Cards: Performance ── */}
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         <Col xs={12} sm={6} md={4}>
           <Card size="small"><Statistic title="Bar" value={last?.bar ?? '—'} /></Card>
@@ -170,6 +233,11 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
         <Col xs={12} sm={6} md={4}>
           <Card size="small">
             <Statistic title="Initial Capital" value={Math.round(initialCapital).toLocaleString()} prefix="$" />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={4}>
+          <Card size="small">
+            <Statistic title="Equity" value={last?.equity != null ? Math.round(Number(last.equity)).toLocaleString() : '—'} prefix="$" />
           </Card>
         </Col>
         <Col xs={12} sm={6} md={4}>
@@ -190,39 +258,52 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
               valueStyle={{ color: totalPnl >= 0 ? '#3f8600' : '#cf1322' }} />
           </Card>
         </Col>
-        <Col xs={12} sm={6} md={4}>
-          <Card size="small">
-            <Statistic title="Equity" value={last?.equity != null ? Math.round(Number(last.equity)).toLocaleString() : '—'} prefix="$" />
-          </Card>
-        </Col>
       </Row>
 
-      {/* ── Metric Cards: Risk ── */}
+      {/* ── Metric Cards: Risk & Returns ── */}
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
-        <Col xs={12} sm={6}>
+        <Col xs={12} sm={6} md={3}>
           <Card size="small">
             <Statistic title="Cash" value={last?.cash != null ? Math.round(Number(last.cash)).toLocaleString() : '—'} prefix="$" />
           </Card>
         </Col>
-        <Col xs={12} sm={6}>
+        <Col xs={12} sm={6} md={3}>
           <Card size="small">
             <Statistic title="Day PnL" value={last?.daily_pnl != null ? Math.round(Number(last.daily_pnl)).toLocaleString() : '—'} prefix="$"
               valueStyle={{ color: Number(last?.daily_pnl ?? 0) >= 0 ? '#3f8600' : '#cf1322' }} />
           </Card>
         </Col>
-        <Col xs={12} sm={6}>
+        <Col xs={12} sm={6} md={3}>
+          <Card size="small">
+            <Statistic title="Cum Return" value={cumReturnPct.toFixed(2) + '%'}
+              valueStyle={{ color: cumReturnPct >= 0 ? '#3f8600' : '#cf1322' }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={3}>
           <Card size="small">
             <Statistic title="Max Drawdown" value={(maxDrawdown * 100).toFixed(2) + '%'}
               valueStyle={{ color: '#cf1322' }} />
           </Card>
         </Col>
-        <Col xs={12} sm={6}>
+        <Col xs={12} sm={6} md={3}>
+          <Card size="small">
+            <Statistic title="Sharpe" value={sharpeRatio.toFixed(2)}
+              valueStyle={{ color: sharpeRatio >= 0 ? '#3f8600' : '#cf1322' }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={3}>
+          <Card size="small">
+            <Statistic title="Calmar" value={calmarRatio.toFixed(2)}
+              valueStyle={{ color: calmarRatio >= 0 ? '#3f8600' : '#cf1322' }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6} md={3}>
           <Card size="small">
             <Statistic title="Win Rate" value={(winRate).toFixed(1) + '%'}
               valueStyle={{ color: winRate >= 50 ? '#3f8600' : '#cf1322' }} />
           </Card>
         </Col>
-        <Col xs={12} sm={6}>
+        <Col xs={12} sm={6} md={3}>
           <Card size="small">
             <Statistic title="Positions" value={positions.length} />
           </Card>
@@ -240,10 +321,16 @@ export default function ExperimentDetail({ type, readonly: _readonly }: Props) {
               <ReactECharts option={makeEquityOption(equity)} style={{ height: 350 }} />
             </Card>
 
+            {/* ── Cumulative Return ── */}
+            <Card size="small" title="Cumulative Return" style={{ marginBottom: 16 }}
+              extra={<CacheRefresh module="dashboard:equity" warmup={false} onRefresh={() => loadData(selectedExp, selectedRun)} />}>
+              <ReactECharts option={makeCumReturnOption(tsValues, cumReturns)} style={{ height: 250 }} />
+            </Card>
+
             {/* ── Drawdown ── */}
             <Card size="small" title="Drawdown" style={{ marginBottom: 16 }}
               extra={<CacheRefresh module="dashboard:equity" warmup={false} onRefresh={() => loadData(selectedExp, selectedRun)} />}>
-              <ReactECharts option={makeDrawdownOption(equity)} style={{ height: 200 }} />
+              <ReactECharts option={makeDrawdownOption(tsValues, drawdowns)} style={{ height: 200 }} />
             </Card>
 
             {/* ── Positions ── */}
@@ -379,17 +466,47 @@ function makeEquityOption(data: any[]) {
   };
 }
 
-function makeDrawdownOption(data: any[]) {
-  const ts = data.map((d: any) => toLocal(d.ts) ?? '');
-  const values = data.map((d: any) => Number(d.drawdown ?? 0) * 100);
-  const yMin = Math.min(...values, 0);
+function makeCumReturnOption(ts: string[], cumReturns: number[]) {
+  return {
+    tooltip: { trigger: 'axis', valueFormatter: (v: any) => `${v?.toFixed(2)}%` },
+    grid: { left: 60, right: 20, top: 20, bottom: 30 },
+    xAxis: { type: 'category', data: ts.map((t) => toLocal(t) ?? ''), axisLabel: { show: false } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 10, formatter: '{value}%' } },
+    series: [
+      {
+        type: 'line',
+        data: cumReturns,
+        showSymbol: false,
+        lineStyle: { color: cumReturns[cumReturns.length - 1] >= 0 ? '#3f8600' : '#cf1322', width: 2 },
+        areaStyle: {
+          color: {
+            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: cumReturns[cumReturns.length - 1] >= 0 ? 'rgba(63,134,0,0.2)' : 'rgba(207,19,34,0.2)' },
+              { offset: 1, color: 'rgba(255,255,255,0)' },
+            ],
+          },
+        },
+        markLine: {
+          silent: true,
+          data: [{ yAxis: 0, lineStyle: { color: '#999', type: 'dashed' } }],
+        },
+      },
+    ],
+    dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+  };
+}
+
+function makeDrawdownOption(ts: string[], drawdowns: number[]) {
+  const values = drawdowns.map((d) => d * 100);
+  const yMin = values.length > 0 ? Math.min(...values, 0) : 0;
   // Auto-scale with 10% padding below worst drawdown
   const yPad = Math.abs(yMin) * 0.1;
 
   return {
     tooltip: { trigger: 'axis', valueFormatter: (v: any) => `${v?.toFixed(2)}%` },
     grid: { left: 60, right: 20, top: 20, bottom: 30 },
-    xAxis: { type: 'category', data: ts, axisLabel: { show: false } },
+    xAxis: { type: 'category', data: ts.map((t) => toLocal(t) ?? ''), axisLabel: { show: false } },
     yAxis: { type: 'value', axisLabel: { fontSize: 10, formatter: '{value}%' }, max: 0, min: yMin - yPad },
     series: [
       {
@@ -400,8 +517,6 @@ function makeDrawdownOption(data: any[]) {
         areaStyle: { color: 'rgba(207, 19, 34, 0.15)' },
       },
     ],
-    dataZoom: [
-      { type: 'inside', start: 0, end: 100 },
-    ],
+    dataZoom: [{ type: 'inside', start: 0, end: 100 }],
   };
 }
