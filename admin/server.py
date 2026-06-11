@@ -1587,6 +1587,8 @@ def admin_cron_add(job: dict = Body(...)):
 @app.put("/api/admin/cron/{index}")
 def admin_cron_update(index: int, job: dict = Body(...)):
     """Update a cron job — also syncs crontab if schedule/command changes."""
+    logger.info("cron_update index=%d keys=%s", index, sorted(job.keys()))
+    logger.info("cron_update body: %s", {k: v for k, v in job.items() if k != "command"})
     resolved = os.path.abspath(CRON_REGISTRY)
     if not os.path.isfile(resolved):
         return {"error": "Cron registry not found"}, 404
@@ -1615,6 +1617,7 @@ def admin_cron_update(index: int, job: dict = Body(...)):
             with open(Crontab_File, "w") as f:
                 f.writelines(lines)
             subprocess.run(["crontab", Crontab_File], capture_output=True)
+            logger.info("cron_update crontab synced line %d: %s", index, new_schedule)
 
     _cache_mgr.invalidate("cron:list")
     return {"status": "ok", "job": target}
