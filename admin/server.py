@@ -1075,6 +1075,7 @@ def admin_data_backfill(
     start: str = "2020-01-01",
     end: str = "2026-06-03",
     source: str = "auto",
+    mode: str = Query("skip_existing", description="Backfill mode: skip_existing (safe) or replace (wipe+refill)"),
 ):
     """Trigger data backfill via worker. Supports multiple tables, serial execution."""
     # Resolve table keys to (market, frequency) pairs
@@ -1112,7 +1113,8 @@ def admin_data_backfill(
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         log_file = f"/var/log/quant/prod/backfill/backfill_{mkt}_{freq}_{ts}.log"
         cmd = (f"{mkdir_log} && cd /opt/quant && PYTHONPATH=/opt/quant "
-               f"python3 collectors/backfill.py --replace "
+               f"python3 collectors/backfill.py "
+               + ("--replace " if mode == "replace" else "") +
                f"--symbols \"{symbols_str}\" --frequency {freq} --source {src} --market {mkt} --start {start} --end {end} "
                f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
                f"| tee -a {log_file}")
