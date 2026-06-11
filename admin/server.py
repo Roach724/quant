@@ -81,7 +81,7 @@ def _init_cache_modules():
     _cache_mgr.register_module("factors:list",      ttl=604800)
     _cache_mgr.register_module("models:list",       ttl=604800)
     _cache_mgr.register_module("models:versions",   ttl=604800)
-    _cache_mgr.register_module("cron:list",         ttl=60)      # 1 min (worker can't invalidate cross-process)
+    _cache_mgr.register_module("cron:list",         ttl=0)       # no cache (multi-worker sync issues)
     _cache_mgr.register_module("strategies:list",   ttl=604800)
 
     logger.info("Cache modules registered: %d", len(_cache_mgr.list_modules()))
