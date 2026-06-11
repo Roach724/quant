@@ -127,6 +127,7 @@ const DataMap: React.FC = () => {
   }, []);
   const [backfillSources, setBackfillSources] = useState<{key: string; label: string}[]>([]);
   const [backfillSource, setBackfillSource] = useState('auto');
+  const [backfillMode, setBackfillMode] = useState<'skip_existing' | 'replace'>('skip_existing');
   const [backfillProgress, setBackfillProgress] = useState<{ done: number; total: number } | null>(null);
   const [_bfTaskId, setBackfillTaskId] = useState<number | null>(null);
 
@@ -146,6 +147,7 @@ const DataMap: React.FC = () => {
         start: backfillDates[0],
         end: backfillDates[1],
         source: backfillSource,
+        mode: backfillMode,
       });
       const data = await api.post(`/api/admin/data/backfill?${params.toString()}`);
       message.success(`${data.count || 0} 个回填任务已创建`);
@@ -398,6 +400,16 @@ const DataMap: React.FC = () => {
                 onChange={setBackfillSource}
                 style={{ width: 220 }}
                 options={backfillSources.map((s) => ({ value: s.key, label: s.label }))}
+              />
+              <Text strong>模式:</Text>
+              <Select
+                value={backfillMode}
+                onChange={setBackfillMode}
+                style={{ width: 160 }}
+                options={[
+                  { value: 'skip_existing', label: '🛡️ 跳过已有 (安全)' },
+                  { value: 'replace', label: '⚠️ 覆盖已有' },
+                ]}
               />
               <Text strong>日期:</Text>
               <DatePicker.RangePicker

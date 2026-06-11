@@ -130,13 +130,72 @@ def write_rows_to_bq(
     return written
 
 
+def _filter_existing_rows(
+    df: pd.DataFrame,
+    table_id: str,
+    dataset: str,
+    project: str,
+) -> pd.DataFrame:
+    """Remove rows from df that already exist in BQ (by symbol, timestamp)."""
+    try:
+        table_ref = _bq_table_ref(table_id, dataset, project)
+        min_ts = df["timestamp"].min()
+        max_ts = df["timestamp"].max()
+        symbols = df["symbol"].unique().tolist()
+
+        # Chunk symbols query to avoid huge IN clauses
+        client = bigquery.Client(project=project)
+        existing_keys: set[tuple[str, str]] = set()
+        chunk_sz = 200
+
+        for i in range(0, len(symbols), chunk_sz):
+            chunk = symbols[i : i + chunk_sz]
+            q = f"""
+            SELECT DISTINCT symbol, FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%E*S', timestamp) AS ts
+            FROM `{table_ref}`
+            WHERE symbol IN UNNEST(@symbols)
+              AND timestamp BETWEEN @min_ts AND @max_ts
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ArrayQueryParameter("symbols", "STRING", chunk),
+                    bigquery.ScalarQueryParameter("min_ts", "TIMESTAMP", min_ts),
+                    bigquery.ScalarQueryParameter("max_ts", "TIMESTAMP", max_ts),
+                ]
+            )
+            for row in client.query(q, job_config=job_config).result():
+                existing_keys.add((row.symbol, row.ts))
+
+        if not existing_keys:
+            return df
+
+        # Build lookup key and filter
+        df["_bq_key"] = df["symbol"].astype(str) + "|" + df["timestamp"].apply(
+            lambda t: t.strftime("%Y-%m-%dT%H:%M:%S") if hasattr(t, "strftime") else str(t)[:19]
+        )
+        existing_set = {f"{s}|{t}" for s, t in existing_keys}
+        before = len(df)
+        df = df[~df["_bq_key"].isin(existing_set)].drop(columns=["_bq_key"])
+        skipped = before - len(df)
+        if skipped > 0:
+            logger.info("Skipped %d existing rows (of %d) in %s", skipped, before, table_ref)
+    except Exception as e:
+        logger.warning("Skip-existing check failed, writing all rows: %s", e)
+    return df
+
+
 def write_bars_to_bq(
     df: pd.DataFrame,
     table_id: str,
     dataset: str = DATASET,
     project: str = PROJECT,
+    skip_existing: bool = True,
 ) -> int:
-    """Write OHLCV bars DataFrame directly to BigQuery.
+    """Write OHLCV bars DataFrame to BigQuery.
+
+    When skip_existing=True (default), queries BQ for existing (symbol, timestamp)
+    pairs in the DataFrame's time range and inserts only truly new rows.
+    This prevents duplicates without risking data loss.
 
     Normalizes symbols to canonical BQ format (HK.XXXXX / US.XXX) before writing.
     """
@@ -145,4 +204,8 @@ def write_bars_to_bq(
     from common.normalize import queryize_symbol_series
     df = df.copy()
     df["symbol"] = queryize_symbol_series(df["symbol"], market)
+
+    if skip_existing and not df.empty and "symbol" in df.columns and "timestamp" in df.columns:
+        df = _filter_existing_rows(df, table_id, dataset, project)
+
     return write_rows_to_bq(df, table_name=table_id, dataset=dataset, project=project)

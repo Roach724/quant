@@ -422,7 +422,9 @@ if __name__ == "__main__":
                         help="Data source adapter (default: yfinance)")
     parser.add_argument("--market", default="", choices=["us", "hk", ""], help="Filter symbols by market prefix (e.g. --market us for US. only)")
     parser.add_argument("--replace", action="store_true",
-                        help="Delete existing data in date range before backfill (idempotent)")
+                        help="Delete existing data in date range before backfill (DANGER: may lose data if API incomplete)")
+    parser.add_argument("--skip-existing", action="store_true", default=True,
+                        help="Skip rows already in BQ (default, safe)")
     args = parser.parse_args()
 
     if not args.start or not args.end:
@@ -472,4 +474,6 @@ if __name__ == "__main__":
         frequency=args.frequency,
         source=args.source,
         market=args.market or None,
+        replace=args.replace,
+        skip_existing=args.skip_existing,
     )
