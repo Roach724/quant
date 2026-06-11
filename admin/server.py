@@ -1586,33 +1586,27 @@ def admin_cron_add(job: dict = Body(...)):
 
 @app.put("/api/admin/cron/{index}")
 def admin_cron_update(index: int, job: dict = Body(...)):
-    """Update a cron job — also syncs crontab if schedule/command changes."""
-    # Debug: write last request to tmp file
-    try:
-        import json as _j2
-        with open("/tmp/cron_update_debug.json", "w") as _df:
-            _j2.dump({"index": index, "keys": sorted(job.keys()), "schedule": job.get("schedule", "MISSING"), "command": job.get("command", "MISSING")[:80]}, _df)
-    except: pass
-    resolved = os.path.abspath(CRON_REGISTRY)
-    if not os.path.isfile(resolved):
-        return {"error": "Cron registry not found"}, 404
-    with open(resolved) as f:
-        data = _json.load(f)
-    if not (0 <= index < len(data.get("jobs", []))):
-        return {"error": "Invalid index"}, 400
-    target = data["jobs"][index]
-    # Partial update: only overwrite fields present in request
-    for key in ("name", "description", "schedule", "command", "enabled"):
-        if key in job:
-            target[key] = job[key]
-    with open(resolved, "w") as f:
-        _json.dump(data, f, indent=2, ensure_ascii=False)
+    """Update a cron job — registry + crontab sync."""
+    new_schedule = job.get("schedule", "")
 
-    # Sync crontab file if schedule/command in request
+    # Update registry if index is within bounds
+    resolved = os.path.abspath(CRON_REGISTRY)
+    if os.path.isfile(resolved):
+        with open(resolved) as f:
+            data = _json.load(f)
+        if 0 <= index < len(data.get("jobs", [])):
+            target = data["jobs"][index]
+            for key in ("name", "description", "schedule", "command", "enabled"):
+                if key in job:
+                    target[key] = job[key]
+            new_schedule = target.get("schedule", "")
+            with open(resolved, "w") as f:
+                _json.dump(data, f, indent=2, ensure_ascii=False)
+
+    # Always sync crontab (works even for jobs not in registry)
     if "schedule" in job or "command" in job:
         Crontab_File = "/var/data/crontab.txt"
-        new_schedule = target.get("schedule", "")
-        if os.path.isfile(Crontab_File):
+        if os.path.isfile(Crontab_File) and new_schedule:
             lines = open(Crontab_File).readlines()
             if 0 <= index < len(lines):
                 parts = lines[index].strip().split(None, 5)
@@ -1623,7 +1617,7 @@ def admin_cron_update(index: int, job: dict = Body(...)):
             subprocess.run(["crontab", Crontab_File], capture_output=True)
 
     _cache_mgr.invalidate("cron:list")
-    return {"status": "ok", "job": target}
+    return {"status": "ok", "schedule": new_schedule}
 
 
 @app.post("/api/admin/cron/run")
