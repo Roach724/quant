@@ -1487,7 +1487,13 @@ def admin_cron_list():
 
     for i, line in enumerate(lines):
         line = line.strip()
-        if not line or line.startswith("#"):
+        if not line:
+            continue
+        # Detect disabled jobs (commented out with #)
+        is_enabled = not line.startswith("#")
+        if not is_enabled:
+            line = line.lstrip("# ").strip()  # uncomment to parse
+        if not line:
             continue
         parts = line.split(None, 5)
         if len(parts) >= 6:
@@ -1517,7 +1523,7 @@ def admin_cron_list():
             jobs.append({
                 "index": i,
                 "raw": line,
-                "enabled": True,
+                "enabled": is_enabled,
                 "schedule": " ".join(parts[:5]),
                 "command": cmd,
                 "name": job_name,
