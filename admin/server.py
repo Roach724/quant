@@ -1096,26 +1096,38 @@ def admin_data_backfill(
     resolved_source = source
     task_ids = []
     for key in selected:
-        parts = key.split("_bars_")
-        if len(parts) != 2:
-            continue
-        mkt, freq = parts
+        # Parse table key: "us_bars_5m" or "us_bars_index_5m"
+        if "_bars_index_" in key:
+            # Index tables: us_bars_index_5m → market=us, freq=5m
+            prefix, freq = key.split("_bars_index_")
+            mkt = prefix.split("_")[0] if "_" in prefix else prefix
+        else:
+            parts = key.split("_bars_")
+            if len(parts) != 2:
+                continue
+            mkt, freq = parts
         if mkt not in ("us", "hk"):
             continue
 
-        # Load symbols from SSOT per-table (correct market from table key)
-        market_syms = ssot.get("markets", {}).get(mkt, {}).get("symbols", [])
-        symbols_list = [s for s in market_syms if isinstance(s, str)]
+        # Load symbols from SSOT per-table (stocks vs indices)
+        if "_bars_index_" in key:
+            # Index table: load index symbols
+            idx_syms = ssot.get("indices", {}).get(mkt, {}).get("symbols", [])
+            symbols_list = [s for s in idx_syms if isinstance(s, str)]
+        else:
+            market_syms = ssot.get("markets", {}).get(mkt, {}).get("symbols", [])
+            symbols_list = [s for s in market_syms if isinstance(s, str)]
         symbols_str = ",".join(symbols_list) if symbols_list else ""
 
         src = resolved_source if resolved_source != "auto" else ("yfinance" if mkt == "us" else "futu_stock")
+        market_flag = "" if "_bars_index_" in key else f"--market {mkt} "
         mkdir_log = f"mkdir -p /var/log/quant/prod/backfill"
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         log_file = f"/var/log/quant/prod/backfill/backfill_{mkt}_{freq}_{ts}.log"
         cmd = (f"{mkdir_log} && cd /opt/quant && PYTHONPATH=/opt/quant "
                f"python3 collectors/backfill.py "
                + ("--replace " if mode == "replace" else "") +
-               f"--symbols \"{symbols_str}\" --frequency {freq} --source {src} --market {mkt} --start {start} --end {end} "
+               f"--symbols \"{symbols_str}\" --frequency {freq} --source {src} {market_flag}--start {start} --end {end} "
                f"2>&1 | while IFS= read -r l; do echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $l\"; done "
                f"| tee -a {log_file}")
         session = get_session()
