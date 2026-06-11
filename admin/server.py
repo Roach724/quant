@@ -1555,7 +1555,7 @@ def admin_cron_save(jobs: list[dict]):
 
 @app.post("/api/admin/cron/add")
 def admin_cron_add(job: dict = Body(...)):
-    """Add a new cron job to the registry."""
+    """Add a new cron job to the registry and crontab."""
     resolved = os.path.abspath(CRON_REGISTRY)
     os.makedirs(os.path.dirname(resolved), exist_ok=True)
     if os.path.isfile(resolved):
@@ -1563,22 +1563,30 @@ def admin_cron_add(job: dict = Body(...)):
             data = _json.load(f)
     else:
         data = {"jobs": []}
+    schedule = job.get("schedule", "")
+    command = _normalize_to_wrapper(job.get("command", ""), job.get("name", ""))
     data.setdefault("jobs", []).append({
         "name": job.get("name", ""),
         "description": job.get("description", ""),
-        "schedule": job.get("schedule", ""),
-        "command": _normalize_to_wrapper(job.get("command", ""), job.get("name", "")),
+        "schedule": schedule,
+        "command": command,
         "enabled": job.get("enabled", True),
     })
     with open(resolved, "w") as f:
         _json.dump(data, f, indent=2, ensure_ascii=False)
+    # Also append to crontab
+    if schedule and command:
+        Crontab_File = "/var/data/crontab.txt"
+        with open(Crontab_File, "a") as f:
+            f.write(f"{schedule} {command}\n")
+        subprocess.run(["crontab", Crontab_File], capture_output=True)
     _cache_mgr.invalidate("cron:list")
     return {"status": "ok"}
 
 
 @app.put("/api/admin/cron/{index}")
 def admin_cron_update(index: int, job: dict = Body(...)):
-    """Update a cron job (full or partial — e.g. toggle enabled)."""
+    """Update a cron job — also syncs crontab if schedule/command changes."""
     resolved = os.path.abspath(CRON_REGISTRY)
     if not os.path.isfile(resolved):
         return {"error": "Cron registry not found"}, 404
@@ -1587,12 +1595,35 @@ def admin_cron_update(index: int, job: dict = Body(...)):
     if not (0 <= index < len(data.get("jobs", []))):
         return {"error": "Invalid index"}, 400
     target = data["jobs"][index]
+    old_schedule = target.get("schedule", "")
+    old_command = target.get("command", "")
     # Partial update: only overwrite fields present in request
     for key in ("name", "description", "schedule", "command", "enabled"):
         if key in job:
             target[key] = job[key]
     with open(resolved, "w") as f:
         _json.dump(data, f, indent=2, ensure_ascii=False)
+
+    # Sync crontab file if schedule or command changed
+    new_schedule = target.get("schedule", "")
+    new_command = target.get("command", "")
+    if new_schedule != old_schedule or new_command != old_command:
+        Crontab_File = "/var/data/crontab.txt"
+        if os.path.isfile(Crontab_File):
+            lines = open(Crontab_File).readlines()
+            updated = []
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    parts = stripped.split(None, 5)
+                    if len(parts) >= 6 and parts[5] == old_command:
+                        updated.append(f"{new_schedule} {new_command}\n")
+                        continue
+                updated.append(line)
+            with open(Crontab_File, "w") as f:
+                f.writelines(updated)
+            subprocess.run(["crontab", Crontab_File], capture_output=True)
+
     _cache_mgr.invalidate("cron:list")
     return {"status": "ok", "job": target}
 
