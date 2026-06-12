@@ -148,8 +148,8 @@ class FutuStockBroker:
         row = data.iloc[0]
         return BrokerAccount(
             cash=float(row["cash"]),
-            equity=float(row["total_asset"]),
-            buying_power=float(row.get("buy_power", 0)),
+            equity=float(row.get("total_assets", 0)),
+            buying_power=float(row.get("power", 0)),
         )
 
     async def get_open_orders(self) -> list[BrokerOrder]:

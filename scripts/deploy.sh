@@ -70,16 +70,19 @@ FRONTEND_DIR="$PROD_ROOT/admin/frontend"
 if [ -f "$FRONTEND_DIR/package.json" ]; then
     cd "$FRONTEND_DIR"
     npm install 2>&1 | tail -3 || log "WARNING: npm install had warnings"
-    npm run build 2>&1 | tail -5 || log "WARNING: frontend build failed (admin may use stale dist)"
-    cd "$PROD_ROOT"
-    log "Frontend build complete"
-    # Push dist into Docker container (admin runs there, not on host)
-    if docker ps --format '{{.Names}}' | grep -q quant; then
-        docker cp "$FRONTEND_DIR/dist/." quant:/opt/quant/admin/frontend/dist/
-        log "Frontend dist synced to Docker container"
+    if npm run build 2>&1 | tail -5; then
+        log "Frontend build complete"
+        # Push dist into Docker container (admin runs there, not on host)
+        if docker ps --format '{{.Names}}' | grep -q quant; then
+            docker cp "$FRONTEND_DIR/dist/." quant:/opt/quant/admin/frontend/dist/
+            log "Frontend dist synced to Docker container"
+        else
+            log "WARNING: Docker container 'quant' not running, skipping dist sync"
+        fi
     else
-        log "WARNING: Docker container 'quant' not running, skipping dist sync"
+        log "WARNING: frontend build FAILED — keeping existing dist in container"
     fi
+    cd "$PROD_ROOT"
 else
     log "Frontend dir not found — skipping build"
 fi
