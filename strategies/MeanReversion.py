@@ -1,6 +1,7 @@
 """MeanReversion — buy oversold, sell overbought via RSI-style z-score.
 
 Identifies oversold stocks for entry and overbought positions for exit.
+Positions that stay in the neutral zone too long are force-closed on timeout.
 """
 from __future__ import annotations
 
@@ -29,6 +30,10 @@ class MeanReversion(Strategy):
     exit_threshold: float = 1.5
     top_k: int = 5
     allocation: float = 0.0
+    max_hold_bars: int = 60  # force-close positions stuck in neutral zone
+
+    def on_init(self, ctx):
+        self._entry_bars: dict[str, int] = {}
 
     def on_bar(self, ctx, bar: int) -> list[Signal]:
         if bar < self.lookback:
@@ -49,12 +54,21 @@ class MeanReversion(Strategy):
 
         signals: list[Signal] = []
 
-        # Sell overbought
-        for sym, pos in ctx.portfolio.positions.items():
-            if hasattr(pos, "size") and pos.size > 0 and scores.get(sym, 0) > self.exit_threshold:
+        # ── Exit: overbought OR timeout ──
+        for sym, pos in list(ctx.portfolio.positions.items()):
+            if not (hasattr(pos, "size") and pos.size > 0):
+                continue
+            z = scores.get(sym, 0)
+            # Condition 1: overbought → take profit
+            if z > self.exit_threshold:
                 signals.append(Signal.close(sym))
+                self._entry_bars.pop(sym, None)
+            # Condition 2: stuck in neutral zone too long → force exit
+            elif sym in self._entry_bars and bar - self._entry_bars[sym] > self.max_hold_bars:
+                signals.append(Signal.close(sym))
+                del self._entry_bars[sym]
 
-        # Buy oversold
+        # ── Entry: oversold ──
         oversold = [(s, z) for s, z in scores.items() if z < self.entry_threshold]
         oversold.sort(key=lambda x: x[1])  # most oversold first
         selected = oversold[: self.top_k]
@@ -63,5 +77,6 @@ class MeanReversion(Strategy):
         for sym, _ in selected:
             if not ctx.portfolio.has_position(sym):
                 signals.append(Signal.buy(sym, weight=weight))
+                self._entry_bars[sym] = bar
 
         return signals
