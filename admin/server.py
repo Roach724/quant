@@ -1281,6 +1281,14 @@ def _scan_cron_logs_and_sync():
     now_ts = _time.time()
     session = get_session()
 
+    # Collect log paths from all module directories (cron, factor, quality, loader)
+    all_log_paths: list[Path] = []
+    for module in ("cron", "factor", "quality", "loader"):
+        d = Path(f"/var/log/quant/prod/{module}")
+        if d.is_dir():
+            all_log_paths.extend(sorted(d.glob("*.log")))
+    all_log_paths.sort(key=lambda p: p.name)
+
     # Find files that have "running" records (need re-scan)
     stuck_files: set[str] = set()
     try:
@@ -1305,7 +1313,7 @@ def _scan_cron_logs_and_sync():
     except Exception:
         pass
 
-    for log_path in sorted(log_dir.glob("*.log")):
+    for log_path in sorted(all_log_paths, key=lambda p: p.name):
         fname = log_path.name
 
         # Skip files still being written (<60s since last modification)
@@ -1529,7 +1537,7 @@ def admin_cron_list():
                 "name": job_name,
                 "description": meta.get("description", ""),
                 "latest_log": lr.get("log_file", "").split("/")[-1] if lr and lr.get("log_file") else None,
-                "last_run": lr["finished_at"].isoformat() if lr and lr.get("finished_at") else None,
+                "last_run": (lr["finished_at"].replace(tzinfo=timezone.utc).isoformat() if lr and lr.get("finished_at") else None),
             })
 
     cache.set("cron", jobs)
@@ -1653,6 +1661,30 @@ def admin_cron_update(index: int, job: dict = Body(...)):
     return {"status": "ok", "schedule": new_schedule}
 
 
+@app.delete("/api/admin/cron/{index}")
+def admin_cron_delete(index: int):
+    """Delete a cron job — removes from registry + crontab.txt."""
+    resolved = os.path.abspath(CRON_REGISTRY)
+    if os.path.isfile(resolved):
+        with open(resolved) as f:
+            data = _json.load(f)
+        if 0 <= index < len(data.get("jobs", [])):
+            data["jobs"].pop(index)
+            with open(resolved, "w") as f:
+                _json.dump(data, f, indent=2, ensure_ascii=False)
+
+    Crontab_File = "/var/data/crontab.txt"
+    if os.path.isfile(Crontab_File):
+        lines = open(Crontab_File).readlines()
+        if 0 <= index < len(lines):
+            del lines[index]
+            with open(Crontab_File, "w") as f:
+                f.writelines(lines)
+
+    _cache_mgr.invalidate("cron:list")
+    return {"status": "ok", "deleted_index": index}
+
+
 @app.post("/api/admin/cron/run")
 def admin_cron_run(command: str = Query(""), name: str = Query("")):
     """Manually trigger a cron command via task queue."""
@@ -1709,7 +1741,7 @@ def admin_cron_history(index: int, command: str = Query(""), name: str = Query("
         "trigger_type": r.trigger_type,
         "exit_code": r.exit_code,
         "started_at": r.started_at.isoformat() if r.started_at else None,
-        "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+        "finished_at": (r.finished_at.replace(tzinfo=timezone.utc).isoformat() if r.finished_at else None),
         "log_file": r.log_file,
         "error_tail": r.error_tail,
     } for r in runs]
