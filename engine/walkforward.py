@@ -56,7 +56,11 @@ class WalkForward:
             test_data = self._slice(train_end, test_end)
 
             train_result = Engine(self.config).run(self.strategy, train_data)
-            test_result = Engine(self.config).run(self.strategy, test_data)
+            # Pass final portfolio state from train to test for path-dependent strategies
+            test_result = Engine(self.config).run(
+                self.strategy, test_data,
+                initial_portfolio=train_result.portfolio,
+            )
 
             folds.append({
                 "fold": len(folds),
