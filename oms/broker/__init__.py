@@ -75,20 +75,24 @@ class PaperBroker:
         return current_price >= order.limit_price
 
     def _execute_fill(self, order: BrokerOrder, fill_price: float):
-        cost = fill_price * order.qty
-        self.cash -= cost
+        if order.side == "buy":
+            self.cash -= fill_price * order.qty
+        else:
+            self.cash += fill_price * order.qty
         order.status = "filled"
         order.filled_qty = order.qty
         order.avg_price = fill_price
         order.updated_at = datetime.now(timezone.utc)
+        # Update broker-side position tracking (cosmetic; runner uses Portfolio.cash)
         pos = self._positions.get(order.symbol)
+        qty_signed = order.qty if order.side == "buy" else -order.qty
         if pos:
-            total_qty = pos.qty + (order.qty if order.side == "buy" else -order.qty)
-            if total_qty > 0:
+            total_qty = pos.qty + qty_signed
+            if total_qty > 0 and order.side == "buy":
+                # Only recalc avg_entry on buy; sell leaves avg_entry unchanged
                 pos.avg_entry_price = ((pos.avg_entry_price * pos.qty) + (fill_price * order.qty)) / (pos.qty + order.qty)
             pos.qty = total_qty
         else:
-            qty_signed = order.qty if order.side == "buy" else -order.qty
             self._positions[order.symbol] = BrokerPosition(
                 symbol=order.symbol, qty=qty_signed,
                 avg_entry_price=fill_price,
