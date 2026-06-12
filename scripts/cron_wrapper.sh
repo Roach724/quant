@@ -44,7 +44,7 @@ mkdir -p "$LOG_DIR" 2>/dev/null || {
     LOGFILE="${LOG_DIR}/${JOB_NAME}_$(date -u +%Y%m%d_%H%M%S).log"
 }
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} START  module=${MODULE} env=${ENV}" >> "$LOGFILE"
+echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} START  module=${MODULE} env=${ENV}" >> "$LOGFILE"
 
 # Ensure working directory is the project root
 cd /opt/quant 2>/dev/null || cd /opt/quant-prod 2>/dev/null || true
@@ -52,7 +52,7 @@ cd /opt/quant 2>/dev/null || cd /opt/quant-prod 2>/dev/null || true
 # ── Concurrency control ──
 # 1. Job-level: prevent the same cron job from running twice
 ( flock -n 9 || {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} SKIPPED (already running)" >> "$LOGFILE"
+    echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} SKIPPED (already running)" >> "$LOGFILE"
     exit 0
 }
 
@@ -67,7 +67,7 @@ for i in $(seq 1 30); do
     sleep 2
 done
 if [ "$ACQUIRED_SEM" = false ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} SKIPPED (concurrency limit=$MAX_CONCURRENT)" >> "$LOGFILE"
+    echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} SKIPPED (concurrency limit=$MAX_CONCURRENT)" >> "$LOGFILE"
     exit 0
 fi
 
@@ -79,10 +79,10 @@ RC=$?
 
 # timeout exit code is 124 when the command is killed
 if [ $RC -eq 124 ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} TIMEOUT (2h)  module=${MODULE} env=${ENV}" >> "$LOGFILE"
+    echo "[$(date -u '+%Y-%m-%d %H:%M:%S')] ${JOB_NAME} TIMEOUT (2h)  module=${MODULE} env=${ENV}" >> "$LOGFILE"
 fi
 
-TS="$(date '+%Y-%m-%d %H:%M:%S')"
+TS="$(date -u '+%Y-%m-%d %H:%M:%S')"
 if [ $RC -eq 0 ]; then
     echo "[$TS] ${JOB_NAME} OK  module=${MODULE} env=${ENV}" >> "$LOGFILE"
 else
