@@ -22,16 +22,37 @@ class ExposureLimit:
 
 
 class MaxLeverage:
+    """Limit net exposure (long - short) as multiple of equity."""
     def __init__(self, limit: float = 1.5):
         self.limit = limit
 
     def apply(self, orders, portfolio, bar_data):
+        close_prices = bar_data.get("close", {})
+        net = 0
+        for sym, p in portfolio.positions.items():
+            if hasattr(p, 'size'):
+                net += p.size * close_prices.get(sym, 0)
+        for o in orders:
+            sign = 1 if o.side == "buy" else -1
+            net += sign * o.size * close_prices.get(o.symbol, 0)
+        if portfolio.total_equity > 0 and abs(net) / portfolio.total_equity > self.limit:
+            return []
+        return orders
+
+
+class GrossExposureLimit:
+    """Limit total gross exposure (long + short) as multiple of equity."""
+    def __init__(self, limit: float = 2.0):
+        self.limit = limit
+
+    def apply(self, orders, portfolio, bar_data):
+        close_prices = bar_data.get("close", {})
         gross = 0
         for sym, p in portfolio.positions.items():
             if hasattr(p, 'size'):
-                gross += abs(p.size * bar_data.get("close", {}).get(sym, 0))
+                gross += abs(p.size * close_prices.get(sym, 0))
         for o in orders:
-            gross += abs(o.size * bar_data.get("close", {}).get(o.symbol, 0))
+            gross += abs(o.size * close_prices.get(o.symbol, 0))
         if portfolio.total_equity > 0 and gross / portfolio.total_equity > self.limit:
             return []
         return orders
@@ -43,4 +64,4 @@ class SectorCap:
         self.sectors = sectors or {}
 
     def apply(self, orders, portfolio, bar_data):
-        return orders
+        raise NotImplementedError("SectorCap.apply is not yet implemented")

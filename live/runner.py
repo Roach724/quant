@@ -38,6 +38,7 @@ import pandas as pd
 import yaml
 from google.cloud import bigquery
 
+from engine.cost_model import TransactionCost
 from engine.data import DataFrameSource
 from engine.portfolio import Portfolio, Position
 from engine.strategy import StrategyContext
@@ -78,9 +79,7 @@ class LiveRunner:
         self._market = self.config.get("live", {}).get("market", "us")
         self._output_dir = self.config.get("_output_dir", "output/live/")
 
-        self._slippage_bps = 5.0
-        self._commission_bps = 1.0
-        self._min_commission = 1.0
+        self._cost_model = TransactionCost.for_market(self._market)
 
         # Multi-day state
         self._state_manager: StateManager | None = None
@@ -200,18 +199,14 @@ class LiveRunner:
         if self._mode == "paper":
             paper_cfg = broker_cfg.get("paper", {})
             initial_capital = float(paper_cfg.get("initial_capital", 100_000))
-            self._slippage_bps = float(paper_cfg.get("slippage_bps", 5))
-            self._commission_bps = float(paper_cfg.get("commission_bps", 1))
-            self._min_commission = float(paper_cfg.get("min_commission", 1.0))
+            self._cost_model = TransactionCost.from_config(paper_cfg, self._market)
             from oms.broker import PaperBroker
             self.broker = PaperBroker(initial_capital=initial_capital)
             logger.info("PaperBroker initialised — capital=%.0f", initial_capital)
         else:
             live_cfg = broker_cfg.get("live", {})
             broker_type = live_cfg.get("type", "futu_stock")
-            self._slippage_bps = float(live_cfg.get("slippage_bps", 5))
-            self._commission_bps = float(live_cfg.get("commission_bps", 1))
-            self._min_commission = float(live_cfg.get("min_commission", 1.0))
+            self._cost_model = TransactionCost.from_config(live_cfg, self._market)
             if broker_type == "futu_stock":
                 from oms.broker.futu_stock_broker import FutuStockBroker
                 self.broker = FutuStockBroker(
@@ -408,10 +403,16 @@ class LiveRunner:
             equity = portfolio.mark_and_record(timestamp, bar_data)
             ctx._set_bar_data(bar_data)
 
-            # Update broker prices for current bar
+            # Update broker prices for current bar (incl. volume for partial fill simulation)
             for sym in src.universe:
                 price = bar_data["close"].get(sym, 100.0)
-                self.broker.update_price(sym, price)
+                sym_ohlc = {
+                    "close": price,
+                    "high": bar_data.get("high", {}).get(sym),
+                    "low": bar_data.get("low", {}).get(sym),
+                    "volume": bar_data.get("volume", {}).get(sym, 0),
+                }
+                self.broker.update_price(sym, price, bar_ohlc={sym: sym_ohlc})
 
             # 7b. Snapshot
             if self.observer.snapshot_due(timestamp):
@@ -540,28 +541,27 @@ class LiveRunner:
 
         # Apply slippage
         if side == "buy":
-            exec_price = price * (1.0 + self._slippage_bps / 10000.0)
+            exec_price = price * (1.0 + self._cost_model.slippage_bps / 10000.0)
         else:
-            exec_price = price * (1.0 - self._slippage_bps / 10000.0)
-
-        # Commission
-        notional = qty * exec_price
-        commission = max(notional * self._commission_bps / 10000.0, self._min_commission)
-
-        # Cash constraint for buys
-        if side == "buy":
-            cost = notional + commission
-            if cost > portfolio.cash:
-                qty = int(portfolio.cash / (exec_price + self._min_commission))
-                if qty <= 0:
-                    logger.debug("Insufficient cash for %s buy (cash=%.2f)", symbol, portfolio.cash)
-                    return
+            exec_price = price * (1.0 - self._cost_model.slippage_bps / 10000.0)
 
         qty = max(1, int(qty))
 
+        # Pre-trade cash constraint (estimate using exec_price with slippage)
+        if side == "buy":
+            est_notional = qty * exec_price
+            est_commission = max(est_notional * self._cost_model.commission_bps / 10000.0, self._cost_model.min_commission)
+            est_cost = est_notional + est_commission
+            if est_cost > portfolio.cash:
+                qty = int(portfolio.cash / (exec_price + self._cost_model.min_commission))
+                if qty <= 0:
+                    logger.debug("Insufficient cash for %s buy (cash=%.2f)", symbol, portfolio.cash)
+                    return
+                qty = max(1, int(qty))
+
         # Submit to broker via OrderManager (async → sync)
-        logger.info("ORDER %s %s %d @ ~%.2f (notional=%.2f commission=%.2f)",
-                    side.upper(), symbol, qty, exec_price, qty * exec_price, commission)
+        logger.info("ORDER %s %s %d @ ~%.2f",
+                    side.upper(), symbol, qty, exec_price)
         tracked = asyncio.run(
             self.order_manager.submit(
                 symbol=symbol,
@@ -586,8 +586,11 @@ class LiveRunner:
         if tracked.state in ("FILLED", "filled") and tracked.filled_qty > 0:
             fill_qty = int(tracked.filled_qty)
             fill_price = float(tracked.avg_fill_price or exec_price)
-            logger.info("FILLED %s %s qty=%d price=%.2f (prior fill qty pre-calced=%d)",
-                        side.upper(), symbol, fill_qty, fill_price, qty)
+            # Commission based on actual fill price (not pre-trade exec_price estimate)
+            notional = fill_qty * fill_price
+            commission = max(notional * self._cost_model.commission_bps / 10000.0, self._cost_model.min_commission)
+            logger.info("FILLED %s %s qty=%d price=%.2f (notional=%.2f commission=%.2f)",
+                        side.upper(), symbol, fill_qty, fill_price, notional, commission)
 
             if side == "buy":
                 # Deduct cash
@@ -1170,9 +1173,9 @@ class LiveRunner:
                             delta = tracked.filled_qty if tracked.side == "buy" else -tracked.filled_qty
                             pos.add(delta, price)
                             # Commission (mirrors _process_signal)
-                            exec_price = price * (1.0 + self._slippage_bps / 10000.0) if tracked.side == "buy" else price * (1.0 - self._slippage_bps / 10000.0)
+                            exec_price = price * (1.0 + self._cost_model.slippage_bps / 10000.0) if tracked.side == "buy" else price * (1.0 - self._cost_model.slippage_bps / 10000.0)
                             notional = tracked.filled_qty * exec_price
-                            commission = max(notional * self._commission_bps / 10000.0, self._min_commission)
+                            commission = max(notional * self._cost_model.commission_bps / 10000.0, self._cost_model.min_commission)
                             if tracked.side == "buy":
                                 portfolio.cash -= price * tracked.filled_qty + commission
                             else:

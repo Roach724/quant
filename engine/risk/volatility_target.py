@@ -3,4 +3,4 @@ class VolatilityTarget:
         self.annual = annual
 
     def apply(self, orders, portfolio, bar_data):
-        return orders
+        raise NotImplementedError("VolatilityTarget.apply is not yet implemented")

@@ -41,8 +41,8 @@ def compute_all_metrics(
     total_return = (equity_series[-1] / equity_series[0]) - 1
     annual_return = _annualized_return(total_return, n, periods_per_year)
     annual_vol = _annualized_vol(returns, periods_per_year)
-    sharpe = _sharpe_ratio(returns, risk_free_rate, periods_per_year, annual_vol)
-    sortino = _sortino_ratio(returns, risk_free_rate, periods_per_year)
+    sharpe = _sharpe_ratio(total_return, returns, risk_free_rate, periods_per_year, annual_vol)
+    sortino = _sortino_ratio(total_return, returns, risk_free_rate, periods_per_year)
     max_dd = _max_drawdown(equity_series)
     calmar = annual_return / abs(max_dd) if max_dd != 0 else 0.0
     win_rate, total_trades, profit_factor = _trade_stats(returns)
@@ -86,31 +86,25 @@ def _annualized_vol(returns: list[float], periods_per_year: int) -> float:
 
 
 def _sharpe_ratio(
-    returns: list[float], risk_free_rate: float,
+    total_return: float, returns: list[float], risk_free_rate: float,
     periods_per_year: int, annual_vol: float,
 ) -> float:
     """Sharpe = (annual_return - risk_free_rate) / annual_vol."""
     if annual_vol == 0 or len(returns) < 2:
         return 0.0
-    n = len(returns)
-    total_return = 1.0
-    for r in returns:
-        total_return *= (1 + r)
-    annual_r = total_return ** (periods_per_year / n) - 1
+    n = max(len(returns), 1)
+    annual_r = (1 + total_return) ** (periods_per_year / n) - 1
     return (annual_r - risk_free_rate) / annual_vol
 
 
 def _sortino_ratio(
-    returns: list[float], risk_free_rate: float, periods_per_year: int,
+    total_return: float, returns: list[float], risk_free_rate: float, periods_per_year: int,
 ) -> float:
     """Sortino = (annual_return - risk_free_rate) / downside_deviation."""
     if len(returns) < 2:
         return 0.0
-    n = len(returns)
-    total_return = 1.0
-    for r in returns:
-        total_return *= (1 + r)
-    annual_r = total_return ** (periods_per_year / n) - 1
+    n = max(len(returns), 1)
+    annual_r = (1 + total_return) ** (periods_per_year / n) - 1
 
     # Downside deviation (only negative returns)
     period_rf = risk_free_rate / periods_per_year
