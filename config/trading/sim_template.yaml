@@ -1,0 +1,35 @@
+# 模拟交易策略配置模板
+name: "MACD US Sim"
+market: us
+strategy_class: MACD
+capital_allocated: 100000
+
+broker:
+  type: futu_stock            # futu_stock | paper
+  host: 127.0.0.1
+  port: 11111
+  trd_env: SIMULATE           # SIMULATE | REAL
+  security_firm: FUTUSECURITIES
+
+strategy:
+  name: MACD
+  fast: 12
+  slow: 26
+  signal_period: 9
+  top_k: 5
+  allocation: 0.0
+
+risk:
+  max_drawdown: 0.15
+  max_daily_loss: 0.05
+  position_size_pct: 0.2
+
+# 可选 — 执行算法（大单拆分，减少市场冲击）
+# execution:
+#   algo: twap               # twap | vwap | 不配 = 一次性全量下单
+#   slices: 10               # 拆单份数
+#   window_seconds: 1800     # 执行窗口（秒），30min
+
+schedule:
+  bar_interval: 60            # 信号计算间隔（秒）
+  trading_hours_only: true     # 仅交易时段运行
