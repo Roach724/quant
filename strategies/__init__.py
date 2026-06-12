@@ -12,6 +12,14 @@ from strategies.SectorRotation import SectorRotation
 from strategies.ShortSqueeze import ShortSqueeze
 from strategies.SimpleMomentum import SimpleMomentum
 from strategies.MLPrediction import MLPrediction
+from strategies.MACD import MACD
+from strategies.MACrossover import MACrossover
+from strategies.ATRTrailingStop import ATRTrailingStop
+from strategies.BollingerBands import BollingerBands
+from strategies.RSI2 import RSI2
+from strategies.TurtleTrading import TurtleTrading
+from strategies.MultiFactorRank import MultiFactorRank
+from strategies.PairsTrading import PairsTrading
 
 __all__ = [
     "BuyHold",
@@ -22,6 +30,14 @@ __all__ = [
     "SectorRotation",
     "ShortSqueeze",
     "SimpleMomentum",
+    "MACD",
+    "MACrossover",
+    "ATRTrailingStop",
+    "BollingerBands",
+    "RSI2",
+    "TurtleTrading",
+    "MultiFactorRank",
+    "PairsTrading",
     "list_strategies",
     "get_strategy",
 ]
@@ -37,6 +53,14 @@ _BUILTIN_STRATEGIES: dict[str, type] = {
     "QARP": QARP,
     "ShortSqueeze": ShortSqueeze,
     "SectorRotation": SectorRotation,
+    "MACD": MACD,
+    "MACrossover": MACrossover,
+    "ATRTrailingStop": ATRTrailingStop,
+    "BollingerBands": BollingerBands,
+    "RSI2": RSI2,
+    "TurtleTrading": TurtleTrading,
+    "MultiFactorRank": MultiFactorRank,
+    "PairsTrading": PairsTrading,
 }
 
 
