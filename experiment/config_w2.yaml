@@ -44,7 +44,7 @@ strategies:
       top_k: 20
       rebalance_every: 5
   - name: "ml_lightgbm"
-    class: "strategies.ml_pred.MLPredStrategy"
+    class: "strategies.MLPrediction.MLPrediction"
     params:
       market: us
       train_start: "2020-01-01"

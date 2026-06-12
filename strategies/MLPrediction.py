@@ -1,7 +1,7 @@
-"""MLPredStrategy — LightGBM prediction-driven stock selection.
+"""MLPrediction — ML-driven stock selection using pre-trained models.
 
-Uses FactorRegistry + TechFactorBuilder + ModelTrainer to train a model
-on historical data, then predicts top-K stocks each rebalance period.
+Loads a trained model from ModelRegistry, computes factor values on each
+bar, and buys the top-K predicted stocks.
 """
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from engine.strategy import Strategy, Signal
 logger = logging.getLogger(__name__)
 
 
-class MLPredStrategy(Strategy):
+class MLPrediction(Strategy):
     """ML prediction-driven strategy.
 
-    Trains LightGBM on historical factor data during on_init(),
-    then predicts expected returns for each bar and buys top-K.
+    Loads a pre-trained model from ModelRegistry, computes factor values
+    on each bar, and buys top-K stocks by predicted return.
     
     Parameters
     ----------
@@ -71,7 +71,7 @@ class MLPredStrategy(Strategy):
         # Use caller-supplied symbols if provided, else fall back to ctx.universe
         self._symbols = list(symbols) if symbols else list(ctx.universe)
         if not self._symbols:
-            logger.warning("MLPredStrategy: no symbols in universe")
+            logger.warning("MLPrediction: no symbols in universe")
             return
 
         self._load_model()

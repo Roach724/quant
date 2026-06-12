@@ -11,11 +11,13 @@ from strategies.QARP import QARP
 from strategies.SectorRotation import SectorRotation
 from strategies.ShortSqueeze import ShortSqueeze
 from strategies.SimpleMomentum import SimpleMomentum
+from strategies.MLPrediction import MLPrediction
 
 __all__ = [
     "BuyHold",
     "FundingRateArbitrage",
     "MeanReversion",
+    "MLPrediction",
     "QARP",
     "SectorRotation",
     "ShortSqueeze",
@@ -30,6 +32,7 @@ _BUILTIN_STRATEGIES: dict[str, type] = {
     "BuyHold": BuyHold,
     "SimpleMomentum": SimpleMomentum,
     "MeanReversion": MeanReversion,
+    "MLPrediction": MLPrediction,
     "FundingRateArbitrage": FundingRateArbitrage,
     "QARP": QARP,
     "ShortSqueeze": ShortSqueeze,
