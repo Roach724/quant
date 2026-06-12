@@ -47,6 +47,7 @@ class MLPrediction(Strategy):
     factor_top_n: int = 15
     model_name: str = "momentum_lgbm"
     model_version: int | str = "latest"
+    _SENTINEL: float = -999.0  # default score for failed/invalid predictions
 
     def __init__(self, **kwargs):
         super().__init__()
@@ -113,7 +114,6 @@ class MLPrediction(Strategy):
             return []
 
         self._last_rebalance = bar
-        # Use runner-supplied symbols (from on_init), fall back to ctx.universe
         symbols = self._symbols if hasattr(self, '_symbols') and self._symbols else list(ctx.universe)
         if not symbols:
             return []
@@ -123,12 +123,35 @@ class MLPrediction(Strategy):
             if not scores:
                 return []
 
-            ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:self.top_k]
-            self._all_scores_history[bar] = scores
+            # Filter out sentinel scores (failed/invalid predictions)
+            valid = {s: v for s, v in scores.items() if v > self._SENTINEL / 2}
+            if not valid:
+                logger.debug("MLPrediction bar %d: all %d scores are sentinel, skipping",
+                             bar, len(scores))
+                return []  # No valid predictions → don't trade
 
-            signals = []
-            for i, (sym, _score) in enumerate(ranked):
-                signals.append(Signal.buy(sym, weight=1.0 / self.top_k, score=float(_score), rank=i+1))
+            ranked = sorted(valid.items(), key=lambda x: (x[1], x[0]), reverse=True)[:self.top_k]
+            top_symbols = {sym for sym, _ in ranked}
+            self._all_scores_history[bar] = valid
+
+            signals: list[Signal] = []
+
+            # ── Sell: positions no longer in top-K ──
+            for sym in list(ctx.portfolio.positions.keys()):
+                if sym not in top_symbols and ctx.portfolio.positions[sym].size > 0:
+                    signals.append(Signal.close(sym))
+
+            # ── Buy: top-K symbols not yet held ──
+            buy_count = sum(1 for s in top_symbols if s not in ctx.portfolio.positions
+                           or ctx.portfolio.positions[s].size == 0)
+            if buy_count > 0:
+                buy_weight = 1.0 / max(buy_count, 1)
+                for i, (sym, score) in enumerate(ranked):
+                    if sym not in ctx.portfolio.positions or ctx.portfolio.positions[sym].size == 0:
+                        signals.append(Signal.buy(
+                            sym, weight=buy_weight, score=float(score), rank=i + 1,
+                        ))
+
             return signals
         except Exception:
             logger.warning("ML prediction failed at bar %d", bar, exc_info=True)
@@ -208,14 +231,14 @@ class MLPrediction(Strategy):
             if preds is None or len(preds) == 0:
                 continue
             if isinstance(preds, pd.Series):
-                scores[sym] = float(preds.values[0]) if len(preds) > 0 else 0.0
+                scores[sym] = float(preds.values[0]) if len(preds) > 0 else self._SENTINEL
                 if np.isnan(scores[sym]):
                     continue
             elif isinstance(preds, np.ndarray):
-                scores[sym] = float(preds[0]) if len(preds) > 0 else 0.0
+                scores[sym] = float(preds[0]) if len(preds) > 0 else self._SENTINEL
                 if np.isnan(scores[sym]):
                     continue
             else:
-                scores[sym] = 0.0
+                scores[sym] = self._SENTINEL
 
         return scores
