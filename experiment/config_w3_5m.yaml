@@ -35,7 +35,7 @@ strategies:
       top_k: 10
       rebalance_every: 13  # rebalance every ~1h (13 × 5m = 65min)
   - name: "ml_5m"
-    class: "strategies.ml_pred.MLPredStrategy"
+    class: "strategies.MLPrediction.MLPrediction"
     params:
       market: us
       train_start: "2026-05-01"

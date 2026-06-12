@@ -1,4 +1,4 @@
-"""Tests for MLPredStrategy."""
+"""Tests for MLPrediction."""
 import pytest
 import pandas as pd
 import numpy as np
@@ -7,10 +7,10 @@ from engine.data import DataFrameSource
 from engine.portfolio import Portfolio
 
 
-def test_ml_pred_strategy_initializes():
+def test_ml_prediction_initializes():
     """Strategy should initialize without errors."""
-    from strategies.ml_pred import MLPredStrategy
-    strategy = MLPredStrategy(market="us", top_k=5)
+    from strategies.MLPrediction import MLPrediction
+    strategy = MLPrediction(market="us", top_k=5)
     assert strategy.market == "us"
     assert strategy.top_k == 5
     assert strategy.model_type == "lightgbm"
@@ -20,11 +20,11 @@ def test_ml_pred_strategy_initializes():
     assert "top_k" in params
 
 
-def test_ml_pred_strategy_handles_empty_context():
+def test_ml_prediction_handles_empty_context():
     """Strategy should handle empty universe gracefully (training will fail gracefully)."""
-    from strategies.ml_pred import MLPredStrategy
+    from strategies.MLPrediction import MLPrediction
     
-    strategy = MLPredStrategy(market="us")
+    strategy = MLPrediction(market="us")
     dates = pd.date_range("2026-01-01", periods=10, freq="B")
     close = pd.DataFrame({"AAPL": [100.0]*10}, index=dates)
     open_df = pd.DataFrame({"AAPL": [99.0]*10}, index=dates)

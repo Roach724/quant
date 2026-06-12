@@ -20,7 +20,7 @@ Dependencies (already built):
 - engine/strategy.py → Strategy, StrategyContext, Signal
 - engine/portfolio.py → Portfolio, Position
 - engine/data.py → DataFrameSource
-- strategies/ml_pred.py → MLPredStrategy
+- strategies/MLPrediction.py → MLPrediction
 - strategies/SimpleMomentum.py
 """
 
@@ -293,18 +293,19 @@ class LiveRunner:
         strat_cfg = self.config.get("strategy", {})
         strat_name = strat_cfg.get("name", "SimpleMomentum")
 
-        if strat_name == "MLPredStrategy":
-            from strategies.ml_pred import MLPredStrategy
-            self.strategy = MLPredStrategy()
-            self.strategy.market = strat_cfg.get("market", self._market)
-            self.strategy.top_k = int(strat_cfg.get("top_k", 10))
-            self.strategy.rebalance_every = int(strat_cfg.get("rebalance_every", 5))
-            self.strategy.model_type = strat_cfg.get("model_type", "lightgbm")
-            self.strategy.train_start = strat_cfg.get("train_start", "2020-01-01")
-            self.strategy.train_end = strat_cfg.get("train_end", "2025-12-31")
-            # Model registry: load pre-trained model by name/version
-            self.strategy.model_name = strat_cfg.get("model_name", "momentum_lgbm")
-            self.strategy.model_version = strat_cfg.get("model_version", "latest")
+        if strat_name == "MLPrediction":
+            from strategies import MLPrediction
+            self.strategy = MLPrediction(
+                market=strat_cfg.get("market", self._market),
+                top_k=int(strat_cfg.get("top_k", 10)),
+                rebalance_every=int(strat_cfg.get("rebalance_every", 5)),
+                model_type=strat_cfg.get("model_type", "lightgbm"),
+                factor_top_n=int(strat_cfg.get("factor_top_n", 15)),
+                train_start=strat_cfg.get("train_start", "2020-01-01"),
+                train_end=strat_cfg.get("train_end", "2025-12-31"),
+                model_name=strat_cfg.get("model_name", "momentum_lgbm"),
+                model_version=strat_cfg.get("model_version", "latest"),
+            )
         elif strat_name == "SimpleMomentum":
             from strategies import SimpleMomentum
             self.strategy = SimpleMomentum()
