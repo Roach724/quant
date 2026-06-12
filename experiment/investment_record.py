@@ -36,6 +36,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import pandas as pd
+
 
 class InvestmentRecord:
     """投资记录 — 保存交易、权益、信号和风控事件，输出完整档案。"""
@@ -137,9 +139,14 @@ class InvestmentRecord:
                 "avg_trade_pnl": 0.0,
             }
 
-        # 按日期排序权益曲线
+        # 按日期排序权益曲线，resample 到连续交易日填补假日/周末间隙
         sorted_equity = sorted(self._equity, key=lambda r: r["date"])
-        equity_values = [r["equity"] for r in sorted_equity]
+        df = pd.DataFrame(sorted_equity)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        df = df.resample("B").ffill()  # 交易日频率，前向填充
+        equity_series = df["equity"]
+        equity_values = equity_series.tolist()
         initial_equity = equity_values[0]
         final_equity = equity_values[-1]
 

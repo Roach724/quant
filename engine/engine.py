@@ -17,13 +17,17 @@ class Engine:
 
     def _signals_to_orders(self, signals, portfolio, bar_data=None):
         orders = []
+        buy_signals = [s for s in signals if s.side in ("buy", "target")]
+        # Normalize buy weights so total allocation = 1.0
+        total_weight = sum(s.weight or 1.0 for s in buy_signals) if buy_signals else 0
         for sig in signals:
             if sig.side == "close" or sig.side == "sell":
                 pos = portfolio.positions.get(sig.symbol)
                 size = pos.size if pos and hasattr(pos, 'size') else 0
                 orders.append(Order(symbol=sig.symbol, side="sell", size=size))
             elif sig.side == "buy" or sig.side == "target":
-                weight = sig.weight or 1.0
+                raw_weight = sig.weight or 1.0
+                weight = raw_weight / total_weight if total_weight > 0 else 0
                 cash_per_symbol = portfolio.total_equity * weight
                 close_prices = bar_data.get("close", {}) if bar_data else {}
                 price_est = close_prices.get(sig.symbol, 100.0)

@@ -93,4 +93,8 @@ class WalkForward:
         pred = None
         if hasattr(self.data, 'pred') and self.data.pred is not None:
             pred = self.data.pred.iloc[start:end].copy()
-        return DataFrameSource(close=close, pred=pred)
+        kwargs = {"close": close, "pred": pred}
+        for field in ("open", "high", "low", "volume"):
+            if hasattr(self.data, field) and getattr(self.data, field) is not None:
+                kwargs[field] = getattr(self.data, field).iloc[start:end].copy()
+        return DataFrameSource(**kwargs)
