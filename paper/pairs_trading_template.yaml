@@ -1,0 +1,77 @@
+# =============================================================================
+# PairsTrading 配对交易实验模板
+# =============================================================================
+# 策略逻辑:
+#   - 市场中性统计套利：利用两个高度相关股票的价差均值回复
+#   - 价差 = log(price_A) - log(price_B)
+#   - z-score = (价差 - 均值) / 标准差
+#   - z < -entry_z: A相对B低估 → 做多A + 做空B
+#   - z > +entry_z: A相对B高估 → 做空A + 做多B
+#   - |z| < exit_z: 价差回归 → 平仓双端
+#
+# 对子选择（需要在 config 中预定义）:
+#   - 同行业/同市值的高相关性股票对
+#   - 理想情况是通过协整检验确认长期关系稳定
+#   - 美股示例: ["AAPL","MSFT"], ["GOOGL","META"], ["JPM","BAC"]
+#   - 港股示例: ["0700","9988"], ["0005","0011"]
+#
+# ⚠️ 需要引擎支持做空 (allow_short=True)
+#    如无做空支持，策略只能做多低估端，失去市场中性特性
+#
+# 适用市场: 任何（需要预选对子），震荡市中表现最佳
+# =============================================================================
+
+live:
+  market: us
+  mode: live
+  output_dir: output/live/
+
+strategy:
+  name: PairsTrading
+  pairs:                   # 预定义对子列表（必须手动配置）
+    - ["AAPL", "MSFT"]
+    - ["GOOGL", "META"]
+  lookback: 60             # 价差均值和标准差计算窗口
+  entry_z: 2.0             # 入场 z-score 阈值（绝对值超过此值入场）
+  exit_z: 0.5              # 离场 z-score 阈值（绝对值低于此值离场）
+  max_pairs: 5             # 最大同时持仓对子数
+
+broker:
+  paper:
+    initial_capital: 100000
+    slippage_bps: 5
+    commission_bps: 1
+    min_commission: 1.0
+  live:
+    type: paper
+
+risk:
+  max_drawdown: 0.15
+  max_daily_loss: 0.05
+  position_size_pct: 0.2
+
+schedule:
+  multi_day: true
+  max_trading_days: 5
+  bar_interval: 60
+  pre_market_warmup: 300
+  market_close_offset: 600
+  max_duration_per_day: 390
+
+state:
+  enabled: true
+  dir: /var/quant/state/pairs/
+  checkpoint_interval: 300
+
+experiment:
+  name: "PairsTrading — 统计套利配对交易"
+
+observer:
+  log_dir: output/live/
+  snapshot_interval: 60
+  trade_log: true
+  equity_curve: true
+
+dashboard:
+  port: 8090
+  websocket: false
