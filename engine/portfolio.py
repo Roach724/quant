@@ -15,9 +15,14 @@ class Position:
         if new_total == 0:
             self.avg_entry = 0.0
             self._total_cost = 0.0
-        else:
+        elif size > 0:
+            # Buy: accumulate cost, recalculate average entry
             self._total_cost += size * price
             self.avg_entry = self._total_cost / new_total
+        else:
+            # Sell: reduce cost proportionally, avg_entry unchanged
+            if self.size > 0:
+                self._total_cost += size * self.avg_entry  # size < 0
         self.size = new_total
 
     def unrealized_pnl(self, current_price: float) -> float:
@@ -54,7 +59,8 @@ class Portfolio:
 
     @property
     def total_equity(self) -> float:
-        return self.cash
+        """Total account equity = cash + mark-to-market value of all positions."""
+        return self._mark_to_market({})
 
     def _mark_to_market(self, bar_data):
         total = self.cash
