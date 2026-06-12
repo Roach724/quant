@@ -45,9 +45,10 @@ function SystemMonitor() {
     return () => clearInterval(i);
   }, []);
   const wsColor = status.ws === 'running' ? 'green' : status.ws === '?' ? 'default' : 'red';
+  const wsLabel = status.ws === 'running' ? 'Running' : status.ws === 'inactive' ? 'Stopped' : status.ws;
   return (
     <div style={{ display: 'flex', gap: 12, alignItems: 'center', fontSize: 12, color: '#888', paddingRight: 8 }}>
-      <Tooltip title="ws_collector 状态"><Tag color={wsColor} style={{ margin: 0, fontSize: 11 }}>WS {status.ws === 'running' ? '●' : status.ws === '?' ? '?' : '✕'}</Tag></Tooltip>
+      <Tooltip title="ws_collector 状态"><Tag color={wsColor} style={{ margin: 0, fontSize: 11 }}>WS: {wsLabel}</Tag></Tooltip>
       <span>CPU {status.cpu}%</span>
       <span>MEM {status.mem}G/{status.mem_total}G</span>
     </div>
