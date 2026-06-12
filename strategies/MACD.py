@@ -17,14 +17,33 @@ def _ema(series: np.ndarray, period: int) -> np.ndarray:
     """Compute Exponential Moving Average for a 1-D series.
 
     Uses the standard alpha = 2 / (period + 1) weighting.
+    Skips NaN in seed computation and carries forward through NaN gaps.
     """
     if len(series) < period:
         return np.full_like(series, np.nan, dtype=float)
     alpha = 2.0 / (period + 1)
     result = np.full_like(series, np.nan, dtype=float)
-    result[period - 1] = np.mean(series[:period])
-    for i in range(period, len(series)):
-        result[i] = alpha * series[i] + (1 - alpha) * result[i - 1]
+    # Find the first stretch of 'period' consecutive non-NaN values for seeding
+    seed_start = -1
+    consecutive = 0
+    for i in range(len(series)):
+        if not np.isnan(series[i]):
+            consecutive += 1
+            if consecutive >= period:
+                seed_start = i - period + 1
+                break
+        else:
+            consecutive = 0
+    if seed_start < 0:
+        return result  # not enough valid data
+    # Seed EMA at period-th valid point
+    seed_idx = seed_start + period - 1
+    result[seed_idx] = np.mean(series[seed_start:seed_start + period])
+    for i in range(seed_idx + 1, len(series)):
+        if np.isnan(series[i]):
+            result[i] = result[i - 1]  # carry forward through NaN gaps
+        else:
+            result[i] = alpha * series[i] + (1 - alpha) * result[i - 1]
     return result
 
 

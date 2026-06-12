@@ -47,7 +47,9 @@ class ShortSqueeze(Strategy):
         if not self._scores_loaded:
             try:
                 from factors.composite import compute_short_squeeze_scores
-                market = "hk" if any(s.startswith("HK.") for s in symbols) else "us"
+                # Detect market: HK = bare numeric (00005, 00700), US = alphabetic (AAPL)
+                # Paper runner normalizes HK symbols by stripping "HK." prefix
+                market = "hk" if any(s and s[:1].isdigit() for s in symbols) else "us"
                 self._scores = compute_short_squeeze_scores(market, set(symbols))
                 logger.info("ShortSqueeze: loaded %d scores for %s", len(self._scores), market)
             except Exception:
