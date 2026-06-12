@@ -34,8 +34,11 @@ class Engine:
     def _simulate_fills(self, orders, bar_data):
         return simulate_fills(orders, bar_data, self.config)
 
-    def run(self, strategy, data):
-        portfolio = Portfolio(initial_capital=self.config.initial_capital)
+    def run(self, strategy, data, initial_portfolio=None):
+        if initial_portfolio is not None:
+            portfolio = initial_portfolio
+        else:
+            portfolio = Portfolio(initial_capital=self.config.initial_capital)
         risk_engine = RiskEngine(strategy.risk_rules)
         ctx = StrategyContext(data=data, portfolio=portfolio, config=self.config)
         strategy.on_init(ctx)

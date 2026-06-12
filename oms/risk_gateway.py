@@ -18,9 +18,9 @@ class RiskGateway:
         self.broker = broker
         self.alerts = alert_manager
 
-    async def check(self, orders, bar_data):
-        """Run pre-trade checks. Returns (approved_orders, rejected_orders)."""
-        approved = self.engine.check(orders, self._dummy_portfolio(), bar_data)
+    async def check(self, orders, portfolio, bar_data):
+        """Run pre-trade checks against the real portfolio. Returns (approved, rejected)."""
+        approved = self.engine.check(orders, portfolio, bar_data)
         rejected = [o for o in orders if o not in approved]
 
         for r in rejected:
@@ -28,12 +28,3 @@ class RiskGateway:
                 self.alerts.fire("warning", f"Pre-trade rejected: {r.symbol} {r.side} {r.size}",
                                  {"symbol": r.symbol, "side": r.side, "size": r.size})
         return approved, rejected
-
-    def _dummy_portfolio(self):
-        # Risk rules expect a portfolio-like object with .positions and .total_equity
-        # We don't need real values for pre-trade checks on individual orders
-        class DummyPF:
-            initial_capital = 100_000
-            total_equity = 100_000
-            positions = {}
-        return DummyPF()
