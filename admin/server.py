@@ -151,6 +151,52 @@ app.add_middleware(
 )
 
 
+@app.get("/api/admin/system/status")
+def admin_system_status():
+    """System health — ws_collector status, CPU%, memory."""
+    import subprocess, os
+    ws_status = "unknown"
+    try:
+        r = subprocess.run(["systemctl", "is-active", "ws-collector"],
+                          capture_output=True, text=True, timeout=3)
+        ws_status = r.stdout.strip() if r.returncode == 0 else "inactive"
+    except Exception:
+        pass
+    cpu_pct = "?"
+    try:
+        with open("/proc/stat") as f:
+            parts = f.readline().split()
+            if parts[0] == "cpu":
+                vals = [int(x) for x in parts[1:]]
+                total = sum(vals)
+                idle = vals[3]
+                # Simple instantaneous read — approximation
+                cpu_pct = f"{max(0, int((1 - idle / total) * 100))}"
+    except Exception:
+        pass
+    mem_used_gb = "?"
+    mem_total_gb = "?"
+    try:
+        mem = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    mem[k.strip()] = int(v.strip().split()[0])
+        total_kb = mem.get("MemTotal", 0)
+        avail_kb = mem.get("MemAvailable", mem.get("MemFree", 0))
+        mem_total_gb = f"{total_kb / 1024 / 1024:.1f}"
+        mem_used_gb = f"{(total_kb - avail_kb) / 1024 / 1024:.1f}"
+    except Exception:
+        pass
+    return {
+        "ws": ws_status,
+        "cpu": cpu_pct,
+        "mem": mem_used_gb,
+        "mem_total": mem_total_gb,
+    }
+
+
 @app.middleware("http")
 async def db_session_cleanup(request, call_next):
     """Clean up SQLAlchemy scoped session after every request."""
