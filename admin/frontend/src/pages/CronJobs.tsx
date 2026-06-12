@@ -4,6 +4,7 @@ import {
   EditOutlined,
   HistoryOutlined,
   FileTextOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
@@ -211,6 +212,18 @@ const CronJobs: React.FC = () => {
     }
   };
 
+  // ── Delete job ────────────────────────────────────────────────────────────
+
+  const handleDelete = async (index: number, name: string) => {
+    try {
+      await api.del(`/api/admin/cron/${index}`);
+      message.success(`Deleted ${name || 'job #' + index}`);
+      actionRef.current?.reload();
+    } catch (err: any) {
+      message.error(`Delete failed: ${err.message}`);
+    }
+  };
+
   // ── Open create / edit modal ───────────────────────────────────────────────
 
   const [editingJob, setEditingJob] = useState<CronJob | null>(null);
@@ -381,6 +394,19 @@ const CronJobs: React.FC = () => {
             >
               编辑
             </Button>
+          )}
+          {r.index !== undefined && (
+            <Popconfirm
+              title={`删除 ${r.name || 'job #' + r.index}？`}
+              description="将从 crontab 和 registry 中永久移除"
+              onConfirm={() => handleDelete(r.index!, r.name || '')}
+              okText="确认删除"
+              okButtonProps={{ danger: true }}
+            >
+              <Button size="small" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
           )}
         </Space>
       ),

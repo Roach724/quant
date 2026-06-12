@@ -1653,6 +1653,30 @@ def admin_cron_update(index: int, job: dict = Body(...)):
     return {"status": "ok", "schedule": new_schedule}
 
 
+@app.delete("/api/admin/cron/{index}")
+def admin_cron_delete(index: int):
+    """Delete a cron job — removes from registry + crontab.txt."""
+    resolved = os.path.abspath(CRON_REGISTRY)
+    if os.path.isfile(resolved):
+        with open(resolved) as f:
+            data = _json.load(f)
+        if 0 <= index < len(data.get("jobs", [])):
+            data["jobs"].pop(index)
+            with open(resolved, "w") as f:
+                _json.dump(data, f, indent=2, ensure_ascii=False)
+
+    Crontab_File = "/var/data/crontab.txt"
+    if os.path.isfile(Crontab_File):
+        lines = open(Crontab_File).readlines()
+        if 0 <= index < len(lines):
+            del lines[index]
+            with open(Crontab_File, "w") as f:
+                f.writelines(lines)
+
+    _cache_mgr.invalidate("cron:list")
+    return {"status": "ok", "deleted_index": index}
+
+
 @app.post("/api/admin/cron/run")
 def admin_cron_run(command: str = Query(""), name: str = Query("")):
     """Manually trigger a cron command via task queue."""
