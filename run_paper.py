@@ -31,6 +31,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from engine.cost_model import TransactionCost
 from engine.data import DataFrameSource
 from engine.strategy import Strategy, StrategyContext
 from engine.portfolio import Portfolio
@@ -130,10 +131,8 @@ class PaperRunner:
             },
         )
 
-        # Derived costs from market schedule
-        self.slippage_bps = float(market_cfg.get("slippage_bps", 5.0))
-        self.commission_bps = float(market_cfg.get("commission_bps", 1.0))
-        self.min_commission = float(market_cfg.get("min_commission", 1.0))
+        # Derived costs from market schedule (single source of truth: TransactionCost)
+        self._cost_model = TransactionCost.from_config(market_cfg, self.market)
 
     # ── Data loading ──
 
@@ -405,27 +404,31 @@ class PaperRunner:
                         )
                         continue
 
-                    # e) Update broker price
+                    # e) Update broker price (incl. volume for partial fill simulation)
                     price = bar_data["close"].get(sig.symbol, 100.0)
-                    self.broker.update_price(sig.symbol, price)
+                    sym_ohlc = {
+                        "close": price,
+                        "volume": bar_data.get("volume", {}).get(sig.symbol, 0),
+                    }
+                    self.broker.update_price(sig.symbol, price, bar_ohlc={sig.symbol: sym_ohlc})
 
                     # f) Submit via OrderManager (async → sync bridge)
                     sd = convert_signal(sig, self.portfolio, price_est=price)
-                    slippage = price * self.slippage_bps / 10000
+                    slippage = price * self._cost_model.slippage_bps / 10000
                     exec_price = price + slippage if sd["side"] == "buy" else price - slippage
 
                     # Cash constraint: cap buy qty to available cash
                     if sd["side"] == "buy":
                         max_affordable = max(0, int(
-                            self.portfolio.cash / (exec_price * (1 + self.commission_bps / 10000))
+                            self.portfolio.cash / (exec_price * (1 + self._cost_model.commission_bps / 10000))
                         ))
                         sd["qty"] = min(sd["qty"], max_affordable)
                         if sd["qty"] <= 0:
                             continue
 
                     commission = max(
-                        self.min_commission,
-                        self.commission_bps / 10000 * sd["qty"] * exec_price,
+                        self._cost_model.min_commission,
+                        self._cost_model.commission_bps / 10000 * sd["qty"] * exec_price,
                     )
 
                     tracked = asyncio.run(

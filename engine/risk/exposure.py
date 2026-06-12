@@ -64,4 +64,4 @@ class SectorCap:
         self.sectors = sectors or {}
 
     def apply(self, orders, portfolio, bar_data):
-        return orders
+        raise NotImplementedError("SectorCap.apply is not yet implemented")

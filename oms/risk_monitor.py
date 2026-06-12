@@ -56,7 +56,7 @@ class RiskMonitor:
             dd = (account.equity - self._peak_equity) / self._peak_equity
             if dd < -max_dd:
                 self.alerts.fire("critical",
-                    f"Max drawdown breached: {dd:.2%} (limit: {max_dd:.0%})",
+                    f"Max drawdown breached: {abs(dd):.2%} (limit: {max_dd:.0%})",
                     {"drawdown": round(dd, 4), "peak_equity": self._peak_equity,
                      "current_equity": account.equity})
 

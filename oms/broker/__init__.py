@@ -48,11 +48,13 @@ class Broker(Protocol):
 
 
 class PaperBroker:
-    def __init__(self, initial_capital: float = 100_000.0):
+    def __init__(self, initial_capital: float = 100_000.0, liquidity_factor: float = 0.05):
         self.cash = initial_capital
         self._positions: dict[str, BrokerPosition] = {}
         self._orders: dict[str, BrokerOrder] = {}
         self._prices: dict[str, float] = {}
+        self._volumes: dict[str, float] = {}
+        self._liquidity_factor = liquidity_factor
         self._default_price = 100.0
 
     def update_price(self, symbol: str, price: float, bar_ohlc: dict | None = None):
@@ -62,9 +64,14 @@ class PaperBroker:
         checked against intra-bar extremes, not just the closing price.
         """
         self._prices[symbol] = price
+        # Extract per-symbol bar data (high/low for limit orders, volume for partial fills)
+        sym_ohlc = bar_ohlc.get(symbol) if bar_ohlc else None
+        if isinstance(sym_ohlc, dict):
+            if "volume" in sym_ohlc:
+                self._volumes[symbol] = float(sym_ohlc["volume"])
         # Determine the worst-case price for pending limit orders within this bar
-        high = bar_ohlc.get(symbol) if bar_ohlc else price
-        low = bar_ohlc.get(symbol) if bar_ohlc else price
+        high = sym_ohlc if sym_ohlc else price
+        low = sym_ohlc if sym_ohlc else price
         if isinstance(high, dict):
             high = high.get("high", high.get("close", price))
             low = low.get("low", low.get("close", price))
@@ -92,23 +99,27 @@ class PaperBroker:
             return current_price <= order.limit_price
         return current_price >= order.limit_price
 
-    def _execute_fill(self, order: BrokerOrder, fill_price: float):
+    def _execute_fill(self, order: BrokerOrder, fill_price: float, fill_qty: float | None = None):
+        """Execute a fill, optionally partial.  fill_qty=None means full fill."""
+        qty = fill_qty if fill_qty is not None else order.qty
+        if qty <= 0:
+            return
         if order.side == "buy":
-            self.cash -= fill_price * order.qty
+            self.cash -= fill_price * qty
         else:
-            self.cash += fill_price * order.qty
-        order.status = "filled"
-        order.filled_qty = order.qty
+            self.cash += fill_price * qty
+        order.filled_qty = qty
         order.avg_price = fill_price
+        order.status = "filled" if qty >= order.qty else "partial"
         order.updated_at = datetime.now(timezone.utc)
         # Update broker-side position tracking (cosmetic; runner uses Portfolio.cash)
         pos = self._positions.get(order.symbol)
-        qty_signed = order.qty if order.side == "buy" else -order.qty
+        qty_signed = qty if order.side == "buy" else -qty
         if pos:
             total_qty = pos.qty + qty_signed
             if total_qty > 0 and order.side == "buy":
                 # Only recalc avg_entry on buy; sell leaves avg_entry unchanged
-                pos.avg_entry_price = ((pos.avg_entry_price * pos.qty) + (fill_price * order.qty)) / (pos.qty + order.qty)
+                pos.avg_entry_price = ((pos.avg_entry_price * pos.qty) + (fill_price * qty)) / (pos.qty + qty)
             pos.qty = total_qty
         else:
             self._positions[order.symbol] = BrokerPosition(
@@ -134,9 +145,15 @@ class PaperBroker:
                 order.status = "pending"
                 self._orders[oid] = order
             return order
-        # Market order: fill immediately
+        # Market order: apply liquidity constraint for partial fill simulation
         fill_price = current_price  # slippage handled by runner layer
-        self._execute_fill(order, fill_price)
+        vol = self._volumes.get(symbol, 0)
+        if vol > 0 and qty > 0:
+            max_fillable = max(1, int(vol * self._liquidity_factor))
+            actual_fill = min(qty, max_fillable)
+        else:
+            actual_fill = qty  # No volume data → fill fully (backward compatible)
+        self._execute_fill(order, fill_price, fill_qty=actual_fill)
         self._orders[oid] = order
         return order
 

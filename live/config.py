@@ -6,7 +6,7 @@ from pathlib import Path
 
 DEFAULT_VALUES = {
     "broker": {
-        "paper": {"initial_capital": 100000, "slippage_bps": 5, "commission_bps": 1, "min_commission": 1.0},
+        "paper": {"initial_capital": 100000, "slippage_bps": 5, "commission_bps": 1, "min_commission": 1.0},  # defaults from engine.cost_model.TransactionCost
         "live": {"type": "futu_stock", "host": "127.0.0.1", "port": 11111, "max_position_pct": 0.2},
     },
     "schedule": {
