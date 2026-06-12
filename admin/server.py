@@ -697,6 +697,161 @@ def admin_experiment_config_get(name: str):
     return {"name": name, "content": path.read_text()}
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# ── Trading API ──
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from trading.models import TradingStrategy as TSModel, VirtualAccount, VirtualPosition, TradeRecord
+
+
+@app.get("/api/admin/trading/strategies")
+def admin_trading_strategies():
+    """列出所有交易策略"""
+    session = get_session()
+    strats = session.query(TSModel).all()
+    result = []
+    for s in strats:
+        acct = session.query(VirtualAccount).filter_by(strategy_id=s.id).first()
+        positions = session.query(VirtualPosition).filter_by(strategy_id=s.id).all()
+        mkt_val = sum(p.market_value for p in positions)
+        result.append({
+            "id": s.id, "name": s.name, "market": s.market,
+            "strategy_class": s.strategy_class, "status": s.status,
+            "capital_allocated": s.capital_allocated,
+            "cash": acct.cash if acct else s.capital_allocated,
+            "equity": (acct.cash if acct else s.capital_allocated) + mkt_val,
+            "positions": len(positions),
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+        })
+    return result
+
+
+@app.post("/api/admin/trading/strategies")
+def admin_trading_create_strategy(body: dict = Body(...)):
+    """创建交易策略"""
+    session = get_session()
+    strat = TSModel(
+        name=body["name"], market=body["market"],
+        strategy_class=body["strategy_class"],
+        capital_allocated=float(body.get("capital_allocated", 100000)),
+        config_yaml=body.get("config_yaml", ""),
+        status="stopped",
+    )
+    session.add(strat)
+    session.commit()
+    return {"id": strat.id, "status": "created"}
+
+
+@app.post("/api/admin/trading/strategies/{strategy_id}/start")
+def admin_trading_start_strategy(strategy_id: int):
+    """启动交易策略"""
+    session = get_session()
+    strat = session.get(TSModel, strategy_id)
+    if not strat:
+        raise HTTPException(404, "Strategy not found")
+    strat.status = "running"
+    strat.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    return {"status": "ok", "strategy_id": strategy_id}
+
+
+@app.post("/api/admin/trading/strategies/{strategy_id}/stop")
+def admin_trading_stop_strategy(strategy_id: int):
+    """停止交易策略"""
+    session = get_session()
+    strat = session.get(TSModel, strategy_id)
+    if not strat:
+        raise HTTPException(404, "Strategy not found")
+    strat.status = "stopped"
+    strat.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    return {"status": "ok", "strategy_id": strategy_id}
+
+
+@app.get("/api/admin/trading/strategies/{strategy_id}/trades")
+def admin_trading_trades(strategy_id: int, limit: int = 100):
+    """策略交易记录"""
+    session = get_session()
+    trades = session.query(TradeRecord).filter_by(
+        strategy_id=strategy_id
+    ).order_by(TradeRecord.created_at.desc()).limit(limit).all()
+    return [{
+        "id": t.id, "symbol": t.symbol, "side": t.side,
+        "qty": t.qty, "price": t.price, "commission": t.commission,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+    } for t in trades]
+
+
+# ── Trading Account API (Task 11) ──
+
+from oms.broker.futu_stock_broker import FutuStockBroker
+from futu import TrdEnv
+
+
+@app.get("/api/admin/trading/account/{env}")
+def admin_trading_account(env: str):
+    """获取模拟/真实账户概览"""
+    trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
+    broker = FutuStockBroker(trd_env=trd_env)
+    async def _get():
+        acct = await broker.get_account()
+        positions = await broker.get_positions()
+        broker._get_ctx().close()
+        mkt_val = sum(p.market_value for p in positions)
+        pnl = sum(p.unrealized_pnl for p in positions)
+        init = max(acct.equity - pnl, 1)
+        return {
+            "cash": acct.cash, "equity": acct.equity,
+            "market_value": mkt_val, "total_pnl": pnl,
+            "pnl_pct": round(pnl / init * 100, 2),
+            "positions": [{
+                "symbol": p.symbol, "qty": p.qty,
+                "avg_entry_price": p.avg_entry_price,
+                "market_value": p.market_value,
+                "unrealized_pnl": p.unrealized_pnl,
+            } for p in positions],
+        }
+    import asyncio
+    return asyncio.run(_get())
+
+
+@app.get("/api/admin/trading/orders/{env}")
+def admin_trading_orders(env: str):
+    """获取订单列表"""
+    trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
+    broker = FutuStockBroker(trd_env=trd_env)
+    async def _get():
+        pending = await broker.get_open_orders()
+        broker._get_ctx().close()
+        return [{
+            "broker_id": o.broker_id, "symbol": o.symbol,
+            "side": o.side, "qty": o.qty, "filled_qty": o.filled_qty,
+            "order_type": o.order_type, "status": o.status,
+            "limit_price": o.limit_price,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+        } for o in pending]
+    import asyncio
+    return asyncio.run(_get())
+
+
+@app.post("/api/admin/trading/order/{env}")
+def admin_trading_place_order(env: str, body: dict = Body(...)):
+    """手动下单"""
+    trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
+    broker = FutuStockBroker(trd_env=trd_env)
+    async def _place():
+        order = await broker.submit_order(
+            symbol=body["symbol"], side=body["side"],
+            qty=int(body["qty"]),
+            order_type=body.get("order_type", "market"),
+            limit_price=body.get("limit_price"),
+        )
+        broker._get_ctx().close()
+        return {"order_id": order.broker_id, "status": order.status}
+    import asyncio
+    return asyncio.run(_place())
+
+
 @app.put("/api/admin/experiments/configs/{name}")
 def admin_experiment_config_put(name: str, body: dict = Body(...)):
     """Create or update a config template file. Backs up existing."""
