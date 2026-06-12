@@ -210,7 +210,7 @@ const LogManager: React.FC = () => {
         <Button icon={<ReloadOutlined />} onClick={() => loadFiles(module)}>刷新</Button>
       </Space>
       <Table<LogFileInfo> dataSource={files} rowKey="name" loading={loading} size="small"
-        pagination={false}
+        pagination={{ pageSize: 30, showSizeChanger: true }}
         columns={[
           { title: '文件名', dataIndex: 'name', key: 'name', width: 280, ellipsis: true },
           { title: '大小', dataIndex: 'size', key: 'size', width: 100, render: (_, r) => formatSize(r.size) },

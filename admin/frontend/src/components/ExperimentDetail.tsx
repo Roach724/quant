@@ -30,7 +30,14 @@ function computeDailyReturns(equity: number[], ts: string[]): number[] {
     byDate.set(date, equity[i]);
   }
   const daily = [...byDate.values()];
-  if (daily.length < 2) return [];
+  // Fallback: if only 1 day, use raw equity points as return source
+  if (daily.length < 2) {
+    const rets: number[] = [];
+    for (let i = 1; i < equity.length; i++) {
+      if (equity[i - 1] !== 0) rets.push((equity[i] - equity[i - 1]) / equity[i - 1]);
+    }
+    return rets;
+  }
   const rets: number[] = [];
   for (let i = 1; i < daily.length; i++) {
     if (daily[i - 1] !== 0) rets.push((daily[i] - daily[i - 1]) / daily[i - 1]);
@@ -472,7 +479,7 @@ function makeCumReturnOption(ts: string[], cumReturns: number[]) {
     tooltip: { trigger: 'axis', valueFormatter: (v: any) => `${v?.toFixed(2)}%` },
     grid: { left: 60, right: 20, top: 20, bottom: 30 },
     xAxis: { type: 'category', data: ts.map((t) => toLocal(t) ?? ''), axisLabel: { show: false } },
-    yAxis: { type: 'value', axisLabel: { fontSize: 10, formatter: '{value}%' } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 10, formatter: (v: number) => `${v.toFixed(1)}%` } },
     series: [
       {
         type: 'line',
@@ -508,7 +515,7 @@ function makeDrawdownOption(ts: string[], drawdowns: number[]) {
     tooltip: { trigger: 'axis', valueFormatter: (v: any) => `${v?.toFixed(2)}%` },
     grid: { left: 60, right: 20, top: 20, bottom: 30 },
     xAxis: { type: 'category', data: ts.map((t) => toLocal(t) ?? ''), axisLabel: { show: false } },
-    yAxis: { type: 'value', axisLabel: { fontSize: 10, formatter: '{value}%' }, max: 0, min: yMin - yPad },
+    yAxis: { type: 'value', axisLabel: { fontSize: 10, formatter: (v: number) => `${v.toFixed(1)}%` }, max: 0, min: yMin - yPad },
     series: [
       {
         type: 'line',
