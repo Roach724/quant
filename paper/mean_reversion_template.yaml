@@ -1,0 +1,74 @@
+# =============================================================================
+# MeanReversion 策略实验模板
+# =============================================================================
+# 策略逻辑:
+#   - 计算每只股票过去 N 根 bar 的 z-score：(当前价 - 均值) / 标准差
+#   - 买入: z-score < entry_threshold（超卖，价格极度偏离均值下方）
+#   - 卖出1: z-score > exit_threshold（超买，止盈退出）
+#   - 卖出2: 持仓超过 max_hold_bars 根 bar（强制超时退出）
+#
+# 适用市场: 震荡市 / 横盘市（趋势市中容易逆势接飞刀）
+# =============================================================================
+
+# ── 运行模式 ──
+live:
+  market: us          # us | hk | crypto
+  mode: live          # paper（历史回放）| live（实时/多日）
+  output_dir: output/live/
+
+# ── 策略 ──
+strategy:
+  name: MeanReversion
+  lookback: 30             # 计算均值和标准差的历史 bar 数
+  entry_threshold: -1.5    # z-score 低于此值买入（越负越超卖）
+  exit_threshold: 1.5      # z-score 高于此值卖出（越正越超买）
+  top_k: 5                 # 最大持仓数
+  max_hold_bars: 60        # 最大持仓 bar 数，超时强制平仓（防止僵尸持仓）
+  allocation: 0.0          # 每只分配比例，0=等权(1/top_k)
+
+# ── 资金 ──
+broker:
+  paper:
+    initial_capital: 100000    # 初始资金
+    slippage_bps: 5            # 滑点（bps，1bp=0.01%）
+    commission_bps: 1          # 佣金费率（bps）
+    min_commission: 1.0        # 最低佣金
+  live:
+    type: paper                # paper（模拟）| futu_stock（实盘）
+
+# ── 风控 ──
+risk:
+  max_drawdown: 0.15          # 最大回撤限制（触发后停止交易）
+  max_daily_loss: 0.05        # 单日最大亏损限制
+  position_size_pct: 0.2      # 单只最大仓位比例
+
+# ── 调度（多日模式） ──
+schedule:
+  multi_day: true              # 是否跨交易日运行
+  max_trading_days: 5          # 最大交易天数
+  bar_interval: 60             # bar 间隔（秒），60=1分钟K线
+  pre_market_warmup: 300       # 盘前预热（秒）
+  market_close_offset: 600     # 收盘后冷却（秒）
+  max_duration_per_day: 390    # 每天最大交易时长（分钟，390=6.5h）
+
+# ── 状态持久化 ──
+state:
+  enabled: true
+  dir: /var/quant/state/mean_reversion/
+  checkpoint_interval: 300     # 状态保存间隔（秒）
+
+# ── 实验元数据 ──
+experiment:
+  name: "MeanReversion — 均值回复基准"
+  # id 由 {type}_{market}_{strategy}_v{version} 自动生成
+
+# ── 观察者 ──
+observer:
+  log_dir: output/live/
+  snapshot_interval: 60
+  trade_log: true
+  equity_curve: true
+
+dashboard:
+  port: 8090
+  websocket: false

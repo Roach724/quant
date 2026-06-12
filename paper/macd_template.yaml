@@ -1,0 +1,74 @@
+# =============================================================================
+# MACD 策略实验模板
+# =============================================================================
+# 策略逻辑:
+#   - Gerald Appel 1970年代经典趋势跟踪指标
+#   - MACD线 = EMA(fast) - EMA(slow)   → 快慢均线差值（趋势动量）
+#   - 信号线 = EMA(MACD, signal_period) → MACD的均线（平滑）
+#   - 金叉: MACD线上穿信号线 → 买入（趋势转多）
+#   - 死叉: MACD线下穿信号线 → 卖出（趋势转空）
+#   - 买入优先级: 按交叉强度（MACD-信号线差值）排名，选 top_k
+#
+# 适用市场: 趋势市（震荡市中假信号较多）
+# =============================================================================
+
+# ── 运行模式 ──
+live:
+  market: us          # us | hk | crypto
+  mode: live          # paper（历史回放）| live（实时/多日）
+  output_dir: output/live/
+
+# ── 策略 ──
+strategy:
+  name: MACD
+  fast: 12                  # 快线 EMA 周期（标准=12）
+  slow: 26                  # 慢线 EMA 周期（标准=26）
+  signal_period: 9          # 信号线 EMA 周期（标准=9）
+  top_k: 5                  # 最大持仓数
+  allocation: 0.0           # 每只分配比例，0=等权(1/top_k)
+
+# ── 资金 ──
+broker:
+  paper:
+    initial_capital: 100000
+    slippage_bps: 5
+    commission_bps: 1
+    min_commission: 1.0
+  live:
+    type: paper
+
+# ── 风控 ──
+risk:
+  max_drawdown: 0.15
+  max_daily_loss: 0.05
+  position_size_pct: 0.2
+
+# ── 调度（多日模式） ──
+schedule:
+  multi_day: true
+  max_trading_days: 5
+  bar_interval: 60
+  pre_market_warmup: 300
+  market_close_offset: 600
+  max_duration_per_day: 390
+
+# ── 状态持久化 ──
+state:
+  enabled: true
+  dir: /var/quant/state/macd/
+  checkpoint_interval: 300
+
+# ── 实验元数据 ──
+experiment:
+  name: "MACD — 金叉死叉趋势跟踪"
+
+# ── 观察者 ──
+observer:
+  log_dir: output/live/
+  snapshot_interval: 60
+  trade_log: true
+  equity_curve: true
+
+dashboard:
+  port: 8090
+  websocket: false
