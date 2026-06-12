@@ -14,7 +14,8 @@ from admin.models import get_session, Task, CronRun
 
 PROJECT_ROOT = "/opt/quant"
 POLL_INTERVAL = 2  # seconds
-LOG_DIR = "/var/log/quant/prod/cron"
+# All cron log subdirectories to search for log files
+_LOG_DIRS = ["/var/log/quant/prod/cron", "/var/log/quant/prod/factor", "/var/log/quant/prod/quality", "/var/log/quant/prod/loader"]
 
 
 def run_one(task: Task) -> None:
@@ -85,12 +86,16 @@ def run_one(task: Task) -> None:
                         started_at=started_at or datetime.now(timezone.utc),
                     )
                     session.add(existing)
-                # Find actual log file
+                # Find actual log file across all log directories
                 try:
-                    pattern = os.path.join(LOG_DIR, f"{cron_name}_*.log")
-                    candidates = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
-                    if candidates:
-                        existing.log_file = candidates[0]
+                    for log_dir in _LOG_DIRS:
+                        if not os.path.isdir(log_dir):
+                            continue
+                        pattern = os.path.join(log_dir, f"{cron_name}_*.log")
+                        candidates = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+                        if candidates:
+                            existing.log_file = candidates[0]
+                            break
                 except Exception:
                     pass
                 existing.status = "success" if proc.returncode == 0 else "failed"
