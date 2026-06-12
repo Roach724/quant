@@ -55,14 +55,32 @@ class PaperBroker:
         self._prices: dict[str, float] = {}
         self._default_price = 100.0
 
-    def update_price(self, symbol: str, price: float):
-        """Set the current market price for a symbol. Call before order submission."""
+    def update_price(self, symbol: str, price: float, bar_ohlc: dict | None = None):
+        """Set the current market price for a symbol. Call before order submission.
+
+        If bar_ohlc is provided (with 'high'/'low'), pending limit orders are
+        checked against intra-bar extremes, not just the closing price.
+        """
         self._prices[symbol] = price
-        # Fill pending limit orders whose price is crossed
+        # Determine the worst-case price for pending limit orders within this bar
+        high = bar_ohlc.get(symbol) if bar_ohlc else price
+        low = bar_ohlc.get(symbol) if bar_ohlc else price
+        if isinstance(high, dict):
+            high = high.get("high", high.get("close", price))
+            low = low.get("low", low.get("close", price))
+        # Fill pending limit orders that would have been triggered intra-bar
         for oid, order in list(self._orders.items()):
             if order.status == "pending" and order.symbol == symbol:
-                if self._limit_crossed(order, price):
-                    self._execute_fill(order, price)
+                if order.side == "buy" and order.limit_price is not None:
+                    # Buy limit: filled if low <= limit_price (price dropped to our bid)
+                    intra_fill_price = min(order.limit_price, max(low, price)) if low <= order.limit_price else None
+                    if intra_fill_price is not None:
+                        self._execute_fill(order, intra_fill_price)
+                elif order.side == "sell" and order.limit_price is not None:
+                    # Sell limit: filled if high >= limit_price (price rose to our ask)
+                    intra_fill_price = max(order.limit_price, min(high, price)) if high >= order.limit_price else None
+                    if intra_fill_price is not None:
+                        self._execute_fill(order, intra_fill_price)
 
     def _price_for(self, symbol: str) -> float:
         return self._prices.get(symbol, self._default_price)
