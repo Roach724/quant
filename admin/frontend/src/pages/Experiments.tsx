@@ -264,14 +264,21 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   const [templates, setTemplates] = useState<ConfigItem[]>([]);
   const [createTemplate, setCreateTemplate] = useState('');
   const [createExpId, setCreateExpId] = useState('');
+  const [templatesLoading, setTemplatesLoading] = useState(false);
 
   const loadTemplates = async () => {
-    const data = await api.get('/api/admin/experiments/configs');
-    // Filter by type: paper lab only shows paper_* templates
-    const filtered = filterType
-      ? (data || []).filter((c: any) => c.name.startsWith(filterType + '_'))
-      : (data || []);
-    setTemplates(filtered);
+    setTemplatesLoading(true);
+    try {
+      const data = await api.get('/api/admin/experiments/configs');
+      const filtered = filterType
+        ? (data || []).filter((c: any) => c.name.startsWith(filterType + '_'))
+        : (data || []);
+      setTemplates(filtered);
+    } catch {
+      message.error('加载配置模板失败');
+    } finally {
+      setTemplatesLoading(false);
+    }
   };
 
   // ── Actions ────────────────────────────────────────────────────
@@ -553,6 +560,7 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
         <Space direction="vertical" style={{ width: '100%' }}>
           <Space><Text strong>模板:</Text>
             <Select value={createTemplate} onChange={setCreateTemplate} style={{ width: 220 }}
+              loading={templatesLoading} placeholder="选择模板..."
               options={templates.map(t => ({ value: t.name, label: stripYaml(t.name) }))} />
           </Space>
           <Space><Text strong>exp_id:</Text>
