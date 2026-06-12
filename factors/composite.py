@@ -121,3 +121,90 @@ def compute_qarp_scores(market: str = "us", symbols: Optional[list[str]] = None)
                     composite[s] = composite.get(s, 0.0) + z * _QUALITY_WEIGHT
 
     return composite
+
+
+def compute_short_squeeze_scores(market: str = "hk", symbols: Optional[set[str]] = None) -> dict[str, float]:
+    """Compute short squeeze potential scores.
+
+    Combines:
+      - Short ratio (high short volume / total volume → higher score)
+      - Recent momentum (ret_5d from factor_values → higher score)
+
+    Returns dict mapping strategy symbol → squeeze score.
+    Higher = more squeeze potential.
+    """
+    from google.cloud import bigquery
+
+    client = bigquery.Client()
+
+    # ── 1. Latest daily short ratio per symbol ──
+    short_ratios: dict[str, float] = {}
+    try:
+        rows = client.query(f"""
+            SELECT symbol,
+                   SAFE_DIVIDE(short_sell_shares_traded, shares_traded) AS ratio,
+                   short_sell_shares_traded, shares_traded
+            FROM quant.{market}_daily_short_volume
+            WHERE shares_traded > 0 AND short_sell_shares_traded > 0
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY symbol ORDER BY timestamp DESC
+            ) = 1
+        """).result()
+        for row in rows:
+            sym = _bq_to_strategy_symbol(row.symbol)
+            if symbols and sym not in symbols:
+                continue
+            if row.ratio is not None and row.ratio > 0:
+                short_ratios[sym] = float(row.ratio)
+    except Exception:
+        logger.warning("ShortSqueeze: short volume query failed", exc_info=True)
+        return {}
+
+    if not short_ratios:
+        return {}
+
+    # ── 2. Recent momentum (ret_5d) from factor_values ──
+    momentum: dict[str, float] = {}
+    try:
+        rows = client.query(f"""
+            SELECT symbol, value
+            FROM quant.factor_values
+            WHERE factor_id = 'ret_5d' AND symbol LIKE '{market.upper()}.%'
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY symbol ORDER BY date DESC
+            ) = 1
+        """).result()
+        for row in rows:
+            sym = _bq_to_strategy_symbol(row.symbol)
+            if symbols and sym not in symbols:
+                continue
+            if row.value is not None and not (isinstance(row.value, float) and row.value != row.value):
+                momentum[sym] = float(row.value)
+    except Exception:
+        logger.warning("ShortSqueeze: momentum query failed (non-fatal)", exc_info=True)
+
+    # ── 3. Composite: short_ratio z-score + momentum z-score ──
+    composite: dict[str, float] = {}
+
+    # Short ratio (higher = more shorting = more squeeze potential)
+    sr_symbols = list(short_ratios.keys())
+    if len(sr_symbols) >= 3:
+        arr = np.array([short_ratios[s] for s in sr_symbols], dtype=float)
+        mu = np.mean(arr)
+        std = np.std(arr)
+        if std > 0:
+            for s in sr_symbols:
+                composite[s] = composite.get(s, 0.0) + 0.7 * (short_ratios[s] - mu) / std
+
+    # Momentum (higher = more squeeze potential — price rising against shorts)
+    if momentum:
+        mom_symbols = [s for s in sr_symbols if s in momentum]
+        if len(mom_symbols) >= 3:
+            arr = np.array([momentum[s] for s in mom_symbols], dtype=float)
+            mu = np.mean(arr)
+            std = np.std(arr)
+            if std > 0:
+                for s in mom_symbols:
+                    composite[s] = composite.get(s, 0.0) + 0.3 * (momentum[s] - mu) / std
+
+    return composite

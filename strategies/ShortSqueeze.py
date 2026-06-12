@@ -1,15 +1,22 @@
 """ShortSqueeze — bet on upward pressure from short covering.
 
-Reads model-generated scores from ctx.predictions and selects top-ranked
-symbols to bet on short squeeze candidates.
+Queries BigQuery for HK daily short volume data + factor momentum,
+computes a composite squeeze score, and selects top candidates.
 """
 from __future__ import annotations
 
+import logging
+
 from engine.strategy import Strategy, Signal
+
+logger = logging.getLogger(__name__)
 
 
 class ShortSqueeze(Strategy):
-    """Short squeeze: high short interest + low days-to-cover + upward momentum.
+    """Short squeeze: high short ratio + upward momentum.
+
+    On init, queries BigQuery for short volume + momentum data.
+    Re-ranks on each rebalance.
 
     Parameters
     ----------
@@ -25,27 +32,50 @@ class ShortSqueeze(Strategy):
     rebalance_every: int = 5
     allocation: float = 0.95
 
+    def __init__(self, **kwargs):
+        super().__init__()
+        for k, v in kwargs.items():
+            if hasattr(self, k):
+                setattr(self, k, v)
+
     def on_init(self, ctx):
         self._last_rebalance = -self.rebalance_every
+        self._scores: dict[str, float] = {}
+        self._scores_loaded = False
+
+    def _load_scores(self, symbols: list[str]) -> dict[str, float]:
+        if not self._scores_loaded:
+            try:
+                from factors.composite import compute_short_squeeze_scores
+                market = "hk" if any(s.startswith("HK.") for s in symbols) else "us"
+                self._scores = compute_short_squeeze_scores(market, set(symbols))
+                logger.info("ShortSqueeze: loaded %d scores for %s", len(self._scores), market)
+            except Exception:
+                logger.warning("ShortSqueeze: failed to load scores", exc_info=True)
+                self._scores = {}
+            self._scores_loaded = True
+        return self._scores
 
     def on_bar(self, ctx, bar: int) -> list[Signal]:
         if bar - self._last_rebalance < self.rebalance_every:
             return []
         self._last_rebalance = bar
 
-        if ctx.predictions is None:
-            return []
-
-        scores = {s: v for s, v in ctx.predictions.items()
-                  if s in ctx.universe and not (isinstance(v, float) and (v != v))}
+        symbols = list(ctx.universe)
+        scores = self._load_scores(symbols)
         if len(scores) < 3:
             return []
 
-        sorted_symbols = sorted(scores, key=scores.get, reverse=True)
-        selected = sorted_symbols[:self.top_k]
-        weight = min(self.allocation / len(selected), 0.10)
+        # Filter to universe
+        valid = {s: v for s, v in scores.items() if s in ctx.universe}
+        if not valid:
+            return []
 
-        signals = []
+        sorted_symbols = sorted(valid, key=valid.get, reverse=True)
+        selected = sorted_symbols[:self.top_k]
+        weight = min(self.allocation / max(len(selected), 1), 0.10)
+
+        signals: list[Signal] = []
         for sym in selected:
             if ctx.portfolio.positions.get(sym):
                 signals.append(Signal.target(sym, weight))
