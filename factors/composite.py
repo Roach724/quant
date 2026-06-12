@@ -16,10 +16,16 @@ _VALUE_WEIGHT = 0.60
 _QUALITY_WEIGHT = 0.40
 
 
-def _bq_to_strategy_symbol(bq_symbol: str) -> str:
-    """Convert BQ format (US_AAPL, HK_00700) to strategy format (US.AAPL, HK.00700)."""
+def _bq_to_strategy_symbol(bq_symbol: str, bare: bool = False) -> str:
+    """Convert BQ format (US_AAPL, HK_00700) to strategy format.
+
+    If bare=True, strips the market prefix (HK_00700 → 00700).
+    Otherwise returns US.AAPL / HK.00700 dot format.
+    """
     if "_" in bq_symbol:
         parts = bq_symbol.split("_", 1)
+        if bare:
+            return parts[1]  # bare: just the code without prefix
         return f"{parts[0]}.{parts[1]}"
     return bq_symbol
 
@@ -132,10 +138,15 @@ def compute_short_squeeze_scores(market: str = "hk", symbols: Optional[set[str]]
 
     Returns dict mapping strategy symbol → squeeze score.
     Higher = more squeeze potential.
+
+    Auto-detects bare symbol format (e.g. paper runner strips HK. prefix).
     """
     from google.cloud import bigquery
 
     client = bigquery.Client()
+
+    # Detect if strategy uses bare symbols (paper runner normalizes HK → bare numbers)
+    _bare = bool(symbols) and any(s and s[:1].isdigit() for s in list(symbols)[:5])
 
     # ── 1. Latest daily short ratio per symbol ──
     short_ratios: dict[str, float] = {}
@@ -151,7 +162,7 @@ def compute_short_squeeze_scores(market: str = "hk", symbols: Optional[set[str]]
             ) = 1
         """).result()
         for row in rows:
-            sym = _bq_to_strategy_symbol(row.symbol)
+            sym = _bq_to_strategy_symbol(row.symbol, bare=_bare)
             if symbols and sym not in symbols:
                 continue
             if row.ratio is not None and row.ratio > 0:
@@ -175,7 +186,7 @@ def compute_short_squeeze_scores(market: str = "hk", symbols: Optional[set[str]]
             ) = 1
         """).result()
         for row in rows:
-            sym = _bq_to_strategy_symbol(row.symbol)
+            sym = _bq_to_strategy_symbol(row.symbol, bare=_bare)
             if symbols and sym not in symbols:
                 continue
             if row.value is not None and not (isinstance(row.value, float) and row.value != row.value):
