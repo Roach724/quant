@@ -264,6 +264,9 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   const [templates, setTemplates] = useState<ConfigItem[]>([]);
   const [createTemplate, setCreateTemplate] = useState('');
   const [createExpId, setCreateExpId] = useState('');
+  // Refs to avoid Vite/Rollup minifier confusing state value with setter
+  const _tmplRef = useRef('');
+  const _expIdRef = useRef('');
   const [templatesLoading, setTemplatesLoading] = useState(false);
 
   const loadTemplates = async () => {
@@ -326,18 +329,21 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
   };
 
   const doCreate = async () => {
-    if (!createTemplate) { message.warning('请选择配置模板'); return; }
-    if (!createExpId) { message.warning('请输入 exp_id'); return; }
-    const parts = createExpId.split('_');
+    const tmpl = _tmplRef.current;
+    const expId = _expIdRef.current;
+    if (!tmpl) { message.warning('请选择配置模板'); return; }
+    if (!expId) { message.warning('请输入 exp_id'); return; }
+    const parts = expId.split('_');
     if (parts.length < 2) { message.error('exp_id 格式错误，例如: live_us_ml'); return; }
     try {
       await api.post('/api/admin/experiments/create-from-config', {
-        template: createTemplate, exp_id: createExpId,
+        template: tmpl, exp_id: expId,
         type: parts[0] || 'live', market: parts[1] || 'us',
         strategy: parts[2] || 'ml', version: parseInt(parts[3]?.replace('v','') || '1'),
       });
-      message.success(`Created ${createExpId}`);
+      message.success(`Created ${expId}`);
       setCreateOpen(false); setCreateTemplate(''); setCreateExpId('');
+      _tmplRef.current = ''; _expIdRef.current = '';
       actionRef.current?.reload();
     } catch (e: any) { const msg = e?.response?.data?.detail || e?.message || JSON.stringify(e); message.error(`创建失败: ${msg}`); }
   };
@@ -559,12 +565,12 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
         okText="创建" okButtonProps={{ disabled: !createTemplate || !createExpId }}>
         <Space direction="vertical" style={{ width: '100%' }}>
           <Space><Text strong>模板:</Text>
-            <Select value={createTemplate} onChange={setCreateTemplate} style={{ width: 220 }}
+            <Select value={createTemplate} onChange={(val) => { setCreateTemplate(val); _tmplRef.current = val; }} style={{ width: 220 }}
               loading={templatesLoading} placeholder="选择模板..."
               options={templates.map(t => ({ value: t.name, label: stripYaml(t.name) }))} />
           </Space>
           <Space><Text strong>exp_id:</Text>
-            <Input value={createExpId} onChange={(e) => setCreateExpId(e.target.value)} placeholder="e.g. live_us_ml_v3" style={{ width: 220 }} />
+            <Input value={createExpId} onChange={(e) => { setCreateExpId(e.target.value); _expIdRef.current = e.target.value; }} placeholder="e.g. live_us_ml_v3" style={{ width: 220 }} />
           </Space>
         </Space>
       </Modal>
