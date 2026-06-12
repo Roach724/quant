@@ -180,7 +180,7 @@ const ConfigsTab: React.FC<{ filterPrefix?: string }> = ({ filterPrefix }) => {
         toolBarRender={() => [
           <Button key="new" type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建配置</Button>,
         ]}
-        pagination={false}
+        pagination={{ pageSize: 20, showSizeChanger: true }}
       />
 
       {/* Create Config Modal */}
@@ -557,7 +557,7 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
           <Button key="create" type="primary" icon={<FileAddOutlined />}
             onClick={() => { loadTemplates(); setCreateOpen(true); }}>从模板创建</Button>,
         ]}
-        pagination={false}
+        pagination={{ pageSize: 20, showSizeChanger: true }}
       />
 
       {/* Create from template Modal */}
@@ -595,7 +595,7 @@ const LabTab: React.FC<{ filterType?: string }> = ({ filterType }) => {
               loading={runsLoading}
               size="small"
               columns={runColumns}
-              pagination={false}
+              pagination={{ pageSize: 20, showSizeChanger: true }}
               expandable={{
                 expandedRowRender: (record) => {
                   const details = expandedRunKeys[record.run_id];
