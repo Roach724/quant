@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol
 import uuid
-import random
 
 
 @dataclass
@@ -114,7 +113,7 @@ class PaperBroker:
                 self._orders[oid] = order
             return order
         # Market order: fill immediately
-        fill_price = current_price + random.uniform(-0.5, 0.5)
+        fill_price = current_price  # slippage handled by runner layer
         self._execute_fill(order, fill_price)
         self._orders[oid] = order
         return order
