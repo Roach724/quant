@@ -284,32 +284,42 @@ class LiveRunner:
             logger.info("Resolved %d symbols", len(symbols))
 
     def _init_strategy(self):
-        """Instantiate the configured strategy."""
+        """Instantiate the configured strategy via dynamic import.
+
+        Resolves strategy from the built-in registry (strategies/__init__.py)
+        and passes all strategy-config keys as kwargs.  Falls back to
+        no-arg instantiation + setattr for strategies without **kwargs.
+        """
+        import importlib
         strat_cfg = self.config.get("strategy", {})
         strat_name = strat_cfg.get("name", "SimpleMomentum")
 
-        if strat_name == "MLPrediction":
-            from strategies import MLPrediction
-            self.strategy = MLPrediction(
-                market=strat_cfg.get("market", self._market),
-                top_k=int(strat_cfg.get("top_k", 10)),
-                rebalance_every=int(strat_cfg.get("rebalance_every", 5)),
-                model_type=strat_cfg.get("model_type", "lightgbm"),
-                factor_top_n=int(strat_cfg.get("factor_top_n", 15)),
-                train_start=strat_cfg.get("train_start", "2020-01-01"),
-                train_end=strat_cfg.get("train_end", "2025-12-31"),
-                model_name=strat_cfg.get("model_name", "momentum_lgbm"),
-                model_version=strat_cfg.get("model_version", "latest"),
-            )
-        elif strat_name == "SimpleMomentum":
-            from strategies import SimpleMomentum
-            self.strategy = SimpleMomentum()
-            self.strategy.lookback = int(strat_cfg.get("lookback", 20))
-            self.strategy.top_k = int(strat_cfg.get("top_k", 5))
-            self.strategy.rebalance_every = int(strat_cfg.get("rebalance_every", 5))
-            self.strategy.allocation = float(strat_cfg.get("allocation", 0.0))
-        else:
-            raise ValueError(f"Unknown strategy name: {strat_name}")
+        # Resolve class
+        try:
+            from strategies import get_strategy
+            cls = get_strategy(strat_name)
+        except (ValueError, ImportError):
+            # Also try direct import for strategies not yet in registry
+            try:
+                mod = importlib.import_module(f"strategies.{strat_name}")
+                cls = getattr(mod, strat_name)
+            except (ImportError, AttributeError) as e:
+                raise ValueError(f"Unknown strategy: {strat_name}") from e
+
+        # Build kwargs from config (exclude 'name' and internal keys)
+        kwargs = {k: v for k, v in strat_cfg.items()
+                  if k != "name" and not k.startswith("_")}
+
+        # Try kwargs-first, fallback to setattr
+        try:
+            self.strategy = cls(**kwargs)
+        except TypeError:
+            self.strategy = cls()
+            for k, v in kwargs.items():
+                if hasattr(self.strategy, k):
+                    setattr(self.strategy, k, v)
+
+        logger.info("Strategy initialised: %s", strat_name)
 
         logger.info("Strategy initialised: %s", strat_name)
 
