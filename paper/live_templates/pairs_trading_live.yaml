@@ -1,0 +1,65 @@
+# PairsTrading Live 多日实验配置模板
+# ⚠️ 需要引擎支持做空 (allow_short=True)
+live:
+  market: us
+  mode: live
+  output_dir: output/live/
+
+strategy:
+  name: PairsTrading
+  pairs:                   # ← 必须手动配置对子列表
+    - ["AAPL", "MSFT"]
+    - ["GOOGL", "META"]
+  lookback: 60             # 价差 z-score 窗口
+  entry_z: 2.0             # 入场阈值（|z| > 此值入场）
+  exit_z: 0.5              # 离场阈值（|z| < 此值离场）
+  max_pairs: 5             # 最大同时持仓对子数
+
+broker:
+  paper:
+    initial_capital: 100000
+    slippage_bps: 5
+    commission_bps: 1
+    min_commission: 1.0
+  live:
+    type: paper
+    host: 127.0.0.1
+    port: 11111
+    max_position_pct: 0.2
+    slippage_bps: 5
+    commission_bps: 1
+    min_commission: 1.0
+    initial_capital: 100000
+
+risk:
+  max_drawdown: 0.15
+  max_daily_loss: 0.05
+  position_size_pct: 0.2
+  max_consecutive_failures: 10
+
+schedule:
+  multi_day: true
+  max_trading_days: 5
+  bar_interval: 60
+  pre_market_warmup: 300
+  market_close_offset: 600
+  max_duration_per_day: 390
+
+state:
+  enabled: true
+  dir: /var/quant/state/pairs/
+  checkpoint_interval: 300
+
+experiment:
+  id: pairs_v1
+  name: "PairsTrading — 统计套利配对交易"
+
+observer:
+  log_dir: output/live/
+  snapshot_interval: 60
+  trade_log: true
+  equity_curve: true
+
+dashboard:
+  port: 8090
+  websocket: false

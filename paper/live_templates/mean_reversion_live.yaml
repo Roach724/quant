@@ -1,0 +1,66 @@
+# =============================================================================
+# MeanReversion Live 多日实验配置模板
+# 复制此文件到 Admin 实验配置，修改 experiment.id 和 strategy 参数即可
+# =============================================================================
+live:
+  market: us                # us | hk | crypto
+  mode: live                # live 模式
+  output_dir: output/live/
+
+strategy:
+  name: MeanReversion
+  lookback: 30              # z-score 计算窗口
+  entry_threshold: -1.5     # 超卖买入阈值（z < 此值买入）
+  exit_threshold: 1.5       # 超买卖出阈值（z > 此值卖出）
+  max_hold_bars: 60         # 最大持仓 bar 数（超时强制平仓）
+  top_k: 5                  # 最大持仓数
+  allocation: 0.0           # 0=等权(1/top_k)
+
+broker:
+  paper:
+    initial_capital: 100000
+    slippage_bps: 5
+    commission_bps: 1
+    min_commission: 1.0
+  live:
+    type: paper              # paper=模拟 | futu_stock=实盘
+    host: 127.0.0.1
+    port: 11111
+    max_position_pct: 0.2
+    slippage_bps: 5
+    commission_bps: 1
+    min_commission: 1.0
+    initial_capital: 100000
+
+risk:
+  max_drawdown: 0.15
+  max_daily_loss: 0.05
+  position_size_pct: 0.2
+  max_consecutive_failures: 10
+
+schedule:
+  multi_day: true
+  max_trading_days: 5
+  bar_interval: 60           # bar 间隔（秒），60=1分钟K线
+  pre_market_warmup: 300
+  market_close_offset: 600
+  max_duration_per_day: 390  # 6.5小时
+
+state:
+  enabled: true
+  dir: /var/quant/state/mean_reversion/
+  checkpoint_interval: 300   # 状态保存间隔（秒）
+
+experiment:
+  id: mean_reversion_v1      # ← 修改此 ID
+  name: "MeanReversion — 均值回复基准"
+
+observer:
+  log_dir: output/live/
+  snapshot_interval: 60
+  trade_log: true
+  equity_curve: true
+
+dashboard:
+  port: 8090
+  websocket: false
