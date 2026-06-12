@@ -544,24 +544,23 @@ class LiveRunner:
         else:
             exec_price = price * (1.0 - self._slippage_bps / 10000.0)
 
-        # Commission
-        notional = qty * exec_price
-        commission = max(notional * self._commission_bps / 10000.0, self._min_commission)
+        qty = max(1, int(qty))
 
-        # Cash constraint for buys
+        # Pre-trade cash constraint (estimate using exec_price with slippage)
         if side == "buy":
-            cost = notional + commission
-            if cost > portfolio.cash:
+            est_notional = qty * exec_price
+            est_commission = max(est_notional * self._commission_bps / 10000.0, self._min_commission)
+            est_cost = est_notional + est_commission
+            if est_cost > portfolio.cash:
                 qty = int(portfolio.cash / (exec_price + self._min_commission))
                 if qty <= 0:
                     logger.debug("Insufficient cash for %s buy (cash=%.2f)", symbol, portfolio.cash)
                     return
-
-        qty = max(1, int(qty))
+                qty = max(1, int(qty))
 
         # Submit to broker via OrderManager (async → sync)
-        logger.info("ORDER %s %s %d @ ~%.2f (notional=%.2f commission=%.2f)",
-                    side.upper(), symbol, qty, exec_price, qty * exec_price, commission)
+        logger.info("ORDER %s %s %d @ ~%.2f",
+                    side.upper(), symbol, qty, exec_price)
         tracked = asyncio.run(
             self.order_manager.submit(
                 symbol=symbol,
@@ -586,8 +585,11 @@ class LiveRunner:
         if tracked.state in ("FILLED", "filled") and tracked.filled_qty > 0:
             fill_qty = int(tracked.filled_qty)
             fill_price = float(tracked.avg_fill_price or exec_price)
-            logger.info("FILLED %s %s qty=%d price=%.2f (prior fill qty pre-calced=%d)",
-                        side.upper(), symbol, fill_qty, fill_price, qty)
+            # Commission based on actual fill price (not pre-trade exec_price estimate)
+            notional = fill_qty * fill_price
+            commission = max(notional * self._commission_bps / 10000.0, self._min_commission)
+            logger.info("FILLED %s %s qty=%d price=%.2f (notional=%.2f commission=%.2f)",
+                        side.upper(), symbol, fill_qty, fill_price, notional, commission)
 
             if side == "buy":
                 # Deduct cash
