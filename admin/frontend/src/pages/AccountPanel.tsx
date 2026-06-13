@@ -86,6 +86,13 @@ export default function AccountPanel({ env }: { env: 'sim' | 'real' }) {
 
   return (
     <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <span style={{ fontWeight: 600 }}>账户:</span>
+        <Select value={market} onChange={setMarket} style={{ width: 100 }}
+          options={[{ value: 'hk', label: '🇭🇰 HK' }, { value: 'us', label: '🇺🇸 US' }]} />
+        <Button size="small" onClick={fetchData}>刷新</Button>
+      </div>
+
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={6}><Card><Statistic title="资产净值" value={acct.equity || 0} prefix="$" precision={0} /></Card></Col>
         <Col span={6}><Card><Statistic title="持仓市值" value={acct.market_value || 0} prefix="$" precision={0} /></Card></Col>
@@ -95,14 +102,7 @@ export default function AccountPanel({ env }: { env: 'sim' | 'real' }) {
           valueStyle={{ color: (acct.pnl_pct || 0) >= 0 ? '#3f8600' : '#cf1322' }} /></Card></Col>
       </Row>
 
-      <Card title="下单" size="small" style={{ marginBottom: 16 }}
-        extra={
-          <Space>
-            <Select value={market} onChange={setMarket} style={{ width: 70 }}
-              options={[{ value: 'hk', label: 'HK' }, { value: 'us', label: 'US' }]} />
-            <Button size="small" icon={<span>🔄</span>} onClick={fetchData}>刷新</Button>
-          </Space>
-        }>
+      <Card title="下单" size="small" style={{ marginBottom: 16 }}>
         <Space direction="vertical" style={{ width: '100%' }}>
           <Space>
             <Radio.Group value={side} onChange={e => setSide(e.target.value)}>
