@@ -1,4 +1,8 @@
-"""交易运行器 — 数据源 → 策略信号 → Futu 下单"""
+"""交易运行器 — 数据源 → 策略信号 → Futu 下单
+
+Supports single-session and multi-day modes.
+Multi-day: state persistence across trading days with MarketCalendar awareness.
+"""
 
 from __future__ import annotations
 
@@ -7,9 +11,11 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import yaml
 
 from engine.data import DataFrameSource
 from engine.portfolio import Portfolio
@@ -98,7 +104,6 @@ class TradingRunner:
         if strat.id in self._threads:
             return
 
-        import yaml
         cfg = yaml.safe_load(strat.config_yaml) or {}
         strat_kwargs = cfg.get("strategy", {})
         kwargs = {k: v for k, v in strat_kwargs.items() if k != "name"}
@@ -113,7 +118,7 @@ class TradingRunner:
 
         thread = threading.Thread(
             target=self._run_loop,
-            args=(strat.id, adapter, stop),
+            args=(strat.id, adapter, stop, cfg),
             daemon=True,
             name=f"trading-{strat.id}",
         )
@@ -129,23 +134,35 @@ class TradingRunner:
         strategy_id: int,
         adapter: StrategyAdapter,
         stop: threading.Event,
+        cfg: dict,
     ):
-        """策略主循环"""
+        """策略主循环 — 单日或多多日模式"""
+        schedule = cfg.get("schedule", {})
+        multi_day = schedule.get("multi_day", False)
+
+        if multi_day:
+            self._run_multi_day(strategy_id, adapter, stop, cfg)
+        else:
+            self._run_single_day(strategy_id, adapter, stop)
+    def _run_single_day(
+        self,
+        strategy_id: int,
+        adapter: StrategyAdapter,
+        stop: threading.Event,
+    ):
+        """单日轮询循环"""
         try:
             from live.bq_datasource import BQDataSource
-            from common.normalize import normalize_symbol
 
             market = self._strategies[strategy_id].market
-            # Load symbols from BQ discovery
             source = BQDataSource(
-                symbols=[],  # empty = auto-discover
+                symbols=[],
                 market=market,
                 poll_interval_sec=self.bar_interval,
             )
             source.start()
-            time.sleep(3)  # wait for initial data
+            time.sleep(3)
 
-            # Build initial context
             ctx = None
             bar_count = 0
 
@@ -175,7 +192,6 @@ class TradingRunner:
                             )
                             self._execute_signals(signals, bar_data)
 
-                    # Periodic reconciliation
                     if bar_count > 0 and bar_count % self.reconcile_every == 0:
                         self.state.reconcile_and_continue(strategy_id)
 
@@ -193,6 +209,221 @@ class TradingRunner:
             logger.exception("Strategy %d loop fatal", strategy_id)
         finally:
             logger.info("Strategy %d loop exited", strategy_id)
+
+    def _run_multi_day(
+        self,
+        strategy_id: int,
+        adapter: StrategyAdapter,
+        stop: threading.Event,
+        cfg: dict,
+    ):
+        """多日交易循环 — 跨交易日状态持久化"""
+        schedule = cfg.get("schedule", {})
+        state_cfg = cfg.get("state", {})
+        risk_cfg = cfg.get("risk", {})
+        max_trading_days = int(schedule.get("max_trading_days", 0))
+        max_duration_per_day = int(schedule.get("max_duration_per_day", 390))
+        max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))
+        bar_interval = int(schedule.get("bar_interval", self.bar_interval))
+
+        try:
+            from live.bq_datasource import BQDataSource
+            from live.market_calendar import MarketCalendar
+            from live.state import StateManager
+
+            market = self._strategies[strategy_id].market
+            calendar = MarketCalendar(market)
+
+            # ── State persistence ──
+            state_dir = state_cfg.get("dir", f"/var/quant/trading/state/strategy_{strategy_id}/")
+            state_mgr = None
+            if state_cfg.get("enabled", True):
+                state_mgr = StateManager(state_dir)
+
+            # ── Load or init state ──
+            trading_day = 0
+            bar_count = 0
+            peak_equity = 0.0
+            if state_mgr and state_mgr.exists():
+                try:
+                    saved = state_mgr.load()
+                    trading_day = saved.get("trading_day", 0)
+                    bar_count = saved.get("live_state", {}).get("bar_count", 0)
+                    peak_equity = saved.get("live_state", {}).get("peak_equity", 0.0)
+                    logger.info(
+                        "Strategy %d: restored multi-day state (day=%d, bars=%d)",
+                        strategy_id, trading_day, bar_count,
+                    )
+                except Exception:
+                    logger.warning("Strategy %d: failed to load state, starting fresh", strategy_id)
+
+            # ── BQ data source ──
+            source = BQDataSource(
+                symbols=[],
+                market=market,
+                poll_interval_sec=bar_interval,
+            )
+            source.start()
+            time.sleep(3)
+
+            ctx = None
+            daily_start_equity = 0.0
+            stop_reason = None
+            max_bars_per_day = max_duration_per_day * 60 // bar_interval if bar_interval > 0 else 390
+
+            logger.info(
+                "Strategy %d: multi-day loop starting (day %d, max_days=%d, max_bars/day=%d)",
+                strategy_id, trading_day + 1, max_trading_days, max_bars_per_day,
+            )
+
+            while not stop.is_set():
+                trading_day += 1
+
+                # Check max trading days
+                if max_trading_days > 0 and trading_day > max_trading_days:
+                    logger.info("Strategy %d: max_trading_days=%d reached", strategy_id, max_trading_days)
+                    stop_reason = "MAX_TRADING_DAYS"
+                    break
+
+                # Wait for market open
+                self._wait_for_market_open(calendar, bar_interval)
+                if stop.is_set():
+                    break
+
+                # Check if checkpoint exists (crash recovery)
+                if state_mgr and state_mgr.checkpoint_exists():
+                    try:
+                        cp = state_mgr.load_checkpoint()
+                        if cp:
+                            bar_count = cp.get("live_state", {}).get("bar_count", bar_count)
+                            peak_equity = cp.get("live_state", {}).get("peak_equity", peak_equity)
+                            logger.info("Strategy %d: recovered from checkpoint", strategy_id)
+                    except Exception:
+                        logger.warning("Strategy %d: failed to load checkpoint", strategy_id)
+
+                daily_start_equity = 0.0
+                day_bars = 0
+                day_stop_reason = None
+
+                logger.info("Strategy %d: ── Day %d starting ──", strategy_id, trading_day)
+
+                # ── Run one trading day ──
+                while not stop.is_set() and day_bars < max_bars_per_day:
+                    try:
+                        # Check if market is still open
+                        if not calendar.is_open_now():
+                            day_stop_reason = "market_close"
+                            break
+
+                        bar_data = source.get_latest()
+                        if bar_data is None:
+                            time.sleep(bar_interval)
+                            continue
+
+                        close_prices = bar_data.get("close", {})
+                        symbols = list(close_prices.keys())
+
+                        if adapter._strategy is None and symbols:
+                            ctx = self._make_context(bar_data, symbols)
+                            adapter.load(symbols, ctx)
+
+                        if adapter._strategy and ctx:
+                            ctx._set_bar_data(bar_data)
+                            signals = adapter.generate_signals(ctx, bar_count, strategy_id)
+                            if signals:
+                                logger.info(
+                                    "Strategy %d: %d signals at bar %d (day %d)",
+                                    strategy_id, len(signals), bar_count, trading_day,
+                                )
+                                self._execute_signals(signals, bar_data)
+
+                        # Checkpoint periodically
+                        checkpoint_interval = int(state_cfg.get("checkpoint_interval", 300))
+                        if state_mgr and bar_count > 0 and bar_count % checkpoint_interval == 0:
+                            state_mgr.save_checkpoint(
+                                None,  # portfolio not tracked yet
+                                {
+                                    "trading_day": trading_day,
+                                    "bar_count": bar_count,
+                                    "peak_equity": peak_equity,
+                                    "daily_start_equity": daily_start_equity,
+                                },
+                            )
+
+                        day_bars += 1
+                        bar_count += 1
+                        time.sleep(bar_interval)
+
+                    except Exception:
+                        logger.exception(
+                            "Strategy %d: multi-day error at bar %d (day %d)",
+                            strategy_id, bar_count, trading_day,
+                        )
+                        time.sleep(bar_interval)
+                        day_bars += 1
+                        bar_count += 1
+
+                # ── End of day: save state ──
+                logger.info(
+                    "Strategy %d: ── Day %d ended (%s) ── bars=%d",
+                    strategy_id, trading_day, day_stop_reason or "max_bars", day_bars,
+                )
+
+                if state_mgr:
+                    try:
+                        state_mgr.save(
+                            None,  # portfolio not tracked yet
+                            None,  # position_tracker not tracked yet
+                            {
+                                "trading_day": trading_day,
+                                "bar_count": bar_count,
+                                "peak_equity": peak_equity,
+                                "daily_start_equity": daily_start_equity,
+                                "stop_reason": day_stop_reason,
+                                "last_bq_ts": str(datetime.now(timezone.utc)),
+                            },
+                        )
+                        state_mgr.clear_checkpoint()
+                        logger.debug("Strategy %d: state saved for day %d", strategy_id, trading_day)
+                    except Exception:
+                        logger.exception("Strategy %d: failed to save state", strategy_id)
+
+                # Check stop conditions
+                if day_stop_reason and day_stop_reason not in ("market_close", "max_bars"):
+                    stop_reason = day_stop_reason
+                    break
+
+                # Check max drawdown (placeholder — will be accurate when portfolio is tracked)
+                if peak_equity > 0 and max_drawdown > 0:
+                    current_dd = 0.0  # TODO: compute from actual portfolio equity
+                    if current_dd >= max_drawdown:
+                        stop_reason = f"MAX_DRAWDOWN ({current_dd*100:.1f}%)"
+                        logger.warning("Strategy %d: %s", strategy_id, stop_reason)
+                        break
+
+            logger.info(
+                "Strategy %d: multi-day loop complete (%s)",
+                strategy_id, stop_reason or "stopped",
+            )
+
+        except Exception:
+            logger.exception("Strategy %d: multi-day loop fatal", strategy_id)
+        finally:
+            logger.info("Strategy %d: multi-day loop exited", strategy_id)
+
+    @staticmethod
+    def _wait_for_market_open(calendar, poll_sec: int = 60):
+        """Sleep until market opens, polling every poll_sec seconds."""
+        while True:
+            if calendar.is_open_now():
+                return
+            next_open = calendar.next_open_datetime()
+            if next_open:
+                wait_sec = max((next_open - datetime.now(timezone.utc)).total_seconds(), poll_sec)
+            else:
+                wait_sec = poll_sec
+            logger.debug("Waiting for market open — sleeping %d s", int(wait_sec))
+            time.sleep(min(wait_sec, poll_sec))
 
     def _make_context(
         self, bar_data: dict, symbols: list[str],
