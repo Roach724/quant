@@ -793,10 +793,10 @@ from futu import TrdEnv
 
 
 @app.get("/api/admin/trading/account/{env}")
-def admin_trading_account(env: str):
+def admin_trading_account(env: str, market: str = "hk"):
     """获取模拟/真实账户概览"""
     trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
-    broker = FutuStockBroker(trd_env=trd_env)
+    broker = FutuStockBroker(trd_env=trd_env, market=market)
     async def _get():
         acct = await broker.get_account()
         positions = await broker.get_positions()
@@ -820,10 +820,10 @@ def admin_trading_account(env: str):
 
 
 @app.get("/api/admin/trading/orders/{env}")
-def admin_trading_orders(env: str):
+def admin_trading_orders(env: str, market: str = "hk"):
     """获取订单列表"""
     trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
-    broker = FutuStockBroker(trd_env=trd_env)
+    broker = FutuStockBroker(trd_env=trd_env, market=market)
     async def _get():
         pending = await broker.get_open_orders()
         broker._get_ctx().close()
@@ -842,7 +842,7 @@ def admin_trading_orders(env: str):
 def admin_trading_place_order(env: str, body: dict = Body(...)):
     """手动下单"""
     trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
-    broker = FutuStockBroker(trd_env=trd_env)
+    broker = FutuStockBroker(trd_env=trd_env, market=body.get("market", "hk"))
     async def _place():
         order = await broker.submit_order(
             symbol=body["symbol"], side=body["side"],
@@ -857,10 +857,10 @@ def admin_trading_place_order(env: str, body: dict = Body(...)):
 
 
 @app.post("/api/admin/trading/order/{env}/cancel/{order_id}")
-def admin_trading_cancel_order(env: str, order_id: str):
+def admin_trading_cancel_order(env: str, order_id: str, market: str = "hk"):
     """撤单"""
     trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
-    broker = FutuStockBroker(trd_env=trd_env)
+    broker = FutuStockBroker(trd_env=trd_env, market=market)
     async def _cancel():
         ok = await broker.cancel_order(order_id)
         broker._get_ctx().close()

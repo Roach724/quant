@@ -14,13 +14,14 @@ export default function AccountPanel({ env }: { env: 'sim' | 'real' }) {
   const [price, setPrice] = useState(0);
   const [qty, setQty] = useState(100);
   const [loading, setLoading] = useState(false);
+  const [market, setMarket] = useState('hk');
 
   const fetchData = async () => {
     setLoading(true);
     try {
       const [a, o] = await Promise.all([
-        api.get(`/api/admin/trading/account/${env}`),
-        api.get(`/api/admin/trading/orders/${env}`),
+        api.get(`/api/admin/trading/account/${env}?market=${market}`),
+        api.get(`/api/admin/trading/orders/${env}?market=${market}`),
       ]);
       setAcct(a); setOrders(o);
     } catch { message.error('加载失败'); }
@@ -31,13 +32,13 @@ export default function AccountPanel({ env }: { env: 'sim' | 'real' }) {
     fetchData();
     const i = setInterval(fetchData, 10000);
     return () => clearInterval(i);
-  }, [env]);
+  }, [env, market]);
 
   const placeOrder = async () => {
     if (!symbol) { message.warning('请输入代码'); return; }
     try {
       const r = await api.post(`/api/admin/trading/order/${env}`, {
-        symbol, side, qty,
+        symbol, side, qty, market,
         order_type: orderType,
         limit_price: orderType === 'limit' ? price : undefined,
       });
@@ -48,7 +49,7 @@ export default function AccountPanel({ env }: { env: 'sim' | 'real' }) {
 
   const cancelOrder = async (orderId: string) => {
     try {
-      await api.post(`/api/admin/trading/order/${env}/cancel/${orderId}`);
+      await api.post(`/api/admin/trading/order/${env}/cancel/${orderId}?market=${market}`);
       message.success(`已撤单: ${orderId}`);
       fetchData();
     } catch (e: any) { message.error(`撤单失败: ${e.message}`); }
@@ -97,6 +98,9 @@ export default function AccountPanel({ env }: { env: 'sim' | 'real' }) {
       <Card title="下单" size="small" style={{ marginBottom: 16 }}>
         <Space direction="vertical" style={{ width: '100%' }}>
           <Space>
+            <span>市场:</span>
+            <Select value={market} onChange={setMarket} style={{ width: 70 }}
+              options={[{ value: 'hk', label: 'HK' }, { value: 'us', label: 'US' }]} />
             <Radio.Group value={side} onChange={e => setSide(e.target.value)}>
               <Radio.Button value="buy" style={{ color: '#3f8600' }}>买入</Radio.Button>
               <Radio.Button value="sell" style={{ color: '#cf1322' }}>卖出</Radio.Button>

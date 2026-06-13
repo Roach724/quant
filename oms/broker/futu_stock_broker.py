@@ -11,6 +11,7 @@ from futu import (
     OrderType,
     SecurityFirm,
     TrdEnv,
+    TrdMarket,
     TrdSide,
 )
 
@@ -33,16 +34,20 @@ class FutuStockBroker:
         port: Optional[int] = None,
         trd_env: TrdEnv = TrdEnv.SIMULATE,
         security_firm: SecurityFirm = SecurityFirm.FUTUSECURITIES,
+        market: str = "hk",
     ):
         self.host = host or os.environ.get("OPEND_HOST", "127.0.0.1")
         self.port = port or int(os.environ.get("OPEND_PORT", "11111"))
         self.trd_env = trd_env
         self.security_firm = security_firm
+        self.market = market
         self._ctx: Optional[OpenSecTradeContext] = None
 
     def _get_ctx(self) -> OpenSecTradeContext:
         if self._ctx is None:
+            trd_market = TrdMarket.HK if self.market == "hk" else TrdMarket.US
             self._ctx = OpenSecTradeContext(
+                filter_trdmarket=trd_market,
                 host=self.host,
                 port=self.port,
                 security_firm=self.security_firm,
