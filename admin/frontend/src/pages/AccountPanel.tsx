@@ -30,7 +30,7 @@ export default function AccountPanel({ env }: { env: 'sim' | 'real' }) {
 
   useEffect(() => {
     fetchData();
-    const i = setInterval(fetchData, 10000);
+    const i = setInterval(fetchData, 600000);
     return () => clearInterval(i);
   }, [env, market]);
 
@@ -95,12 +95,16 @@ export default function AccountPanel({ env }: { env: 'sim' | 'real' }) {
           valueStyle={{ color: (acct.pnl_pct || 0) >= 0 ? '#3f8600' : '#cf1322' }} /></Card></Col>
       </Row>
 
-      <Card title="下单" size="small" style={{ marginBottom: 16 }}>
-        <Space direction="vertical" style={{ width: '100%' }}>
+      <Card title="下单" size="small" style={{ marginBottom: 16 }}
+        extra={
           <Space>
-            <span>市场:</span>
             <Select value={market} onChange={setMarket} style={{ width: 70 }}
               options={[{ value: 'hk', label: 'HK' }, { value: 'us', label: 'US' }]} />
+            <Button size="small" icon={<span>🔄</span>} onClick={fetchData}>刷新</Button>
+          </Space>
+        }>
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Space>
             <Radio.Group value={side} onChange={e => setSide(e.target.value)}>
               <Radio.Button value="buy" style={{ color: '#3f8600' }}>买入</Radio.Button>
               <Radio.Button value="sell" style={{ color: '#cf1322' }}>卖出</Radio.Button>
