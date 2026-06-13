@@ -161,9 +161,9 @@ def admin_system_status():
     import subprocess, os
     ws_status = "unknown"
     try:
-        r = subprocess.run(["systemctl", "is-active", "ws-collector"],
-                          capture_output=True, text=True, timeout=3)
-        ws_status = r.stdout.strip() if r.returncode == 0 else "inactive"
+        r = subprocess.run(["supervisorctl", "status", "ws_collector"],
+                          capture_output=True, text=True, timeout=5)
+        ws_status = "running" if "RUNNING" in r.stdout else "inactive"
     except Exception:
         pass
     cpu_pct = "?"
