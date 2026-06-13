@@ -1033,6 +1033,17 @@ class LiveRunner:
                 market=self._market,
                 poll_interval_sec=poll_interval,
             )
+            # Day N resume (N > 1) after restart: don't backfill, start from now.
+            # Otherwise BQDataSource replays historical bars → strategy.on_bar
+            # re-generates signals → positions double → equity inflates.
+            if live_state.get("trading_day", 1) > 1:
+                self._bq_source.last_ts = datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                logger.info(
+                    "Resume day %d — skipping backfill, starting from %s",
+                    live_state["trading_day"], self._bq_source.last_ts,
+                )
         else:
             # Resume from previous day — restore last_ts
             if live_state.get("last_bq_ts"):
