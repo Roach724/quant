@@ -26,7 +26,7 @@ export default function StrategyPanel({ env, onJumpToDashboard }: { env: string;
 
   const openDetail = async (strat: any) => {
     setDetail(strat); setDrawerOpen(true); setDetailLoading(true);
-    try { const t = await api.get(`/api/admin/trading/strategies/${strat.id}/trades`); setTrades(t || []); }
+    try { const t = await api.get(`/api/admin/trading/strategies/${strat.id}/trades?env=${env}`); setTrades(t || []); }
     catch { setTrades([]); } finally { setDetailLoading(false); }
   };
 
@@ -36,7 +36,7 @@ export default function StrategyPanel({ env, onJumpToDashboard }: { env: string;
 
   const saveEdit = async () => {
     try {
-      await api.put(`/api/admin/trading/strategies/${detail.id}`, { config_yaml: editContent, name: editName });
+      await api.put(`/api/admin/trading/strategies/${detail.id}?env=${env}`, { config_yaml: editContent, name: editName });
       message.success('Saved'); setEditOpen(false);
       // Refresh detail
       setDetail({ ...detail, name: editName, config_yaml: editContent });
@@ -45,7 +45,7 @@ export default function StrategyPanel({ env, onJumpToDashboard }: { env: string;
   };
 
   const deleteStrat = async (id: number) => {
-    await api.del(`/api/admin/trading/strategies/${id}`);
+    await api.del(`/api/admin/trading/strategies/${id}?env=${env}`);
     message.success('Deleted'); actionRef.current?.reload();
     setDrawerOpen(false);
   };
@@ -66,8 +66,8 @@ export default function StrategyPanel({ env, onJumpToDashboard }: { env: string;
           <Button size="small" icon={<DashboardOutlined />} onClick={() => onJumpToDashboard(r.id)}>看板</Button>
           {r.status !== 'running'
             ? <Button size="small" type="primary" icon={<PlayCircleOutlined />}
-                onClick={async () => { await api.post(`/api/admin/trading/strategies/${r.id}/start`); actionRef.current?.reload(); }}>启动</Button>
-            : <Popconfirm title="停止？" onConfirm={async () => { await api.post(`/api/admin/trading/strategies/${r.id}/stop`); actionRef.current?.reload(); }}>
+                onClick={async () => { await api.post(`/api/admin/trading/strategies/${r.id}/start?env=${env}`); actionRef.current?.reload(); }}>启动</Button>
+            : <Popconfirm title="停止？" onConfirm={async () => { await api.post(`/api/admin/trading/strategies/${r.id}/stop?env=${env}`); actionRef.current?.reload(); }}>
                 <Button size="small" danger icon={<PauseCircleOutlined />}>停止</Button></Popconfirm>}
         </Space>
       ),
@@ -89,13 +89,13 @@ export default function StrategyPanel({ env, onJumpToDashboard }: { env: string;
         headerTitle={env === 'sim' ? '模拟策略' : '实盘策略'}
         actionRef={actionRef} rowKey="id" search={false} columns={columns}
         pagination={{ pageSize: 20, showSizeChanger: true }}
-        request={async () => { const d = await api.get('/api/admin/trading/strategies'); return { data: d, success: true, total: d.length }; }}
+        request={async () => { const d = await api.get('/api/admin/trading/strategies?env='+env); return { data: d, success: true, total: d.length }; }}
         toolBarRender={() => [
           <Button key="new" type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建策略</Button>,
         ]}
       />
       <Modal title="新建策略" open={createOpen} onCancel={() => setCreateOpen(false)}
-        onOk={async () => { const v = await form.validateFields(); await api.post('/api/admin/trading/strategies', v); message.success('Created'); setCreateOpen(false); actionRef.current?.reload(); }}>
+        onOk={async () => { const v = await form.validateFields(); await api.post('/api/admin/trading/strategies?env='+env, { ...v, env }); message.success('Created'); setCreateOpen(false); actionRef.current?.reload(); }}>
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="market" label="市场" initialValue="us"><Select options={[{value:'us',label:'US'},{value:'hk',label:'HK'}]} /></Form.Item>

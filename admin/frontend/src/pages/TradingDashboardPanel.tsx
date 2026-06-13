@@ -14,14 +14,14 @@ export default function TradingDashboardPanel({ env, preSelectedId }: { env: str
   const selected = strategies.find(s => s.id === selectedId);
 
   useEffect(() => {
-    api.get('/api/admin/trading/strategies').then(setStrategies).catch(() => {});
+    api.get('/api/admin/trading/strategies?env='+env).then(setStrategies).catch(() => {});
   }, [env]);
 
   useEffect(() => {
     if (!selectedId) { setTrades([]); return; }
     setLoading(true);
     Promise.all([
-      api.get(`/api/admin/trading/strategies/${selectedId}/trades`),
+      api.get(`/api/admin/trading/strategies/${selectedId}/trades?env=${env}`),
     ]).then(([t]) => { setTrades(t || []); }).catch(() => {})
       .finally(() => setLoading(false));
   }, [selectedId]);

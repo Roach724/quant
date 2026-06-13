@@ -131,10 +131,10 @@ def _sync_crontab():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    # Ensure trading tables exist in the same DB
-    from trading.models import Base as TradingBase
-    from admin.models import engine
-    TradingBase.metadata.create_all(engine)
+    # Ensure trading tables exist (sim + real, physically separate DBs)
+    from trading import init_db as init_trading_db
+    for env in ("sim", "real"):
+        init_trading_db(env)
     _startup_auto_heal()
     _init_cache_modules()
     _cleanup_stuck_cron_runs()
@@ -705,13 +705,14 @@ def admin_experiment_config_get(name: str):
 # ── Trading API ──
 # ═══════════════════════════════════════════════════════════════════════════════
 
+from trading import get_trading_session
 from trading.models import TradingStrategy as TSModel, VirtualAccount, VirtualPosition, TradeRecord
 
 
 @app.get("/api/admin/trading/strategies")
-def admin_trading_strategies():
-    """列出所有交易策略"""
-    session = get_session()
+def admin_trading_strategies(env: str = "sim"):
+    """列出交易策略"""
+    session = get_trading_session(env)
     strats = session.query(TSModel).all()
     result = []
     for s in strats:
@@ -731,9 +732,9 @@ def admin_trading_strategies():
 
 
 @app.post("/api/admin/trading/strategies")
-def admin_trading_create_strategy(body: dict = Body(...)):
+def admin_trading_create_strategy(body: dict = Body(...), env: str = "sim"):
     """创建交易策略"""
-    session = get_session()
+    session = get_trading_session(env)
     strat = TSModel(
         name=body["name"], market=body["market"],
         strategy_class=body["strategy_class"],
@@ -747,9 +748,9 @@ def admin_trading_create_strategy(body: dict = Body(...)):
 
 
 @app.post("/api/admin/trading/strategies/{strategy_id}/start")
-def admin_trading_start_strategy(strategy_id: int):
+def admin_trading_start_strategy(strategy_id: int, env: str = "sim"):
     """启动交易策略"""
-    session = get_session()
+    session = get_trading_session(env)
     strat = session.get(TSModel, strategy_id)
     if not strat:
         raise HTTPException(404, "Strategy not found")
@@ -760,9 +761,9 @@ def admin_trading_start_strategy(strategy_id: int):
 
 
 @app.post("/api/admin/trading/strategies/{strategy_id}/stop")
-def admin_trading_stop_strategy(strategy_id: int):
+def admin_trading_stop_strategy(strategy_id: int, env: str = "sim"):
     """停止交易策略"""
-    session = get_session()
+    session = get_trading_session(env)
     strat = session.get(TSModel, strategy_id)
     if not strat:
         raise HTTPException(404, "Strategy not found")
@@ -773,9 +774,9 @@ def admin_trading_stop_strategy(strategy_id: int):
 
 
 @app.get("/api/admin/trading/strategies/{strategy_id}/trades")
-def admin_trading_trades(strategy_id: int, limit: int = 100):
+def admin_trading_trades(strategy_id: int, limit: int = 100, env: str = "sim"):
     """策略交易记录"""
-    session = get_session()
+    session = get_trading_session(env)
     trades = session.query(TradeRecord).filter_by(
         strategy_id=strategy_id
     ).order_by(TradeRecord.created_at.desc()).limit(limit).all()
@@ -787,9 +788,9 @@ def admin_trading_trades(strategy_id: int, limit: int = 100):
 
 
 @app.delete("/api/admin/trading/strategies/{strategy_id}")
-def admin_trading_delete_strategy(strategy_id: int):
+def admin_trading_delete_strategy(strategy_id: int, env: str = "sim"):
     """删除交易策略"""
-    session = get_session()
+    session = get_trading_session(env)
     strat = session.get(TSModel, strategy_id)
     if not strat:
         raise HTTPException(404, "Strategy not found")
@@ -803,9 +804,9 @@ def admin_trading_delete_strategy(strategy_id: int):
 
 
 @app.put("/api/admin/trading/strategies/{strategy_id}")
-def admin_trading_update_strategy(strategy_id: int, body: dict = Body(...)):
+def admin_trading_update_strategy(strategy_id: int, body: dict = Body(...), env: str = "sim"):
     """更新策略配置"""
-    session = get_session()
+    session = get_trading_session(env)
     strat = session.get(TSModel, strategy_id)
     if not strat:
         raise HTTPException(404, "Strategy not found")
