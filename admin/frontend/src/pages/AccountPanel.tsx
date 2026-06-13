@@ -46,6 +46,14 @@ export default function AccountPanel({ env }: { env: 'sim' | 'real' }) {
     } catch (e: any) { message.error(`下单失败: ${e.message}`); }
   };
 
+  const cancelOrder = async (orderId: string) => {
+    try {
+      await api.post(`/api/admin/trading/order/${env}/cancel/${orderId}`);
+      message.success(`已撤单: ${orderId}`);
+      fetchData();
+    } catch (e: any) { message.error(`撤单失败: ${e.message}`); }
+  };
+
   const posCols = [
     { title: '代码', dataIndex: 'symbol', width: 100 },
     { title: '市值', dataIndex: 'market_value', render: (v: number) => `$${v?.toLocaleString()}` },
@@ -67,7 +75,12 @@ export default function AccountPanel({ env }: { env: 'sim' | 'real' }) {
     { title: '方向', dataIndex: 'side', width: 50, render: (v: string) => <Tag color={v === 'buy' ? 'green' : 'red'}>{v?.toUpperCase()}</Tag> },
     { title: '数量', dataIndex: 'qty', width: 60 },
     { title: '类型', dataIndex: 'order_type', width: 60 },
-    { title: '时间', dataIndex: 'created_at', width: 160 },
+    { title: '时间', dataIndex: 'created_at', width: 140 },
+    { title: '操作', key: 'act', width: 60, render: (_: any, r: any) =>
+      r.status === 'submitted' || r.status === 'pending'
+        ? <Button size="small" danger onClick={() => cancelOrder(r.broker_id)}>撤单</Button>
+        : null
+    },
   ];
 
   return (

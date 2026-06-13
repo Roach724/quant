@@ -856,6 +856,19 @@ def admin_trading_place_order(env: str, body: dict = Body(...)):
     return asyncio.run(_place())
 
 
+@app.post("/api/admin/trading/order/{env}/cancel/{order_id}")
+def admin_trading_cancel_order(env: str, order_id: str):
+    """撤单"""
+    trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
+    broker = FutuStockBroker(trd_env=trd_env)
+    async def _cancel():
+        ok = await broker.cancel_order(order_id)
+        broker._get_ctx().close()
+        return {"order_id": order_id, "cancelled": ok}
+    import asyncio
+    return asyncio.run(_cancel())
+
+
 @app.put("/api/admin/experiments/configs/{name}")
 def admin_experiment_config_put(name: str, body: dict = Body(...)):
     """Create or update a config template file. Backs up existing."""
