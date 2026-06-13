@@ -6,12 +6,13 @@ import {
 } from 'antd';
 import {
   PlayCircleOutlined, PauseCircleOutlined, PlusOutlined,
-  DeleteOutlined, EyeOutlined,
+  DeleteOutlined, EyeOutlined, EditOutlined,
+  DashboardOutlined,
 } from '@ant-design/icons';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
 import { api } from '../api';
 
-export default function StrategyPanel({ env }: { env: string }) {
+export default function StrategyPanel({ env, onJumpToDashboard }: { env: string; onJumpToDashboard: (id: number) => void }) {
   const actionRef = useRef<ActionType>(undefined);
   const [createOpen, setCreateOpen] = useState(false);
   const [form] = Form.useForm();
@@ -19,11 +20,28 @@ export default function StrategyPanel({ env }: { env: string }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [trades, setTrades] = useState<any[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editContent, setEditContent] = useState('');
+  const [editName, setEditName] = useState('');
 
   const openDetail = async (strat: any) => {
     setDetail(strat); setDrawerOpen(true); setDetailLoading(true);
     try { const t = await api.get(`/api/admin/trading/strategies/${strat.id}/trades`); setTrades(t || []); }
     catch { setTrades([]); } finally { setDetailLoading(false); }
+  };
+
+  const openEdit = (strat: any) => {
+    setEditName(strat.name); setEditContent(strat.config_yaml || ''); setEditOpen(true);
+  };
+
+  const saveEdit = async () => {
+    try {
+      await api.put(`/api/admin/trading/strategies/${detail.id}`, { config_yaml: editContent, name: editName });
+      message.success('Saved'); setEditOpen(false);
+      // Refresh detail
+      setDetail({ ...detail, name: editName, config_yaml: editContent });
+      actionRef.current?.reload();
+    } catch (e: any) { message.error(`Save failed: ${e.message}`); }
   };
 
   const deleteStrat = async (id: number) => {
@@ -41,10 +59,11 @@ export default function StrategyPanel({ env }: { env: string }) {
     { title: '权益', dataIndex: 'equity', render: (_: any, r: any) => `$${r.equity?.toLocaleString()}` },
     { title: '持仓', dataIndex: 'positions' },
     {
-      title: '操作', key: 'actions', width: 220,
+      title: '操作', key: 'actions', width: 280,
       render: (_: any, r: any) => (
         <Space>
           <Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(r)}>详情</Button>
+          <Button size="small" icon={<DashboardOutlined />} onClick={() => onJumpToDashboard(r.id)}>看板</Button>
           {r.status !== 'running'
             ? <Button size="small" type="primary" icon={<PlayCircleOutlined />}
                 onClick={async () => { await api.post(`/api/admin/trading/strategies/${r.id}/start`); actionRef.current?.reload(); }}>启动</Button>
@@ -89,16 +108,28 @@ export default function StrategyPanel({ env }: { env: string }) {
         extra={
           <Space>
             {detail && (
-              <Popconfirm title="永久删除？将清除所有关联数据和持仓" onConfirm={() => deleteStrat(detail.id)} okButtonProps={{ danger: true }}>
-                <Button danger icon={<DeleteOutlined />}>删除</Button>
-              </Popconfirm>
+              <>
+                <Button icon={<EditOutlined />} onClick={() => openEdit(detail)}>编辑</Button>
+                <Button icon={<DashboardOutlined />} onClick={() => { onJumpToDashboard(detail.id); setDrawerOpen(false); }}>量化看板</Button>
+                <Popconfirm title="永久删除？" onConfirm={() => deleteStrat(detail.id)} okButtonProps={{ danger: true }}>
+                  <Button danger icon={<DeleteOutlined />}>删除</Button>
+                </Popconfirm>
+              </>
             )}
           </Space>
         }>
         {detail && (
           <Spin spinning={detailLoading}>
             <Table
-              dataSource={[{ label: '市场', value: detail.market?.toUpperCase() }, { label: '策略类', value: detail.strategy_class }, { label: '状态', value: detail.status }, { label: '分配资金', value: `$${detail.capital_allocated?.toLocaleString()}` }, { label: '现金', value: `$${detail.cash?.toLocaleString()}` }, { label: '权益', value: `$${detail.equity?.toLocaleString()}` }, { label: '持仓数', value: detail.positions || 0 }]}
+              dataSource={[
+                { label: '市场', value: detail.market?.toUpperCase() },
+                { label: '策略类', value: detail.strategy_class },
+                { label: '状态', value: detail.status },
+                { label: '分配资金', value: `$${detail.capital_allocated?.toLocaleString()}` },
+                { label: '现金', value: `$${detail.cash?.toLocaleString()}` },
+                { label: '权益', value: `$${detail.equity?.toLocaleString()}` },
+                { label: '持仓数', value: detail.positions || 0 },
+              ]}
               columns={[
                 { title: '字段', dataIndex: 'label', width: 120 },
                 { title: '值', dataIndex: 'value' },
@@ -114,6 +145,13 @@ export default function StrategyPanel({ env }: { env: string }) {
             />
           </Spin>
         )}
+      </Drawer>
+
+      <Drawer title={`编辑 ${editName}`} open={editOpen} onClose={() => setEditOpen(false)} width={600}
+        extra={<Button type="primary" onClick={saveEdit}>保存</Button>}>
+        <Input addonBefore="名称" value={editName} onChange={e => setEditName(e.target.value)} style={{ marginBottom: 12 }} />
+        <Input.TextArea value={editContent} onChange={e => setEditContent(e.target.value)}
+          rows={25} style={{ fontFamily: 'monospace', fontSize: 12 }} placeholder="YAML 配置..." />
       </Drawer>
     </>
   );

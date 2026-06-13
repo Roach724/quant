@@ -802,6 +802,24 @@ def admin_trading_delete_strategy(strategy_id: int):
     return {"status": "ok", "deleted": strategy_id}
 
 
+@app.put("/api/admin/trading/strategies/{strategy_id}")
+def admin_trading_update_strategy(strategy_id: int, body: dict = Body(...)):
+    """更新策略配置"""
+    session = get_session()
+    strat = session.get(TSModel, strategy_id)
+    if not strat:
+        raise HTTPException(404, "Strategy not found")
+    if "name" in body:
+        strat.name = body["name"]
+    if "config_yaml" in body:
+        strat.config_yaml = body["config_yaml"]
+    if "capital_allocated" in body:
+        strat.capital_allocated = float(body["capital_allocated"])
+    strat.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    return {"status": "ok", "strategy_id": strategy_id}
+
+
 # ── Trading Account API (Task 11) ──
 
 from oms.broker.futu_stock_broker import FutuStockBroker
@@ -1984,7 +2002,7 @@ def admin_cron_history(index: int, command: str = Query(""), name: str = Query("
 # ── Log Browser ───────────────────────────────────────────────────────────────
 
 LOG_ROOTS = ["/var/log/quant/prod", "/var/log/quant/dev"]
-LOG_MODULES = ["collector", "live", "paper_run", "factor", "cron", "train", "loader", "backfill", "quality", "adhoc"]
+LOG_MODULES = ["collector", "live", "paper_run", "factor", "cron", "train", "loader", "backfill", "quality", "adhoc", "trading_sim", "trading_prod"]
 
 
 def _module_log_files(module: str) -> list[str]:

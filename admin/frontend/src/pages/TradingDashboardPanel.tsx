@@ -5,9 +5,9 @@ import { api } from '../api';
 
 interface Strategy { id: number; name: string; market: string; status: string; strategy_class: string; capital_allocated: number; cash: number; equity: number; positions: number; }
 
-export default function TradingDashboardPanel({ env }: { env: string }) {
+export default function TradingDashboardPanel({ env, preSelectedId }: { env: string; preSelectedId?: number }) {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [selectedId, setSelectedId] = useState<number | undefined>();
+  const [selectedId, setSelectedId] = useState<number | undefined>(preSelectedId);
   const [trades, setTrades] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
