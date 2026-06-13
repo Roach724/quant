@@ -786,6 +786,22 @@ def admin_trading_trades(strategy_id: int, limit: int = 100):
     } for t in trades]
 
 
+@app.delete("/api/admin/trading/strategies/{strategy_id}")
+def admin_trading_delete_strategy(strategy_id: int):
+    """删除交易策略"""
+    session = get_session()
+    strat = session.get(TSModel, strategy_id)
+    if not strat:
+        raise HTTPException(404, "Strategy not found")
+    # Clean up related records
+    session.query(VirtualPosition).filter_by(strategy_id=strategy_id).delete()
+    session.query(VirtualAccount).filter_by(strategy_id=strategy_id).delete()
+    session.query(TradeRecord).filter_by(strategy_id=strategy_id).delete()
+    session.delete(strat)
+    session.commit()
+    return {"status": "ok", "deleted": strategy_id}
+
+
 # ── Trading Account API (Task 11) ──
 
 from oms.broker.futu_stock_broker import FutuStockBroker
