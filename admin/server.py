@@ -723,6 +723,7 @@ def admin_trading_strategies(env: str = "sim"):
             "id": s.id, "name": s.name, "market": s.market,
             "strategy_class": s.strategy_class, "status": s.status,
             "capital_allocated": s.capital_allocated,
+            "config_yaml": s.config_yaml,
             "cash": acct.cash if acct else s.capital_allocated,
             "equity": (acct.cash if acct else s.capital_allocated) + mkt_val,
             "positions": len(positions),
@@ -733,13 +734,54 @@ def admin_trading_strategies(env: str = "sim"):
 
 @app.post("/api/admin/trading/strategies")
 def admin_trading_create_strategy(body: dict = Body(...), env: str = "sim"):
-    """创建交易策略"""
+    """创建交易策略 — 支持手动字段或从模板创建"""
     session = get_trading_session(env)
+
+    template_name = body.get("template")
+    if template_name:
+        # 模板隔离校验
+        expected_prefix = f"trading_{env}_"
+        if not template_name.startswith(expected_prefix):
+            raise HTTPException(
+                400,
+                f"Template mismatch: {template_name} is not a '{expected_prefix}*' template"
+            )
+
+        # 读取模板
+        config_dir = Path("/opt/quant/live/configs")
+        template_path = config_dir / template_name
+        if not template_path.exists():
+            raise HTTPException(404, f"Template '{template_name}' not found")
+
+        import yaml as _yaml
+        with open(template_path) as f:
+            tmpl = _yaml.safe_load(f)
+
+        # 提取字段
+        name = body.get("name") or tmpl.get("name", template_name)
+        market = body.get("market") or tmpl.get("market", "us")
+        strategy_class = tmpl.get("strategy_class", "")
+        capital_allocated = float(body.get("capital_allocated") or tmpl.get("capital_allocated", 100000))
+        config_yaml = template_path.read_text()
+        # Override market in config_yaml if explicitly provided
+        if body.get("market") and body["market"] != tmpl.get("market"):
+            config_yaml = config_yaml.replace(
+                f"market: {tmpl.get('market', 'us')}",
+                f"market: {body['market']}"
+            )
+    else:
+        # 手动创建（兼容旧方式）
+        name = body["name"]
+        market = body["market"]
+        strategy_class = body["strategy_class"]
+        capital_allocated = float(body.get("capital_allocated", 100000))
+        config_yaml = body.get("config_yaml", "")
+
     strat = TSModel(
-        name=body["name"], market=body["market"],
-        strategy_class=body["strategy_class"],
-        capital_allocated=float(body.get("capital_allocated", 100000)),
-        config_yaml=body.get("config_yaml", ""),
+        name=name, market=market,
+        strategy_class=strategy_class,
+        capital_allocated=capital_allocated,
+        config_yaml=config_yaml,
         status="stopped",
     )
     session.add(strat)
@@ -785,6 +827,101 @@ def admin_trading_trades(strategy_id: int, limit: int = 100, env: str = "sim"):
         "qty": t.qty, "price": t.price, "commission": t.commission,
         "created_at": t.created_at.isoformat() if t.created_at else None,
     } for t in trades]
+
+
+@app.get("/api/admin/trading/strategies/{strategy_id}/equity")
+def admin_trading_equity(strategy_id: int, env: str = "sim"):
+    """策略权益曲线 — 从交易记录重建"""
+    session = get_trading_session(env)
+    strat = session.get(TSModel, strategy_id)
+    if not strat:
+        raise HTTPException(404, "Strategy not found")
+
+    acct = session.query(VirtualAccount).filter_by(strategy_id=strategy_id).first()
+    initial_capital = acct.initial_capital if acct else strat.capital_allocated
+
+    trades = session.query(TradeRecord).filter_by(
+        strategy_id=strategy_id
+    ).order_by(TradeRecord.created_at.asc()).all()
+
+    if not trades:
+        return [{
+            "ts": strat.created_at.isoformat() if strat.created_at else datetime.now(timezone.utc).isoformat(),
+            "bar": 0, "equity": initial_capital, "cash": initial_capital,
+            "portfolio_value": 0, "daily_pnl": 0, "drawdown": 0,
+        }]
+
+    # FIFO position tracking
+    lots: dict[str, list[dict]] = {}  # symbol -> [{qty, price}]
+    cash = initial_capital
+    peak_equity = initial_capital
+    points: list[dict] = []
+
+    # Starting point
+    points.append({
+        "ts": trades[0].created_at.isoformat(),
+        "bar": 0, "equity": initial_capital, "cash": initial_capital,
+        "portfolio_value": 0, "daily_pnl": 0, "drawdown": 0,
+    })
+
+    for i, t in enumerate(trades):
+        price = t.price or 0
+        qty = int(t.qty or 0)
+        commission = t.commission or 0
+
+        if t.side.upper() == "BUY":
+            cash -= qty * price + commission
+            if t.symbol not in lots:
+                lots[t.symbol] = []
+            lots[t.symbol].append({"qty": qty, "price": price})
+        else:  # SELL
+            cash += qty * price - commission
+            remaining = qty
+            while remaining > 0 and t.symbol in lots and lots[t.symbol]:
+                lot = lots[t.symbol][0]
+                matched = min(lot["qty"], remaining)
+                lot["qty"] -= matched
+                remaining -= matched
+                if lot["qty"] <= 0:
+                    lots[t.symbol].pop(0)
+
+        # Portfolio value: mark positions at last trade price
+        portfolio_value = 0.0
+        for sym, sym_lots in lots.items():
+            for lot in sym_lots:
+                portfolio_value += lot["qty"] * lot["price"]
+
+        equity = cash + portfolio_value
+        if equity > peak_equity:
+            peak_equity = equity
+        drawdown = (equity - peak_equity) / peak_equity if peak_equity > 0 else 0
+
+        points.append({
+            "ts": t.created_at.isoformat(),
+            "bar": i + 1, "equity": round(equity, 2),
+            "cash": round(cash, 2),
+            "portfolio_value": round(portfolio_value, 2),
+            "daily_pnl": round(equity - (points[-1]["equity"] if points else initial_capital), 2),
+            "drawdown": round(drawdown, 6),
+        })
+
+    return points
+
+
+@app.get("/api/admin/trading/strategies/{strategy_id}/positions")
+def admin_trading_positions(strategy_id: int, env: str = "sim"):
+    """策略当前持仓"""
+    session = get_trading_session(env)
+    positions = session.query(VirtualPosition).filter_by(strategy_id=strategy_id).all()
+    return [{
+        "symbol": p.symbol,
+        "qty": p.qty,
+        "avg_cost": p.avg_entry_price,
+        "current_price": p.market_value / p.qty if p.qty else 0,
+        "market_value": p.market_value,
+        "pnl": p.unrealized_pnl,
+        "pnl_pct": round(p.unrealized_pnl / (p.avg_entry_price * p.qty) * 100, 2) if p.qty and p.avg_entry_price else 0,
+    } for p in positions]
 
 
 @app.delete("/api/admin/trading/strategies/{strategy_id}")
@@ -841,6 +978,7 @@ def admin_trading_account(env: str, market: str = "hk"):
         init = max(acct.equity - pnl, 1)
         return {
             "cash": acct.cash, "equity": acct.equity,
+            "buying_power": acct.buying_power,
             "market_value": mkt_val, "total_pnl": pnl,
             "pnl_pct": round(pnl / init * 100, 2),
             "positions": [{
@@ -856,19 +994,37 @@ def admin_trading_account(env: str, market: str = "hk"):
 
 @app.get("/api/admin/trading/orders/{env}")
 def admin_trading_orders(env: str, market: str = "hk"):
-    """获取订单列表"""
+    """获取全部历史订单"""
     trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
     broker = FutuStockBroker(trd_env=trd_env, market=market)
     async def _get():
-        pending = await broker.get_open_orders()
+        orders = await broker.get_all_orders()
         broker._get_ctx().close()
         return [{
             "broker_id": o.broker_id, "symbol": o.symbol,
             "side": o.side, "qty": o.qty, "filled_qty": o.filled_qty,
             "order_type": o.order_type, "status": o.status,
-            "limit_price": o.limit_price,
+            "limit_price": o.limit_price, "avg_price": o.avg_price,
             "created_at": o.created_at.isoformat() if o.created_at else None,
-        } for o in pending]
+        } for o in orders]
+    import asyncio
+    return asyncio.run(_get())
+
+
+@app.get("/api/admin/trading/deals/{env}")
+def admin_trading_deals(env: str, market: str = "hk"):
+    """获取成交明细"""
+    trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
+    broker = FutuStockBroker(trd_env=trd_env, market=market)
+    async def _get():
+        deals = await broker.get_deals()
+        broker._get_ctx().close()
+        return [{
+            "deal_id": d.deal_id, "order_id": d.order_id,
+            "symbol": d.symbol, "side": d.side,
+            "qty": d.qty, "price": d.price,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+        } for d in deals]
     import asyncio
     return asyncio.run(_get())
 

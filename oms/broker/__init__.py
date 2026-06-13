@@ -36,6 +36,17 @@ class BrokerAccount:
     positions: list[BrokerPosition] = field(default_factory=list)
 
 
+@dataclass
+class BrokerDeal:
+    deal_id: str
+    order_id: str
+    symbol: str
+    side: str
+    qty: float
+    price: float
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class Broker(Protocol):
     async def submit_order(self, symbol: str, side: str, qty: float,
                            order_type: str = "market",
