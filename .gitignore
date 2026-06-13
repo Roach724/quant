@@ -13,6 +13,7 @@ output/
 .claude
 .vscode
 *.ipynb
+!admin/frontend/index.html
 !admin/frontend/dist/index.html
 *.html
 *.txt
