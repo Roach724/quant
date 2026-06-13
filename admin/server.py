@@ -131,6 +131,10 @@ def _sync_crontab():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # Ensure trading tables exist in the same DB
+    from trading.models import Base as TradingBase
+    from admin.models import engine
+    TradingBase.metadata.create_all(engine)
     _startup_auto_heal()
     _init_cache_modules()
     _cleanup_stuck_cron_runs()
