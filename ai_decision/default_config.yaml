@@ -1,0 +1,96 @@
+# AI Decision Engine — Default Configuration
+# Market: US only (initial)
+
+ai_decision:
+  market: us
+
+  pipeline:
+    # ── ① Recall Layer ──
+    recall:
+      enabled_strategies:
+        - SimpleMomentum
+        - MeanReversion
+        - MLPrediction
+        - MACD
+        - RSI2
+        - BollingerBands
+        - MultiFactorRank
+        - TurtleTrading
+        - QARP
+        - MACrossover
+        - ATRTrailingStop
+        - ShortSqueeze
+        - PairsTrading
+        - BuyHold
+        - FundingRateArbitrage
+
+    # ── ② Candidate Pool ──
+    candidate_pool:
+      min_signal_threshold: 0.20
+      aggregation: "max_abs"           # max_abs | mean | weighted_mean
+
+    # ── ③ Analysis Layer ──
+    analysis:
+      top_k: 10
+      llm:
+        model: "deepseek/deepseek-v4-pro"
+        temperature: 0.3
+        max_tokens: 2000
+        concurrent: 5                 # parallel LLM calls
+      data:
+        sources: ["bigquery", "llmquant"]
+        timeout_seconds: 30
+
+    # ── ④ Fusion Layer ──
+    fusion:
+      mode: "weighted"                 # voting | weighted
+      weights:
+        momentum: 1.0
+        mean_rev: 0.8
+        ml_predict: 1.2
+        macd: 0.7
+        rsi: 0.7
+        bollinger: 0.6
+        multi_factor: 1.0
+        turtle: 0.8
+        qarp: 0.9
+        ma_crossover: 0.6
+        atr_stop: 0.5
+        short_squeeze: 0.5
+        pairs_trading: 0.7
+        buy_hold: 0.3
+        funding_rate: 0.6
+        ai_analysis: 1.5
+
+    # ── ⑤ Execution Layer ──
+    execution:
+      stock_eval:
+        llm:
+          model: "deepseek/deepseek-v4-pro"
+          temperature: 0.2
+          max_tokens: 1000
+        batch_size: 5
+      constraints:
+        max_position_pct: 0.15        # single stock cap
+        max_sector_pct: 0.40          # single sector cap
+        min_cash_reserve: 0.10        # minimum cash buffer
+        max_turnover: 0.30            # max single-day turnover
+        min_trade_value: 500          # minimum trade in USD
+
+  # ── Scheduling (each group runs independently) ──
+  schedule:
+    recall_candidate:
+      cron: "30 9 * * 1-5"
+      timezone: "Asia/Shanghai"
+    analysis_fusion:
+      cron: "35 9 * * 1-5"
+      timezone: "Asia/Shanghai"
+    execution:
+      cron: "40 9 * * 1-5"
+      timezone: "Asia/Shanghai"
+
+  # ── Logging ──
+  logging:
+    path: "/var/log/quant"
+    level: "INFO"
+    format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
