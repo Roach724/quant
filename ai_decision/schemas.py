@@ -16,7 +16,7 @@ class StrategySignal(BaseModel):
     symbol: str
     strategy: str
     direction: Literal["buy", "sell", "hold"]
-    score: float = Field(ge=-1.0, le=1.0, description="Raw strategy score")
+    score: float = Field(description="Raw strategy score (strategy-native scale, normalized in fusion layer)")
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
     timestamp: datetime | None = None
 
