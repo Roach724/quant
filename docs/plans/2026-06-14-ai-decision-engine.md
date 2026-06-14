@@ -1,8 +1,8 @@
 # AI 决策引擎 — 系统设计
 
-> 版本: v2  
+> 版本: v3  
 > 日期: 2026-06-14  
-> 状态: 设计审阅中  
+> 状态: Phase 1 数据层进行中  
 > 市场: **初始仅 US 市场** (HK/Crypto 暂不支持)
 
 ---
@@ -19,6 +19,7 @@
 这不是发明新信号，而是用 AI 做信号质量的二次判断 + 组合层面的全局调配。
 
 > **🔴 市场限制: 初始仅支持 US 市场。** HK 和 Crypto 数据链路不同，暂不纳入第一期。
+> **⛔ SectorRotation 暂时排除。** 该策略当前有问题，不在第一期配置中引用，后续修复后再加入。
 
 ### 1.2 架构总览
 
@@ -118,7 +119,6 @@ recall:
     - MACrossover
     - ATRTrailingStop
     - ShortSqueeze
-    - SectorRotation
     - PairsTrading
     - BuyHold
     - FundingRateArbitrage
@@ -437,14 +437,20 @@ Output JSON:
   3. 换手率检查:
      - 若计算换手率 > max_turnover → 削减低优先级交易
 
-输出: 最终换仓方案
-  - 卖出: [(symbol, qty, price, estimated_value, reason)]
-  - 买入: [(symbol, qty, price, estimated_cost, reason)]
+输出: 最终方案
+  - 卖出: [(symbol, qty, price, estimated_value, reason)]   (可为空)
+  - 买入: [(symbol, qty, price, estimated_cost, reason)]     (可为空)
   - 摘要:
     - 预计净资金变动
     - 预计剩余现金
     - 预计换手率
     - 行业分布变化
+
+特殊: **不调仓 (no-op)**
+  当所有标的层输出均为 hold/watch, 或组合层判断最优方案为维持现状时:
+  - 输出 sell=[], buy=[], summary.action="no_op"
+  - 摘要注明原因 (如 "All positions optimal, no rebalance needed")
+  - 记录日志但不发 OMS 指令
 ```
 
 **组合层不调 LLM** — 这是纯算法/规则引擎，不需要 AI。
@@ -1016,7 +1022,6 @@ ai_decision:
         - MACrossover
         - ATRTrailingStop
         - ShortSqueeze
-        - SectorRotation
         - PairsTrading
         - BuyHold
         - FundingRateArbitrage
@@ -1053,7 +1058,6 @@ ai_decision:
         ma_crossover: 0.6
         atr_stop: 0.5
         short_squeeze: 0.5
-        sector_rotation: 0.8
         pairs_trading: 0.7
         buy_hold: 0.3
         funding_rate: 0.6
@@ -1113,9 +1117,9 @@ ai_decision:
 | 7 | 看板复用 — 根据运行环境自动路由 | ✅ |
 | 8 | 配置管理 — CRUD | ✅ |
 | 9 | 各层输出 — 召回/分析/决策子页面 | ✅ |
-| 10 | 行业分类数据来源？ | 待确认 |
-| 11 | 组合层是否支持"不调仓"输出？ | 待确认 |
-| 12 | Phase 1 数据层开始？ | 待确认 |
+| 10 | 行业分类数据来源？ | ✅ 跳过 SectorRotation，后续修复后再加 |
+| 11 | 组合层支持"不调仓"输出 | ✅ 所有标的 hold/watch 时输出 no_op |
+| 12 | Phase 1 数据层开始 | ✅ 现在开始 |
 
 ---
 
