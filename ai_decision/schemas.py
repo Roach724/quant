@@ -166,6 +166,10 @@ class MarketData(BaseModel):
     news_sentiment: float | None = Field(default=None, ge=-1.0, le=1.0)
     news_headlines: list[dict] = Field(default_factory=list)
 
+    # SEC / Institutional (from LLMQuant MCP)
+    sec_filings: dict | None = None
+    institutional_flow: dict | None = None
+
     # Source tracking
     data_coverage: dict[str, bool] = Field(default_factory=dict)
 

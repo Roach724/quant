@@ -1,6 +1,6 @@
 """Data provider — multi-source data acquisition with fallback.
 
-Priority: BigQuery (own DB) → LLMQuant (external) → "unavailable" marker.
+Priority: BigQuery (own DB) → LLMQuant MCP (external) → "unavailable" marker.
 
 BigQuery tables used (read-only):
   - quant.us_bars_1d     : daily OHLCV
@@ -8,16 +8,17 @@ BigQuery tables used (read-only):
   - quant.factor_values  : pre-computed technical factors
   - quant.factor_registry: factor metadata
 
-LLMQuant data capabilities (integration TBD):
-  - Fundamentals: P/E, revenue growth, net margin, debt/equity
-  - Sentiment: news headlines, sentiment scores
-  - Institutional: 13F filings, institutional ownership
-  - SEC filings: 10-K/10-Q text analysis
+LLMQuant MCP (via @llmquant/data-mcp):
+  - SEC filings: 10-K/10-Q/8-K browse + read (risk factors, MD&A)
+  - 13F: institutional holdings, smart money flow
+  - Macro: 50+ indicators snapshot + history
+  - Fundamentals (PE, margins): Coming Soon per LLMQuant roadmap
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -27,6 +28,16 @@ from google.cloud import bigquery
 from ai_decision.schemas import DataSourceStatus, MarketData
 
 logger = logging.getLogger(__name__)
+
+PROJECT = "deductive-notch-495015-c2"
+DATASET = "quant"
+BARS_1D_TABLE = f"{PROJECT}.{DATASET}.us_bars_1d"
+FACTOR_VALUES_TABLE = f"{PROJECT}.{DATASET}.factor_values"
+FACTOR_REGISTRY_TABLE = f"{PROJECT}.{DATASET}.factor_registry"
+
+# LLMQuant MCP API key — set via env or passed directly
+# Generate at: https://llmquantdata.com/dashboard → API Keys
+LLMQUANT_API_KEY = os.environ.get("LLMQUANT_API_KEY", "")
 
 PROJECT = "deductive-notch-495015-c2"
 DATASET = "quant"
@@ -279,29 +290,75 @@ COMPUTED_FIELDS = {"ma_20", "ma_50", "atr_14", "bb_upper", "bb_lower"}
 ALL_BQ_FIELDS = set(BAR_FIELDS) | set(FACTOR_FIELD_MAP.keys()) | COMPUTED_FIELDS
 
 
-# ── LLMQuant Provider (stub) ─────────────────────────────────────
+# ── LLMQuant MCP Provider ────────────────────────────────────────
 
-class LLMQuantProvider:
-    """External data provider via LLMQuant skills.
+class LLMQuantMCPProvider:
+    """External data provider via @llmquant/data-mcp MCP server.
 
-    Provides fundamental, sentiment, and SEC filing data that BigQuery
-    doesn't cover.  Falls back to None when data is unavailable.
+    Provides SEC filing analysis, 13F institutional holdings, and
+    macro indicators that complement BigQuery's technical data.
 
-    NOTE: Integration point — actual HTTP/MCP calls to LLMQuant
-    endpoints will be implemented when the LLMQuant API is available.
-    Currently returns stub data with appropriate status tracking.
+    MCP connection is established per-session (start/stop lifecycle)
+    and reused across multiple fetch calls.
     """
 
-    # Fields that LLMQuant can potentially provide
-    FUNDAMENTAL_FIELDS = {"pe", "forward_pe", "revenue_growth", "net_margin", "debt_equity"}
-    SENTIMENT_FIELDS = {"news_sentiment", "news_headlines"}
-    ALL_LLMQ_FIELDS = FUNDAMENTAL_FIELDS | SENTIMENT_FIELDS
+    # Fields that LLMQuant can provide
+    SEC_FIELDS = {"sec_filings"}       # 10-K/10-Q/8-K browse → risk factors
+    FLOW_FIELDS = {"institutional_flow"}  # 13F holders → smart money data
+    SENTIMENT_FIELDS = {"news_headlines"}  # 8-K events as news signals
+    ALL_LLMQ_FIELDS = SEC_FIELDS | FLOW_FIELDS | SENTIMENT_FIELDS
 
-    def fetch(self, symbol: str, fields: list[str]) -> dict[str, Any]:
-        """Fetch data from LLMQuant for a symbol.
+    # Fields coming soon (LLMQuant roadmap)
+    # "pe", "forward_pe", "revenue_growth", "net_margin", "debt_equity", "news_sentiment"
+
+    def __init__(self, api_key: str | None = None):
+        import os
+        self.api_key = api_key or os.environ.get("LLMQUANT_API_KEY")
+        self._session = None
+        self._ctx = None
+        self._read = None
+        self._write = None
+
+    async def _ensure_session(self):
+        """Lazy-init MCP session (reused across calls)."""
+        if self._session is not None:
+            return
+
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+        import asyncio
+
+        params = StdioServerParameters(
+            command="npx",
+            args=["-y", "@llmquant/data-mcp"],
+            env={"LLMQUANT_API_KEY": self.api_key or ""},
+        )
+
+        # Use proper async context manager
+        self._ctx = stdio_client(params)
+        self._read, self._write = await self._ctx.__aenter__()
+        self._session = ClientSession(self._read, self._write)
+        await self._session.__aenter__()
+        await asyncio.sleep(1)  # let server settle
+        await self._session.initialize()
+        logger.info("LLMQuant MCP session initialized")
+
+    async def close(self):
+        """Close MCP session."""
+        if self._session:
+            await self._session.__aexit__(None, None, None)
+            self._session = None
+        if hasattr(self, '_ctx') and self._ctx:
+            await self._ctx.__aexit__(None, None, None)
+            self._ctx = None
+            self._read = None
+            self._write = None
+
+    async def fetch(self, symbol: str, fields: list[str]) -> dict[str, Any]:
+        """Fetch data from LLMQuant MCP for a symbol.
 
         Args:
-            symbol: e.g. "AAPL"
+            symbol: e.g. "AAPL" (without market prefix)
             fields: list of field names
 
         Returns:
@@ -310,30 +367,136 @@ class LLMQuantProvider:
         result: dict[str, Any] = {}
         clean = symbol.replace("US.", "").replace("HK.", "")
 
+        needs_sec = "sec_filings" in fields
+        needs_flow = "institutional_flow" in fields
+        needs_news = "news_headlines" in fields
+
+        if not (needs_sec or needs_flow or needs_news):
+            return result
+
+        await self._ensure_session()
+
+        # ── News: 8-K events as proxy for headlines ──
+        if needs_news:
+            try:
+                r = await self._session.call_tool("sec_filing_browse", {
+                    "ticker": clean, "filing_type": "8-K", "limit": 5,
+                })
+                items = self._parse_items(r)
+                result["news_headlines"] = [
+                    {
+                        "date": item.get("filingDate", ""),
+                        "headline": f"8-K: {item.get('filingType', '')} filed",
+                        "sentiment": 0.0,  # neutral default
+                        "section_keys": item.get("sectionKeys", []),
+                    }
+                    for item in items
+                ]
+            except Exception as e:
+                logger.warning("LLMQuant 8-K browse failed for %s: %s", clean, e)
+                result["news_headlines"] = []
+
+        # ── SEC filings: risk factors from latest 10-K ──
+        if needs_sec:
+            try:
+                r = await self._session.call_tool("sec_filing_browse", {
+                    "ticker": clean, "filing_type": "10-K", "limit": 1,
+                })
+                items = self._parse_items(r)
+                if items:
+                    filing = items[0]
+                    # Read risk factors section (Item 1A)
+                    try:
+                        rr = await self._session.call_tool("sec_filing_read", {
+                            "ticker": clean,
+                            "accessionNumber": filing["accessionNumber"],
+                            "sections": ["1A"],
+                        })
+                        risk_data = self._parse_items(rr)
+                        result["sec_filings"] = {
+                            "latest_10k": {
+                                "filing_date": filing.get("filingDate"),
+                                "report_date": filing.get("reportDate"),
+                                "risk_factors": (
+                                    risk_data[0].get("content", "")[:2000]
+                                    if risk_data else ""
+                                ),
+                            }
+                        }
+                    except Exception:
+                        result["sec_filings"] = {
+                            "latest_10k": {"filing_date": filing.get("filingDate")}
+                        }
+            except Exception as e:
+                logger.warning("LLMQuant SEC browse failed for %s: %s", clean, e)
+                result["sec_filings"] = None
+
+        # ── 13F institutional flow ──
+        if needs_flow:
+            try:
+                from datetime import datetime as dt
+                now = dt.now()
+                # Approximate quarter
+                quarter = (now.month - 1) // 3 + 1
+                year = now.year
+                if quarter == 1:
+                    year -= 1
+                    quarter = 4
+                else:
+                    quarter -= 1
+
+                r = await self._session.call_tool("sec_13f_list_ticker_holders", {
+                    "ticker": clean, "year": year, "quarter": quarter,
+                })
+                data = self._parse_json(r)
+                holders = data.get("items", data.get("holders", []))
+                result["institutional_flow"] = {
+                    "total_holders": data.get("totalHoldersInScope", len(holders)),
+                    "top_holders": [
+                        {
+                            "manager": h.get("managerName", ""),
+                            "value_usd": h.get("valueUsd", 0),
+                            "shares": h.get("shares", 0),
+                        }
+                        for h in holders[:5]
+                    ],
+                }
+            except Exception as e:
+                logger.warning("LLMQuant 13F failed for %s: %s", clean, e)
+                result["institutional_flow"] = None
+
+        # Fill remaining fields as unavailable
         for field in fields:
-            if field in self.FUNDAMENTAL_FIELDS:
-                # TODO: call llmquant-equities for fundamental data
-                result[field] = None
-            elif field in self.SENTIMENT_FIELDS:
-                # TODO: call llmquant-data / llmquant-market-intelligence for sentiment
-                result[field] = [] if field == "news_headlines" else None
-            else:
+            if field not in result:
                 result[field] = None
 
-        logger.debug("LLMQuant fetch for %s: all fields pending integration", clean)
         return result
 
     def status(self, fields: list[str]) -> DataSourceStatus:
-        """Report which fields LLMQuant could provide."""
+        """Report which fields LLMQuant can (eventually) provide."""
         available = [f for f in fields if f in self.ALL_LLMQ_FIELDS]
         missing = [f for f in fields if f not in available]
         return DataSourceStatus(
             source="llmquant",
-            available=False,  # pending integration
+            available=True,
             fields_available=available,
             fields_missing=missing,
-            error="LLMQuant integration not yet implemented",
         )
+
+    @staticmethod
+    def _parse_items(result) -> list[dict]:
+        """Extract items from MCP tool response."""
+        data = LLMQuantMCPProvider._parse_json(result)
+        return data.get("items", data.get("data", []))
+
+    @staticmethod
+    def _parse_json(result) -> dict:
+        """Parse JSON from MCP TextContent."""
+        import json
+        if hasattr(result, "content") and result.content:
+            text = result.content[0].text
+            return json.loads(text)
+        return {}
 
 
 # ── Orchestrator ─────────────────────────────────────────────────
@@ -355,10 +518,10 @@ class DataProvider:
     def __init__(
         self,
         bq: BigQueryProvider | None = None,
-        llmq: LLMQuantProvider | None = None,
+        llmq: LLMQuantMCPProvider | None = None,
     ):
         self.bq = bq or BigQueryProvider()
-        self.llmq = llmq or LLMQuantProvider()
+        self.llmq = llmq or LLMQuantMCPProvider()
 
     async def get_data(self, symbol: str, fields: list[str]) -> MarketData:
         """Fetch all requested fields for a symbol, with fallback.
@@ -374,15 +537,15 @@ class DataProvider:
         bq_fields = [f for f in fields if f in ALL_BQ_FIELDS]
         llmq_fields = [f for f in fields if f not in ALL_BQ_FIELDS]
 
-        # Fetch from BigQuery
+        # Fetch from BigQuery (sync for now)
         bq_data = {}
         if bq_fields:
             bq_data = self.bq.fetch(symbol, bq_fields)
 
-        # Fetch from LLMQuant for fields BQ can't cover
+        # Fetch from LLMQuant MCP (async)
         llmq_data = {}
         if llmq_fields:
-            llmq_data = self.llmq.fetch(symbol, llmq_fields)
+            llmq_data = await self.llmq.fetch(symbol, llmq_fields)
 
         # Build coverage map
         coverage = {}
@@ -416,6 +579,8 @@ class DataProvider:
             debt_equity=llmq_data.get("debt_equity"),
             news_sentiment=llmq_data.get("news_sentiment"),
             news_headlines=llmq_data.get("news_headlines", []),
+            sec_filings=llmq_data.get("sec_filings"),
+            institutional_flow=llmq_data.get("institutional_flow"),
             data_coverage=coverage,
         )
 
