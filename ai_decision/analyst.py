@@ -146,6 +146,8 @@ class StockAnalyst:
                 "revenue_growth": data.revenue_growth,
                 "net_margin": data.net_margin,
                 "debt_equity": data.debt_equity,
+                "sector": getattr(data, "sector", None),
+                "industry": getattr(data, "industry", None),
             }
 
         news = []

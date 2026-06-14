@@ -28,15 +28,21 @@ No specific strategy signals for this stock.
 Technical data: unavailable from internal database.
 {% endif %}
 
-## Fundamental Data (from external sources)
-{% if fundamentals.pe %}
+## Fundamental Data
+{% if fundamentals and fundamentals.pe %}
 - P/E Ratio: {{ "%.2f" | format(fundamentals.pe) }}
 - Forward P/E: {{ "%.2f" | format(fundamentals.forward_pe) if fundamentals.forward_pe else 'N/A' }}
 - Revenue Growth (YoY): {{ "%.1f%%" | format(fundamentals.revenue_growth * 100) if fundamentals.revenue_growth else 'N/A' }}
-- Net Margin: {{ "%.1f%%" | format(fundamentals.net_margin * 100) if fundamentals.net_margin else 'N/A' }}
+- Profit Margin: {{ "%.1f%%" | format(fundamentals.net_margin * 100) if fundamentals.net_margin else 'N/A' }}
 - Debt/Equity: {{ "%.2f" | format(fundamentals.debt_equity) if fundamentals.debt_equity else 'N/A' }}
+{% if fundamentals.sector %}
+- Sector: {{ fundamentals.sector }}
+{% endif %}
+{% if fundamentals.industry %}
+- Industry: {{ fundamentals.industry }}
+{% endif %}
 {% else %}
-Fundamental data: unavailable from external sources.
+- Fundamental data: unavailable from external sources.
 {% endif %}
 
 ## News Sentiment

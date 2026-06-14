@@ -162,6 +162,10 @@ class MarketData(BaseModel):
     net_margin: float | None = None
     debt_equity: float | None = None
 
+    # Sector / Industry (from yfinance)
+    sector: str | None = None
+    industry: str | None = None
+
     # Sentiment / News (from LLMQuant)
     news_sentiment: float | None = Field(default=None, ge=-1.0, le=1.0)
     news_headlines: list[dict] = Field(default_factory=list)

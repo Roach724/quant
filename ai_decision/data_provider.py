@@ -286,6 +286,9 @@ FACTOR_FIELD_MAP = {
 # bb_upper/bb_lower: computed from close + bb_width + bb_position
 COMPUTED_FIELDS = {"ma_20", "ma_50", "atr_14", "bb_upper", "bb_lower"}
 
+# Fundamental fields from yfinance
+YFINANCE_FIELDS = {"pe", "forward_pe", "revenue_growth", "net_margin", "debt_equity", "sector", "industry"}
+
 # All known BQ fields (for status reporting) — includes computed fields
 ALL_BQ_FIELDS = set(BAR_FIELDS) | set(FACTOR_FIELD_MAP.keys()) | COMPUTED_FIELDS
 
@@ -499,29 +502,92 @@ class LLMQuantMCPProvider:
         return {}
 
 
+# ── YFinance Provider ─────────────────────────────────────────────
+
+class YFinanceProvider:
+    """Fundamental data via yfinance (Yahoo Finance).
+
+    Provides PE, revenue growth, margins, debt/equity, sector/industry.
+    Rate limit: Yahoo ~2000 req/hour. Our Top-10 calls/day is negligible.
+    """
+
+    FIELD_MAP = {
+        "pe": "trailingPE",
+        "forward_pe": "forwardPE",
+        "revenue_growth": "revenueGrowth",
+        "net_margin": "profitMargins",
+        "debt_equity": "debtToEquity",
+        "sector": "sector",
+        "industry": "industry",
+    }
+    KNOWN_FIELDS = set(FIELD_MAP.keys())
+
+    def __init__(self, max_workers: int = 3):
+        self.max_workers = max_workers
+
+    def fetch(self, symbol: str, fields: list[str]) -> dict[str, Any]:
+        """Fetch fundamentals for one symbol with exponential backoff."""
+        clean = symbol.replace("US.", "").replace("HK.", "")
+        needed = set(fields) & self.KNOWN_FIELDS
+        if not needed:
+            return {}
+
+        import time as _time
+        for attempt in range(3):
+            try:
+                import yfinance as yf
+                t = yf.Ticker(clean)
+                info = t.info
+                result = {}
+                for field in needed:
+                    yf_key = self.FIELD_MAP[field]
+                    val = info.get(yf_key)
+                    result[field] = val if val is not None and not (isinstance(val, float) and str(val) == "nan") else None
+                return result
+            except Exception as e:
+                err = str(e).lower()
+                if "rate" in err or "limit" in err or "too many" in err:
+                    delay = 2.0 * (attempt + 1)
+                    logger.warning("yfinance rate limited %s, retry %.0fs", clean, delay)
+                    _time.sleep(delay)
+                else:
+                    logger.warning("yfinance failed for %s: %s", clean, e)
+                    break
+        return {f: None for f in needed}
+
+    def fetch_multi(self, symbols: list[str], fields: list[str]) -> dict[str, dict[str, Any]]:
+        """Parallel fetch for multiple symbols via ThreadPoolExecutor."""
+        import concurrent.futures
+        results: dict[str, dict[str, Any]] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+            futures = {ex.submit(self.fetch, sym, fields): sym for sym in symbols}
+            for future in concurrent.futures.as_completed(futures):
+                sym = futures[future]
+                try:
+                    results[sym] = future.result()
+                except Exception as e:
+                    logger.warning("yfinance fetch_multi %s: %s", sym, e)
+                    results[sym] = {f: None for f in fields}
+        return results
+
+
 # ── Orchestrator ─────────────────────────────────────────────────
 
 class DataProvider:
     """Multi-source data provider with fallback.
 
-    Priority: BigQuery → LLMQuant → unavailable marker.
-
-    Usage:
-        provider = DataProvider()
-        data = await provider.get_data("AAPL", [
-            "price", "ma_20", "rsi_14", "pe", "news_sentiment"
-        ])
-        # data.price → from BQ
-        # data.pe → from LLMQuant (or None if unavailable)
+    Priority: BigQuery → LLMQuant MCP → yfinance → unavailable marker.
     """
 
     def __init__(
         self,
         bq: BigQueryProvider | None = None,
         llmq: LLMQuantMCPProvider | None = None,
+        yf: YFinanceProvider | None = None,
     ):
         self.bq = bq or BigQueryProvider()
         self.llmq = llmq or LLMQuantMCPProvider()
+        self.yf = yf or YFinanceProvider()
 
     async def get_data(self, symbol: str, fields: list[str]) -> MarketData:
         """Fetch all requested fields for a symbol, with fallback.
@@ -535,21 +601,30 @@ class DataProvider:
         """
         # Determine which fields each source can serve
         bq_fields = [f for f in fields if f in ALL_BQ_FIELDS]
-        llmq_fields = [f for f in fields if f not in ALL_BQ_FIELDS]
+        llmq_fields = [f for f in fields if f in (LLMQuantMCPProvider.ALL_LLMQ_FIELDS)]
+        yf_fields = [f for f in fields if f in YFinanceProvider.KNOWN_FIELDS]
+        # Avoid double-counting: llmq only gets what BQ and yf don't cover
+        llmq_only = [f for f in llmq_fields if f not in ALL_BQ_FIELDS and f not in YFinanceProvider.KNOWN_FIELDS]
 
-        # Fetch from BigQuery (sync for now)
+        # Fetch from BigQuery (sync)
         bq_data = {}
         if bq_fields:
             bq_data = self.bq.fetch(symbol, bq_fields)
 
-        # Fetch from LLMQuant MCP (async)
+        # Fetch from yfinance (sync, via thread)
+        yf_data = {}
+        if yf_fields:
+            import asyncio as _asyncio
+            yf_data = await _asyncio.to_thread(self.yf.fetch, symbol, yf_fields)
+
+        # Fetch from LLMQuant MCP (async) — for remaining fields
         llmq_data = {}
-        if llmq_fields:
-            llmq_data = await self.llmq.fetch(symbol, llmq_fields)
+        if llmq_only:
+            llmq_data = await self.llmq.fetch(symbol, llmq_only)
 
         # Build coverage map
         coverage = {}
-        all_data = {**bq_data, **llmq_data}
+        all_data = {**bq_data, **yf_data, **llmq_data}
         for field in fields:
             coverage[field] = all_data.get(field) is not None
 
@@ -572,22 +647,81 @@ class DataProvider:
             bb_position=bq_data.get("bb_position"),
             bb_width=bq_data.get("bb_width"),
             atr_14=bq_data.get("atr_14"),
-            pe=llmq_data.get("pe"),
-            forward_pe=llmq_data.get("forward_pe"),
-            revenue_growth=llmq_data.get("revenue_growth"),
-            net_margin=llmq_data.get("net_margin"),
-            debt_equity=llmq_data.get("debt_equity"),
+            pe=yf_data.get("pe"),
+            forward_pe=yf_data.get("forward_pe"),
+            revenue_growth=yf_data.get("revenue_growth"),
+            net_margin=yf_data.get("net_margin"),
+            debt_equity=yf_data.get("debt_equity"),
             news_sentiment=llmq_data.get("news_sentiment"),
             news_headlines=llmq_data.get("news_headlines", []),
             sec_filings=llmq_data.get("sec_filings"),
             institutional_flow=llmq_data.get("institutional_flow"),
+            sector=yf_data.get("sector"),
+            industry=yf_data.get("industry"),
             data_coverage=coverage,
         )
 
     async def get_multi(self, symbols: list[str], fields: list[str]) -> dict[str, MarketData]:
-        """Fetch data for multiple symbols in parallel."""
-        import asyncio
+        """Fetch data for multiple symbols in parallel.
 
-        tasks = [self.get_data(sym, fields) for sym in symbols]
-        results = await asyncio.gather(*tasks)
+        yfinance calls are batched via ThreadPoolExecutor for efficiency.
+        """
+        import asyncio as _asyncio
+
+        yf_fields = [f for f in fields if f in YFinanceProvider.KNOWN_FIELDS]
+
+        # Batch yfinance calls in a single thread call
+        yf_results = {}
+        if yf_fields:
+            yf_results = await _asyncio.to_thread(
+                self.yf.fetch_multi, symbols, yf_fields
+            )
+
+        # BQ + LLMQuant per-symbol
+        async def fetch_one(sym: str) -> MarketData:
+            bq_data = self.bq.fetch(sym, [f for f in fields if f in ALL_BQ_FIELDS])
+            llmq_only = [f for f in fields if f not in ALL_BQ_FIELDS and f not in YFinanceProvider.KNOWN_FIELDS]
+            llmq_data = {}
+            if llmq_only:
+                llmq_data = await self.llmq.fetch(sym, llmq_only)
+            yf_data = yf_results.get(sym, {})
+
+            all_data = {**bq_data, **yf_data, **llmq_data}
+            coverage = {f: all_data.get(f) is not None for f in fields}
+
+            return MarketData(
+                symbol=sym,
+                timestamp=datetime.now(timezone.utc),
+                price=bq_data.get("price"),
+                open=bq_data.get("open"),
+                high=bq_data.get("high"),
+                low=bq_data.get("low"),
+                close=bq_data.get("close"),
+                volume=bq_data.get("volume"),
+                ma_20=bq_data.get("ma_20"),
+                ma_50=bq_data.get("ma_50"),
+                rsi_14=bq_data.get("rsi_14"),
+                macd=bq_data.get("macd"),
+                macd_signal=bq_data.get("macd_signal"),
+                bb_upper=bq_data.get("bb_upper"),
+                bb_lower=bq_data.get("bb_lower"),
+                bb_position=bq_data.get("bb_position"),
+                bb_width=bq_data.get("bb_width"),
+                atr_14=bq_data.get("atr_14"),
+                pe=yf_data.get("pe"),
+                forward_pe=yf_data.get("forward_pe"),
+                revenue_growth=yf_data.get("revenue_growth"),
+                net_margin=yf_data.get("net_margin"),
+                debt_equity=yf_data.get("debt_equity"),
+                news_sentiment=llmq_data.get("news_sentiment"),
+                news_headlines=llmq_data.get("news_headlines", []),
+                sec_filings=llmq_data.get("sec_filings"),
+                institutional_flow=llmq_data.get("institutional_flow"),
+                sector=yf_data.get("sector"),
+                industry=yf_data.get("industry"),
+                data_coverage=coverage,
+            )
+
+        tasks = [fetch_one(sym) for sym in symbols]
+        results = await _asyncio.gather(*tasks)
         return {r.symbol: r for r in results}
