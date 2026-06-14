@@ -69,6 +69,11 @@ class BigQueryProvider:
         # Determine which queries we need to run
         needs_bars = any(f in BAR_FIELDS for f in fields)
         needs_factors = any(f in FACTOR_FIELD_MAP for f in fields)
+        needs_computed = any(f in COMPUTED_FIELDS for f in fields)
+
+        # Bars are needed for computed fields too (MA, ATR, BB)
+        if needs_computed and not needs_bars:
+            needs_bars = True
 
         bars_df = None
         factor_df = None
@@ -78,12 +83,19 @@ class BigQueryProvider:
         if needs_factors:
             factor_df = self._query_factor_values(clean, lookback_days)
 
+        # Compute on-the-fly fields from bars data
+        computed = {}
+        if needs_computed and bars_df is not None and not bars_df.empty:
+            computed = self._compute_fields(bars_df, fields)
+
         for field in fields:
             if field in BAR_FIELDS:
                 result[field] = self._extract_bar_field(bars_df, field)
             elif field in FACTOR_FIELD_MAP:
                 factor_id = FACTOR_FIELD_MAP[field]
                 result[field] = self._extract_factor(factor_df, factor_id)
+            elif field in COMPUTED_FIELDS:
+                result[field] = computed.get(field)
             else:
                 result[field] = None  # not a BQ field
 
@@ -91,7 +103,7 @@ class BigQueryProvider:
 
     def status(self, fields: list[str]) -> DataSourceStatus:
         """Report which fields are available from BigQuery."""
-        available = [f for f in fields if f in BAR_FIELDS or f in FACTOR_FIELD_MAP]
+        available = [f for f in fields if f in BAR_FIELDS or f in FACTOR_FIELD_MAP or f in COMPUTED_FIELDS]
         missing = [f for f in fields if f not in available]
         return DataSourceStatus(
             source="bigquery",
@@ -181,6 +193,66 @@ class BigQueryProvider:
             return float(match.iloc[0]["value"])
         except (IndexError, KeyError, ValueError):
             return None
+
+    @staticmethod
+    def _compute_fields(bars_df: pd.DataFrame, fields: list[str]) -> dict[str, Any]:
+        """Compute technical indicators on-the-fly from daily bar data.
+
+        Bars are sorted DESC (newest first); reverse for rolling calculations.
+        """
+        result: dict[str, Any] = {}
+        if bars_df is None or bars_df.empty:
+            return result
+
+        # Sort chronological for rolling window calculations
+        df = bars_df.sort_values("timestamp", ascending=True).copy()
+        close = df["close"].astype(float)
+
+        needed = set(fields) & COMPUTED_FIELDS
+        if not needed:
+            return result
+
+        # ── Moving Averages ──
+        if "ma_20" in needed:
+            ma20 = close.rolling(20, min_periods=20).mean()
+            val = ma20.iloc[-1]
+            result["ma_20"] = float(val) if pd.notna(val) else None
+
+        if "ma_50" in needed:
+            ma50 = close.rolling(50, min_periods=50).mean()
+            val = ma50.iloc[-1]
+            result["ma_50"] = float(val) if pd.notna(val) else None
+
+        # ── ATR(14) ──
+        if "atr_14" in needed:
+            high = df["high"].astype(float)
+            low = df["low"].astype(float)
+            prev_close = close.shift(1)
+
+            tr = pd.concat([
+                high - low,
+                (high - prev_close).abs(),
+                (low - prev_close).abs(),
+            ], axis=1).max(axis=1)
+
+            atr = tr.rolling(14, min_periods=14).mean()
+            val = atr.iloc[-1]
+            result["atr_14"] = float(val) if pd.notna(val) else None
+
+        # ── Bollinger Bands (20-period, 2σ) ──
+        if "bb_upper" in needed or "bb_lower" in needed:
+            middle = close.rolling(20, min_periods=20).mean()
+            std20 = close.rolling(20, min_periods=20).std()
+
+            if "bb_upper" in needed:
+                val = (middle + 2 * std20).iloc[-1]
+                result["bb_upper"] = float(val) if pd.notna(val) else None
+
+            if "bb_lower" in needed:
+                val = (middle - 2 * std20).iloc[-1]
+                result["bb_lower"] = float(val) if pd.notna(val) else None
+
+        return result
 
 
 # ── Field Mappings ───────────────────────────────────────────────
