@@ -8,10 +8,9 @@ Usage:
 import argparse
 import logging
 import os
-import sys
 import signal
+import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Ensure project root is on path
@@ -42,6 +41,13 @@ def _setup_logging(strategy_id: int, env: str) -> logging.Logger:
             trading_logger.addHandler(h)
     trading_logger.setLevel(log.level)
 
+    # Also wire live.* (BQDataSource, MarketCalendar) to the strategy log
+    live_logger = logging.getLogger("live")
+    for h in log.handlers:
+        if not any(isinstance(eh, type(h)) for eh in live_logger.handlers):
+            live_logger.addHandler(h)
+    live_logger.setLevel(log.level)
+
     return log
 
 
@@ -51,12 +57,11 @@ def run_strategy(strategy_id: int, env: str) -> None:
 
     # Import here so logging is configured first
     import yaml
+
     from trading import get_trading_session
+    from trading.capital import CapitalManager
     from trading.models import TradingStrategy as TSModel
     from trading.runner import TradingRunner
-    from live.state import StateManager
-    from trading.adapter import StrategyAdapter
-    from trading.capital import CapitalManager
     from trading.signal_bridge import SignalBridge
     from trading.state import TradingStateManager
 
@@ -77,11 +82,13 @@ def run_strategy(strategy_id: int, env: str) -> None:
     # Parse config
     cfg = yaml.safe_load(strat.config_yaml) or {}
     market = strat.market or cfg.get("live", {}).get("market", "us")
-    broker_cfg = cfg.get("broker", {})
+    _broker_cfg = cfg.get("broker", {})
 
     log.info(
         "Strategy: %s | market=%s | capital=$%.0f",
-        strat.name, market, strat.capital_allocated,
+        strat.name,
+        market,
+        strat.capital_allocated,
     )
 
     # Initialize components with the trading DB session

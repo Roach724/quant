@@ -299,6 +299,15 @@ class TradingRunner:
                 bar_count += 1
                 day_bars += 1
 
+                # Heartbeat every 30 bars to confirm the loop is alive
+                if bar_count % 30 == 0:
+                    logger.debug(
+                        "Strategy %d: heartbeat — bar=%d day_bars=%d",
+                        strategy_id,
+                        bar_count,
+                        day_bars,
+                    )
+
                 # Periodic checkpoint
                 checkpoint_interval = int(state_cfg.get("checkpoint_interval", 300))
                 if state_mgr and bar_count > 0 and bar_count % checkpoint_interval == 0:
@@ -316,10 +325,16 @@ class TradingRunner:
 
             source.on_bar = _on_bar
 
+            acct = self.capital.get_account(strategy_id)
+            cash = acct.cash if acct else 0.0
+            positions = self.capital.get_positions(strategy_id)
+
             logger.info(
-                "Strategy %d: multi-day loop starting (day %d, max_days=%d)",
+                "Strategy %d: multi-day loop starting — day=%d cash=$%.2f positions=%d max_days=%d",
                 strategy_id,
                 trading_day + 1,
+                cash,
+                len(positions),
                 max_trading_days,
             )
 
@@ -340,6 +355,13 @@ class TradingRunner:
                 self._wait_for_market_open(calendar, bar_interval)
                 if stop.is_set():
                     break
+
+                # ── Resumed after market open ──
+                logger.info(
+                    "Strategy %d: Day %d market open — resuming",
+                    strategy_id,
+                    trading_day,
+                )
 
                 # Check if checkpoint exists (crash recovery)
                 if state_mgr and state_mgr.checkpoint_exists():
@@ -364,10 +386,18 @@ class TradingRunner:
                 day_stop_reason = None
                 max_bars_per_day = max_duration_per_day * 60 // bar_interval if bar_interval > 0 else 390
 
+                # Get current account state
+                acct = self.capital.get_account(strategy_id)
+                cash = acct.cash if acct else 0.0
+                positions = self.capital.get_positions(strategy_id)
+                pos_count = len(positions)
+
                 logger.info(
-                    "Strategy %d: ── Day %d starting ── (max_bars=%d)",
+                    "Strategy %d: ── Day %d starting ── cash=$%.2f positions=%d max_bars=%d",
                     strategy_id,
                     trading_day,
+                    cash,
+                    pos_count,
                     max_bars_per_day,
                 )
 
@@ -455,6 +485,7 @@ class TradingRunner:
     @staticmethod
     def _wait_for_market_open(calendar, poll_sec: int = 60):
         """Sleep until market opens, polling every poll_sec seconds."""
+        _logged = False
         while True:
             if calendar.is_open_now():
                 return
@@ -463,7 +494,15 @@ class TradingRunner:
                 wait_sec = max((next_open - datetime.now(UTC)).total_seconds(), poll_sec)
             else:
                 wait_sec = poll_sec
-            logger.debug("Waiting for market open — sleeping %d s", int(wait_sec))
+            if not _logged:
+                logger.info(
+                    "Waiting for market open — next open at %s (%s)",
+                    next_open.isoformat() if next_open else "unknown",
+                    _format_duration(int(wait_sec)),
+                )
+                _logged = True
+            else:
+                logger.debug("Waiting for market open — sleeping %d s", int(wait_sec))
             time.sleep(min(wait_sec, poll_sec))
 
     def _make_context(
@@ -495,3 +534,14 @@ class TradingRunner:
                     "Execute failed for %s",
                     sig.symbol,
                 )
+
+
+def _format_duration(seconds: int) -> str:
+    """Format seconds as human-readable duration string."""
+    if seconds < 120:
+        return f"{seconds}s"
+    hours, remainder = divmod(seconds, 3600)
+    minutes = remainder // 60
+    if hours > 0:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m"
