@@ -798,7 +798,7 @@ def admin_trading_start_strategy(strategy_id: int, env: str = "sim"):
         raise HTTPException(404, "Strategy not found")
 
     # Check if already running (PID file exists)
-    pid_file = f"/var/quant/trading/{env}/pids/strategy_{strategy_id}.pid"
+    pid_file = f"/var/data/trading/{env}/pids/strategy_{strategy_id}.pid"
     if os.path.exists(pid_file):
         try:
             with open(pid_file) as pf:
@@ -850,7 +850,7 @@ def admin_trading_stop_strategy(strategy_id: int, env: str = "sim"):
         raise HTTPException(404, "Strategy not found")
 
     # Stop via PID file
-    pid_file = f"/var/quant/trading/{env}/pids/strategy_{strategy_id}.pid"
+    pid_file = f"/var/data/trading/{env}/pids/strategy_{strategy_id}.pid"
     killed = False
     if os.path.exists(pid_file):
         try:

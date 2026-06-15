@@ -96,7 +96,7 @@ def run_strategy(strategy_id: int, env: str) -> None:
     )
 
     # Write PID file for the admin worker to track
-    pid_dir = Path(f"/var/quant/trading/{env}/pids")
+    pid_dir = Path(f"/var/data/trading/{env}/pids")
     pid_dir.mkdir(parents=True, exist_ok=True)
     pid_file = pid_dir / f"strategy_{strategy_id}.pid"
     pid_file.write_text(str(os.getpid()))

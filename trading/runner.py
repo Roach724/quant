@@ -235,7 +235,7 @@ class TradingRunner:
             calendar = MarketCalendar(market)
 
             # ── State persistence ──
-            state_dir = state_cfg.get("dir", f"/var/quant/trading/state/strategy_{strategy_id}/")
+            state_dir = state_cfg.get("dir", f"/var/data/trading/state/strategy_{strategy_id}/")
             state_mgr = None
             if state_cfg.get("enabled", True):
                 state_mgr = StateManager(state_dir)
