@@ -60,6 +60,7 @@ def _handle_ai_decision_run(task) -> None:
 
         # Persist results using Pydantic model's dict
         session = get_session()
+        _summary = {}
         try:
             run = session.query(AiDecisionRun).filter(AiDecisionRun.id == run_id).first()
             if run:
@@ -91,12 +92,13 @@ def _handle_ai_decision_run(task) -> None:
                     "symbols_ranked": len(fusion),
                     "action": decisions.get("summary", {}).get("action", "?"),
                 }
+                _summary = run.summary
                 run.finished_at = datetime.now(timezone.utc)
                 session.commit()
         finally:
             session.close()
 
-        task.result = json.dumps({"status": "success", "summary": run.summary if run else {}})
+        task.result = json.dumps({"status": "success", "summary": _summary})
 
     except Exception as exc:
         import traceback
