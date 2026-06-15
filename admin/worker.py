@@ -18,6 +18,88 @@ POLL_INTERVAL = 2  # seconds
 _LOG_DIRS = ["/var/log/quant/prod/cron", "/var/log/quant/prod/factor", "/var/log/quant/prod/quality", "/var/log/quant/prod/loader"]
 
 
+def _handle_ai_decision_run(task) -> None:
+    """Execute the AI Decision Engine pipeline for a pending task."""
+    import sys, json
+    from pathlib import Path
+
+    # Add project root to path
+    sys.path.insert(0, PROJECT_ROOT)
+
+    params = task.params or {}
+    if isinstance(params, str):
+        params = json.loads(params)
+
+    run_id = params.get("run_id")
+    strategy_name = params.get("strategy_name", "unknown")
+    market = params.get("market", "us")
+    config_yaml = params.get("config_yaml", "")
+
+    try:
+        import yaml
+        from ai_decision.config import AIDecisionConfig
+        from ai_decision.engine import AIDecisionEngine
+        from admin.models import get_session, AiDecisionRun
+
+        config_dict = yaml.safe_load(config_yaml)
+        if config_dict is None:
+            raise ValueError("empty config_yaml")
+
+        # Ensure market override
+        if "ai_decision" not in config_dict:
+            config_dict["ai_decision"] = {}
+        config_dict["ai_decision"]["market"] = market
+
+        cfg = AIDecisionConfig(config_dict)
+        engine = AIDecisionEngine(cfg)
+
+        # Run full pipeline
+        result = engine.run()
+
+        # Persist results
+        session = get_session()
+        try:
+            run = session.query(AiDecisionRun).filter(AiDecisionRun.id == run_id).first()
+            if run:
+                run.status = "success"
+                run.recall_result = result.get("candidates", [])
+                run.analysis_result = result.get("analysis_reports", [])
+                run.fusion_result = result.get("fusion_results", [])
+                run.decision_result = result.get("decisions", {})
+                run.summary = {
+                    "symbols_screened": len(result.get("candidates", [])),
+                    "symbols_analyzed": len(result.get("analysis_reports", [])),
+                    "symbols_ranked": len(result.get("fusion_results", [])),
+                }
+                run.finished_at = datetime.now(timezone.utc)
+                session.commit()
+        finally:
+            session.close()
+
+        task.result = json.dumps({"status": "success", "summary": run.summary if run else {}})
+
+    except Exception as exc:
+        import traceback
+        tb = traceback.format_exc()
+        task.result = str(exc)
+        # Update run record
+        try:
+            from admin.models import get_session, AiDecisionRun
+            session = get_session()
+            try:
+                run = session.query(AiDecisionRun).filter(AiDecisionRun.id == run_id).first()
+                if run:
+                    run.status = "failed"
+                    run.error = f"{exc}\n{tb}"
+                    run.finished_at = datetime.now(timezone.utc)
+                    session.commit()
+            finally:
+                session.close()
+        except Exception:
+            pass
+        raise
+
+
 def run_one(task: Task) -> None:
     """Execute a single pending task."""
     session = get_session()
@@ -30,6 +112,14 @@ def run_one(task: Task) -> None:
         t.status = "running"
         t.started_at = datetime.now(timezone.utc)
         session.commit()
+
+        task_type = (t.params or {}).get("type", "")
+        if task_type == "ai_decision_run" or t.type == "ai_decision_run":
+            _handle_ai_decision_run(t)
+            t.status = "completed"
+            t.finished_at = datetime.now(timezone.utc)
+            session.commit()
+            return
 
         command = (t.params or {}).get("cmd") or (t.params or {}).get("command", "echo no command")
 

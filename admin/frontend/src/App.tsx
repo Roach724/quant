@@ -7,6 +7,7 @@ import {
   LineChartOutlined,
   DollarOutlined,
   DatabaseOutlined,
+  BulbOutlined,
 } from '@ant-design/icons';
 import ProLayout from '@ant-design/pro-layout';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
@@ -22,6 +23,7 @@ import LogViewer from './pages/LogViewer';
 import CronJobs from './pages/CronJobs';
 import Models from './pages/Models';
 import CacheManager from './pages/CacheManager';
+import AIDecision from './pages/AIDecision';
 import { api } from './api';
 
 const menuData = [
@@ -34,6 +36,7 @@ const menuData = [
   { path: '/logs', name: '日志中心', icon: <FileTextOutlined /> },
   { path: '/cron', name: '调度中心', icon: <ClockCircleOutlined /> },
   { path: '/cache', name: '缓存管理', icon: <DatabaseOutlined /> },
+  { path: '/ai-decision', name: 'AI 决策', icon: <BulbOutlined /> },
 ];
 
 function SystemMonitor() {
@@ -103,6 +106,7 @@ function AppLayout() {
         <Route path="/logs" element={<LogViewer />} />
         <Route path="/cron" element={<CronJobs />} />
         <Route path="/cache" element={<CacheManager />} />
+        <Route path="/ai-decision" element={<AIDecision />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/experiments" element={<ExperimentDashboard />} />
         <Route path="/" element={<MarketCenter />} />
