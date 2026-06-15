@@ -39,6 +39,7 @@ def _handle_ai_decision_run(task) -> None:
         import yaml
         from ai_decision.config import AIDecisionConfig
         from ai_decision.engine import AIDecisionEngine
+        from ai_decision.schemas import PortfolioDecision
         from admin.models import get_session, AiDecisionRun
 
         config_dict = yaml.safe_load(config_yaml)
@@ -53,23 +54,31 @@ def _handle_ai_decision_run(task) -> None:
         cfg = AIDecisionConfig(config_dict)
         engine = AIDecisionEngine(cfg)
 
-        # Run full pipeline
-        result = engine.run()
+        # Run full pipeline (async engine)
+        import asyncio
+        portfolio_plan: PortfolioDecision = asyncio.run(engine.run())
 
-        # Persist results
+        # Persist results using Pydantic model's dict
         session = get_session()
         try:
             run = session.query(AiDecisionRun).filter(AiDecisionRun.id == run_id).first()
             if run:
                 run.status = "success"
-                run.recall_result = result.get("candidates", [])
-                run.analysis_result = result.get("analysis_reports", [])
-                run.fusion_result = result.get("fusion_results", [])
-                run.decision_result = result.get("decisions", {})
+                # Convert intermediate engine state to direct dict for SQLite JSON
+                candidates = [c.model_dump() for c in (engine.candidates or [])]
+                reports = [r.model_dump() for r in (engine.reports or [])]
+                fusion = [f.model_dump() for f in (engine.fusion_results or [])]
+                decisions = portfolio_plan.model_dump() if portfolio_plan else {}
+
+                run.recall_result = candidates
+                run.analysis_result = reports
+                run.fusion_result = fusion
+                run.decision_result = decisions
                 run.summary = {
-                    "symbols_screened": len(result.get("candidates", [])),
-                    "symbols_analyzed": len(result.get("analysis_reports", [])),
-                    "symbols_ranked": len(result.get("fusion_results", [])),
+                    "symbols_screened": len(candidates),
+                    "symbols_analyzed": len(reports),
+                    "symbols_ranked": len(fusion),
+                    "action": decisions.get("summary", {}).get("action", "?"),
                 }
                 run.finished_at = datetime.now(timezone.utc)
                 session.commit()
