@@ -850,13 +850,14 @@ def admin_trading_stop_strategy(strategy_id: int, env: str = "sim"):
         raise HTTPException(404, "Strategy not found")
 
     # Stop via PID file
+    import signal
     pid_file = f"/var/data/trading/{env}/pids/strategy_{strategy_id}.pid"
     killed = False
     if os.path.exists(pid_file):
         try:
             with open(pid_file) as pf:
                 pid = int(pf.read().strip())
-            os.kill(pid, _sig.SIGTERM)
+            os.kill(pid, signal.SIGTERM)
             killed = True
             try:
                 os.unlink(pid_file)
