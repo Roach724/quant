@@ -7,13 +7,14 @@ Usage:
     GCS_BUCKET=xxx python collectors/fundamental_collector.py --source valuation
     GCS_BUCKET=xxx python collectors/fundamental_collector.py --source all
 """
+
 import argparse
 import io
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
-from datetime import datetime, timezone
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
@@ -21,14 +22,13 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from google.cloud import storage
 
-from collectors.adapters.futu_financials_adapter import FutuFinancialsAdapter
-from collectors.adapters.futu_valuation_adapter import FutuValuationAdapter
-from collectors.adapters.futu_short_interest_adapter import FutuShortInterestAdapter
-from collectors.adapters.futu_capital_flow_adapter import FutuCapitalFlowAdapter
 from collectors.adapters.futu_analyst_adapter import FutuAnalystAdapter
+from collectors.adapters.futu_capital_flow_adapter import FutuCapitalFlowAdapter
+from collectors.adapters.futu_financials_adapter import FutuFinancialsAdapter
 from collectors.adapters.futu_shareholder_adapter import FutuShareholderAdapter
+from collectors.adapters.futu_short_interest_adapter import FutuShortInterestAdapter
+from collectors.adapters.futu_valuation_adapter import FutuValuationAdapter
 
 ADAPTERS = {
     "financials": FutuFinancialsAdapter,
@@ -88,8 +88,9 @@ def main():
 
 def _write_to_bq(data: dict[str, pd.DataFrame], source: str):
     """Write F10 data directly to BigQuery. Market detected from symbol prefix."""
-    from common.bq_writer import write_rows_to_bq
     import pandas as pd
+
+    from common.bq_writer import write_rows_to_bq
 
     dfs = []
     us_count = hk_count = 0

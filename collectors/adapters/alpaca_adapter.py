@@ -39,25 +39,26 @@ class AlpacaUSAdapter:
         records = []
         for symbol, bars in response.data.items():
             for bar in bars:
-                records.append({
-                    "symbol": symbol,
-                    "timestamp": bar.timestamp.replace(tzinfo=None),
-                    "open": bar.open,
-                    "high": bar.high,
-                    "low": bar.low,
-                    "close": bar.close,
-                    "volume": bar.volume,
-                    "market": self.market,
-                    "frequency": frequency,
-                })
+                records.append(
+                    {
+                        "symbol": symbol,
+                        "timestamp": bar.timestamp.replace(tzinfo=None),
+                        "open": bar.open,
+                        "high": bar.high,
+                        "low": bar.low,
+                        "close": bar.close,
+                        "volume": bar.volume,
+                        "market": self.market,
+                        "frequency": frequency,
+                    }
+                )
 
         return pd.DataFrame(records)
 
     def fetch_supported_symbols(self) -> list[str]:
         from alpaca.data.requests import StockLatestBarRequest
-        response = self._client.get_stock_latest_bar(
-            StockLatestBarRequest(symbol_or_symbols=[])
-        )
+
+        response = self._client.get_stock_latest_bar(StockLatestBarRequest(symbol_or_symbols=[]))
         return sorted(response.data.keys())
 
     def market_hours(self, d: date) -> tuple[time, time]:

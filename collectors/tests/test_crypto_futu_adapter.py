@@ -1,6 +1,6 @@
 """Unit tests for CryptoFutuAdapter — all mocked, no real OpenD connection."""
 
-from datetime import date, time, datetime
+from datetime import date, datetime, time
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -8,20 +8,22 @@ import pytest
 
 from collectors.adapters.crypto_futu_adapter import CryptoFutuAdapter
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_kline_row(time_key="2026-05-13 10:00:00", o=100.0, h=105.0, l=98.0, c=102.0, v=1000000):
-    return pd.Series({
-        "time_key": time_key,
-        "open": o,
-        "high": h,
-        "low": l,
-        "close": c,
-        "volume": v,
-    })
+
+def _make_kline_row(time_key="2026-05-13 10:00:00", o=100.0, h=105.0, low=98.0, c=102.0, v=1000000):
+    return pd.Series(
+        {
+            "time_key": time_key,
+            "open": o,
+            "high": h,
+            "low": low,
+            "close": c,
+            "volume": v,
+        }
+    )
 
 
 def _make_kline_df(rows):
@@ -31,6 +33,7 @@ def _make_kline_df(rows):
 # ---------------------------------------------------------------------------
 # 1. test_to_futu_code
 # ---------------------------------------------------------------------------
+
 
 def test_to_futu_code():
     adapter = CryptoFutuAdapter()
@@ -42,6 +45,7 @@ def test_to_futu_code():
 # ---------------------------------------------------------------------------
 # 2 & 3. _map_frequency
 # ---------------------------------------------------------------------------
+
 
 def test_map_frequency_valid():
     adapter = CryptoFutuAdapter()
@@ -64,6 +68,7 @@ def test_map_frequency_invalid():
 # 4. fetch_bars empty symbols
 # ---------------------------------------------------------------------------
 
+
 def test_fetch_bars_empty_symbols():
     adapter = CryptoFutuAdapter()
     start = datetime(2026, 5, 11)
@@ -76,6 +81,7 @@ def test_fetch_bars_empty_symbols():
 # ---------------------------------------------------------------------------
 # 5. fetch_bars single symbol
 # ---------------------------------------------------------------------------
+
 
 @patch("collectors.adapters.crypto_futu_adapter.OpenQuoteContext")
 def test_fetch_bars_single_symbol(mock_ctx_cls):
@@ -107,6 +113,7 @@ def test_fetch_bars_single_symbol(mock_ctx_cls):
 # 6. fetch_bars pagination
 # ---------------------------------------------------------------------------
 
+
 @patch("collectors.adapters.crypto_futu_adapter.OpenQuoteContext")
 def test_fetch_bars_pagination(mock_ctx_cls):
     mock_ctx = MagicMock()
@@ -135,6 +142,7 @@ def test_fetch_bars_pagination(mock_ctx_cls):
 # ---------------------------------------------------------------------------
 # 7. fetch_bars failure continues
 # ---------------------------------------------------------------------------
+
 
 @patch("collectors.adapters.crypto_futu_adapter.OpenQuoteContext")
 def test_fetch_bars_failure_continues(mock_ctx_cls):
@@ -166,6 +174,7 @@ def test_fetch_bars_failure_continues(mock_ctx_cls):
 # 8. fetch_supported_symbols
 # ---------------------------------------------------------------------------
 
+
 def test_fetch_supported_symbols():
     adapter = CryptoFutuAdapter()
     result = adapter.fetch_supported_symbols()
@@ -180,6 +189,7 @@ def test_fetch_supported_symbols():
 # 9. market_hours
 # ---------------------------------------------------------------------------
 
+
 def test_market_hours():
     adapter = CryptoFutuAdapter()
     open_time, close_time = adapter.market_hours(date(2026, 5, 13))
@@ -190,6 +200,7 @@ def test_market_hours():
 # ---------------------------------------------------------------------------
 # 10. close
 # ---------------------------------------------------------------------------
+
 
 @patch("collectors.adapters.crypto_futu_adapter.OpenQuoteContext")
 def test_close(mock_ctx_cls):

@@ -1,13 +1,15 @@
 """Futu OpenD cryptocurrency market adapter — LV1."""
 
-import os
 import logging
-from datetime import date, time, datetime
-from typing import Optional
+import os
+from datetime import date, datetime, time
 
 import pandas as pd
 from futu import (
-    OpenQuoteContext, RET_OK, AuType, KLType,
+    RET_OK,
+    AuType,
+    KLType,
+    OpenQuoteContext,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,9 +26,16 @@ class CryptoFutuAdapter:
     market = "CRYPTO"
 
     _SUPPORTED_SYMBOLS = [
-        "BTC/USDT", "ETH/USDT", "SOL/USDT", "LTC/USDT",
-        "XRP/USDT", "DOT/USDT", "ADA/USDT", "AVAX/USDT",
-        "LINK/USDT", "UNI/USDT",
+        "BTC/USDT",
+        "ETH/USDT",
+        "SOL/USDT",
+        "LTC/USDT",
+        "XRP/USDT",
+        "DOT/USDT",
+        "ADA/USDT",
+        "AVAX/USDT",
+        "LINK/USDT",
+        "UNI/USDT",
     ]
 
     _FREQ_MAP = {
@@ -39,10 +48,10 @@ class CryptoFutuAdapter:
         "1w": KLType.K_WEEK,
     }
 
-    def __init__(self, host: Optional[str] = None, port: Optional[int] = None):
+    def __init__(self, host: str | None = None, port: int | None = None):
         self.host = host or os.environ.get("OPEND_HOST", "127.0.0.1")
         self.port = port or int(os.environ.get("OPEND_PORT", "11111"))
-        self._ctx: Optional[OpenQuoteContext] = None
+        self._ctx: OpenQuoteContext | None = None
 
     def _get_ctx(self) -> OpenQuoteContext:
         if self._ctx is None:
@@ -91,25 +100,31 @@ class CryptoFutuAdapter:
 
             while True:
                 ret, data, page_key = ctx.request_history_kline(
-                    futu_code, start=start_str, end=end_str,
-                    ktype=ktype, autype=AuType.NONE,
-                    max_count=1000, page_req_key=page_key,
+                    futu_code,
+                    start=start_str,
+                    end=end_str,
+                    ktype=ktype,
+                    autype=AuType.NONE,
+                    max_count=1000,
+                    page_req_key=page_key,
                 )
                 if ret != RET_OK:
                     logger.warning("Futu crypto fetch failed for %s: %s", sym, data)
                     break
 
                 for _, row in data.iterrows():
-                    records.append({
-                        "symbol": sym,
-                        "timestamp": row["time_key"],
-                        "open": float(row["open"]),
-                        "high": float(row["high"]),
-                        "low": float(row["low"]),
-                        "close": float(row["close"]),
-                        "volume": int(float(row["volume"])),
-                        "market": self.market,
-                    })
+                    records.append(
+                        {
+                            "symbol": sym,
+                            "timestamp": row["time_key"],
+                            "open": float(row["open"]),
+                            "high": float(row["high"]),
+                            "low": float(row["low"]),
+                            "close": float(row["close"]),
+                            "volume": int(float(row["volume"])),
+                            "market": self.market,
+                        }
+                    )
 
                 if page_key is None:
                     break

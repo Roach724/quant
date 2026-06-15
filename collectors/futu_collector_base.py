@@ -97,9 +97,7 @@ class FutuCollector:
         logger.info(f"Collected {len(result)} rows from {len(symbols)} symbols")
         return result
 
-    def save_to_gcs(
-        self, df: pd.DataFrame, table_name: str, date_str: str | None = None
-    ) -> str | None:
+    def save_to_gcs(self, df: pd.DataFrame, table_name: str, date_str: str | None = None) -> str | None:
         """Save DataFrame to GCS as Parquet."""
         if df.empty:
             logger.info(f"No data to save for {table_name}")

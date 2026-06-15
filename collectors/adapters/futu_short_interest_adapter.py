@@ -3,8 +3,10 @@
 NOTE: get_short_interest returns 3 values (ret, df1, df2), not the usual 2!
 The 3rd value is an aggregated_short DataFrame which may be empty.
 """
+
 import pandas as pd
 from futu import RET_OK
+
 from collectors.adapters._futu_base import FutuBaseAdapter
 
 

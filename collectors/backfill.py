@@ -47,16 +47,17 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from adapters.yfinance_adapter import YFinanceUSAdapter
-from adapters.crypto_binance_adapter import CryptoBinanceAdapter
-from adapters.yfinance_hk_adapter import YFinanceHKAdapter
 from adapters.akshare_hk_adapter import AkshareHKAdapter
 from adapters.akshare_us_adapter import AkshareUSAdapter
-from adapters.futu_stock_adapter import FutuStockAdapter
+from adapters.crypto_binance_adapter import CryptoBinanceAdapter
 from adapters.crypto_futu_adapter import CryptoFutuAdapter
-from storage import build_gcs_path, dataframe_to_parquet_bytes
+from adapters.futu_stock_adapter import FutuStockAdapter
+from adapters.yfinance_adapter import YFinanceUSAdapter
+from adapters.yfinance_hk_adapter import YFinanceHKAdapter
+from storage import build_gcs_path
+
 from common.bq_writer import write_bars_to_bq
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -83,6 +84,7 @@ US_PROGRESS_INTERVAL = 50  # log every N symbols
 def _replace_existing_bars(market: str, frequency: str, start: str, end: str, table_id: str = None):
     """Delete existing bars in date range for idempotent backfill."""
     from google.cloud import bigquery as _bq
+
     client = _bq.Client(project="deductive-notch-495015-c2")
     table_name = table_id or f"{market}_bars_{frequency}"
     table_ref = f"deductive-notch-495015-c2.quant.{table_name}"
@@ -108,6 +110,7 @@ def _backfill_us(
     gcs_bucket: str | None,
     local_dir: str | None,
     chunk_days: int = 365,
+    table_id: str | None = None,
 ):
     """Backfill US stocks: per-symbol serial processing with yfinance→akshare fallback.
 
@@ -146,8 +149,7 @@ def _backfill_us(
             except Exception as e:
                 if attempt < US_MAX_RETRIES:
                     wait = US_SYMBOL_DELAY * (2 ** (attempt + 1))
-                    logger.warning("Symbol %s attempt %d failed: %s. Retrying in %.1fs...",
-                                   sym, attempt + 1, e, wait)
+                    logger.warning("Symbol %s attempt %d failed: %s. Retrying in %.1fs...", sym, attempt + 1, e, wait)
                     time.sleep(wait)
                 else:
                     logger.error("Symbol %s failed after %d retries: %s", sym, US_MAX_RETRIES, e)
@@ -157,15 +159,20 @@ def _backfill_us(
             total_rows += sym_rows
 
         if (idx + 1) % US_PROGRESS_INTERVAL == 0:
-            logger.info("Progress: %d/%d symbols processed, %d rows collected so far",
-                        idx + 1, len(symbols), total_rows)
+            logger.info(
+                "Progress: %d/%d symbols processed, %d rows collected so far", idx + 1, len(symbols), total_rows
+            )
 
         # Rate-limit between symbols
         if idx < len(symbols) - 1:
             time.sleep(US_SYMBOL_DELAY)
 
-    logger.info("US backfill complete: %d/%d symbols succeeded, %d total rows",
-                len(symbols) - len(failed_symbols), len(symbols), total_rows)
+    logger.info(
+        "US backfill complete: %d/%d symbols succeeded, %d total rows",
+        len(symbols) - len(failed_symbols),
+        len(symbols),
+        total_rows,
+    )
     if failed_symbols:
         logger.warning("Failed symbols (%d): %s", len(failed_symbols), failed_symbols[:20])
 
@@ -203,6 +210,7 @@ def _backfill_hk(
     for idx, sym in enumerate(symbols):
         # Convert SSOT format (HK.00001) to yfinance format (0001.HK)
         from common.normalize import normalize_symbol
+
         bare = normalize_symbol(sym, market)
         yf_sym = f"{bare}.HK"
         sym_rows = 0
@@ -225,8 +233,7 @@ def _backfill_hk(
             except Exception as e:
                 if attempt < HK_MAX_RETRIES:
                     wait = HK_SYMBOL_DELAY * (2 ** (attempt + 1))
-                    logger.warning("Symbol %s attempt %d failed: %s. Retrying in %.1fs...",
-                                   sym, attempt + 1, e, wait)
+                    logger.warning("Symbol %s attempt %d failed: %s. Retrying in %.1fs...", sym, attempt + 1, e, wait)
                     time.sleep(wait)
                 else:
                     logger.error("Symbol %s failed after %d retries: %s", sym, HK_MAX_RETRIES, e)
@@ -236,15 +243,20 @@ def _backfill_hk(
             total_rows += sym_rows
 
         if (idx + 1) % HK_PROGRESS_INTERVAL == 0:
-            logger.info("Progress: %d/%d symbols processed, %d rows collected so far",
-                        idx + 1, len(symbols), total_rows)
+            logger.info(
+                "Progress: %d/%d symbols processed, %d rows collected so far", idx + 1, len(symbols), total_rows
+            )
 
         # Rate-limit between symbols
         if idx < len(symbols) - 1:
             time.sleep(HK_SYMBOL_DELAY)
 
-    logger.info("HK backfill complete: %d/%d symbols succeeded, %d total rows",
-                len(symbols) - len(failed_symbols), len(symbols), total_rows)
+    logger.info(
+        "HK backfill complete: %d/%d symbols succeeded, %d total rows",
+        len(symbols) - len(failed_symbols),
+        len(symbols),
+        total_rows,
+    )
     if failed_symbols:
         logger.warning("Failed symbols (%d): %s", len(failed_symbols), failed_symbols[:20])
 
@@ -277,14 +289,27 @@ def backfill(
     end_dt = datetime.strptime(end, "%Y-%m-%d")
     total_days = (end_dt - start_dt).days
 
-    logger.info("Backfill: %s → %s (%d days, %d symbols, freq=%s, source=%s)",
-                start, end, total_days, len(symbols), frequency, source)
+    logger.info(
+        "Backfill: %s → %s (%d days, %d symbols, freq=%s, source=%s)",
+        start,
+        end,
+        total_days,
+        len(symbols),
+        frequency,
+        source,
+    )
     logger.info("Symbols: %s", symbols[:20] if len(symbols) > 20 else symbols)
     logger.info("Writing directly to BigQuery")
 
     # --- Replace mode: delete existing data in date range before writing ---
     if replace:
-        storage_market = market if market else ("us" if source in ("yfinance", "alpaca", "futu_stock") else "hk" if source == "yfinancehk" else "crypto")
+        storage_market = (
+            market
+            if market
+            else (
+                "us" if source in ("yfinance", "alpaca", "futu_stock") else "hk" if source == "yfinancehk" else "crypto"
+            )
+        )
         _replace_existing_bars(storage_market, frequency, start, end, table_id=table_id)
     elif not skip_existing:
         logger.info("Append mode (skip_existing=False): all rows will be inserted")
@@ -336,6 +361,7 @@ def backfill(
         adapter = CryptoFutuAdapter()
     elif source == "alpaca":
         from adapters.alpaca_adapter import AlpacaUSAdapter
+
         key = os.environ.get("ALPACA_API_KEY", "")
         secret = os.environ.get("ALPACA_API_SECRET", "")
         if not key or not secret:
@@ -356,8 +382,14 @@ def backfill(
     for i in range(chunks):
         chunk_end = min(chunk_start + timedelta(days=chunk_days), end_dt)
 
-        logger.info("[%d/%d] Fetching %s → %s (freq=%s)...", i + 1, chunks,
-                    chunk_start.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d"), frequency)
+        logger.info(
+            "[%d/%d] Fetching %s → %s (freq=%s)...",
+            i + 1,
+            chunks,
+            chunk_start.strftime("%Y-%m-%d"),
+            chunk_end.strftime("%Y-%m-%d"),
+            frequency,
+        )
 
         try:
             df = adapter.fetch_bars(symbols, chunk_start, chunk_end, frequency=frequency)
@@ -383,10 +415,9 @@ def backfill(
 
 def _write_local(df, base_dir: str, market: str, frequency: str = "5m"):
     """Write bars to local filesystem (same Hive-path structure as GCS)."""
-    import pandas as pd
 
     df = df.copy()
-    df["_ingest_time"] = datetime.now(timezone.utc)
+    df["_ingest_time"] = datetime.now(UTC)
 
     groups = df.groupby(["symbol", df["timestamp"].dt.date])
     for (symbol, _date), group in groups:
@@ -403,38 +434,53 @@ def _write_local(df, base_dir: str, market: str, frequency: str = "5m"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Backfill historical market data")
-    parser.add_argument("--start", default=os.environ.get("BACKFILL_START", ""),
-                        help="Start date (YYYY-MM-DD)")
-    parser.add_argument("--end", default=os.environ.get("BACKFILL_END", ""),
-                        help="End date (YYYY-MM-DD)")
-    parser.add_argument("--symbols", default=os.environ.get("BACKFILL_SYMBOLS", ""),
-                        help="Comma-separated symbols (default: all S&P 500)")
-    parser.add_argument("--all", action="store_true",
-                        help="Fetch all S&P 500 symbols (ignored if --symbols specified)")
-    parser.add_argument("--gcs-bucket", default=os.environ.get("GCS_BUCKET", ""),
-                        help="GCS bucket name")
-    parser.add_argument("--local-dir", default=os.environ.get("BACKFILL_LOCAL_DIR", ""),
-                        help="Local directory for output (instead of GCS)")
-    parser.add_argument("--chunk-days", type=int,
-                        default=int(os.environ.get("BACKFILL_CHUNK_DAYS", "7")),
-                        help="Days per API chunk")
-    parser.add_argument("--sleep", type=float,
-                        default=float(os.environ.get("BACKFILL_SLEEP", "3")),
-                        help="Seconds sleep between chunks")
-    parser.add_argument("--frequency", default=os.environ.get("BACKFILL_FREQUENCY", "1m"),
-                        choices=["1m", "5m", "15m", "30m", "1h", "1d"],
-                        help="Bar frequency (default: 1m. Use 1d for multi-year backfill)")
-    parser.add_argument("--source", default=os.environ.get("BACKFILL_SOURCE", "yfinance"),
-                        choices=["yfinance", "alpaca", "cryptobinance", "yfinancehk",
-                                 "futu_stock", "futu_crypto"],
-                        help="Data source adapter (default: yfinance)")
-    parser.add_argument("--market", default="", choices=["us", "hk", ""], help="Filter symbols by market prefix (e.g. --market us for US. only)")
-    parser.add_argument("--replace", action="store_true",
-                        help="Delete existing data in date range before backfill (DANGER: may lose data if API incomplete)")
-    parser.add_argument("--skip-existing", action="store_true", default=True,
-                        help="Skip rows already in BQ (default, safe)")
-    parser.add_argument("--table", default="",
-                        help="Override BQ table name (default: {market}_bars_{freq})")
+    parser.add_argument("--start", default=os.environ.get("BACKFILL_START", ""), help="Start date (YYYY-MM-DD)")
+    parser.add_argument("--end", default=os.environ.get("BACKFILL_END", ""), help="End date (YYYY-MM-DD)")
+    parser.add_argument(
+        "--symbols",
+        default=os.environ.get("BACKFILL_SYMBOLS", ""),
+        help="Comma-separated symbols (default: all S&P 500)",
+    )
+    parser.add_argument("--all", action="store_true", help="Fetch all S&P 500 symbols (ignored if --symbols specified)")
+    parser.add_argument("--gcs-bucket", default=os.environ.get("GCS_BUCKET", ""), help="GCS bucket name")
+    parser.add_argument(
+        "--local-dir",
+        default=os.environ.get("BACKFILL_LOCAL_DIR", ""),
+        help="Local directory for output (instead of GCS)",
+    )
+    parser.add_argument(
+        "--chunk-days", type=int, default=int(os.environ.get("BACKFILL_CHUNK_DAYS", "7")), help="Days per API chunk"
+    )
+    parser.add_argument(
+        "--sleep", type=float, default=float(os.environ.get("BACKFILL_SLEEP", "3")), help="Seconds sleep between chunks"
+    )
+    parser.add_argument(
+        "--frequency",
+        default=os.environ.get("BACKFILL_FREQUENCY", "1m"),
+        choices=["1m", "5m", "15m", "30m", "1h", "1d"],
+        help="Bar frequency (default: 1m. Use 1d for multi-year backfill)",
+    )
+    parser.add_argument(
+        "--source",
+        default=os.environ.get("BACKFILL_SOURCE", "yfinance"),
+        choices=["yfinance", "alpaca", "cryptobinance", "yfinancehk", "futu_stock", "futu_crypto"],
+        help="Data source adapter (default: yfinance)",
+    )
+    parser.add_argument(
+        "--market",
+        default="",
+        choices=["us", "hk", ""],
+        help="Filter symbols by market prefix (e.g. --market us for US. only)",
+    )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Delete existing data in date range before backfill (DANGER: may lose data if API incomplete)",
+    )
+    parser.add_argument(
+        "--skip-existing", action="store_true", default=True, help="Skip rows already in BQ (default, safe)"
+    )
+    parser.add_argument("--table", default="", help="Override BQ table name (default: {market}_bars_{freq})")
     args = parser.parse_args()
 
     if not args.start or not args.end:
@@ -458,6 +504,7 @@ if __name__ == "__main__":
             symbols = YFinanceHKAdapter.fetch_all_symbols()
         elif args.source == "alpaca":
             from adapters.alpaca_adapter import AlpacaUSAdapter
+
             key = os.environ.get("ALPACA_API_KEY", "")
             secret = os.environ.get("ALPACA_API_SECRET", "")
             symbols = AlpacaUSAdapter(api_key=key, api_secret=secret).fetch_supported_symbols()
@@ -476,7 +523,9 @@ if __name__ == "__main__":
             sys.exit(1)
         logger.info("Filtered to %d symbols for market=%s", len(symbols), args.market.upper())
     backfill(
-        start=args.start, end=args.end, symbols=symbols,
+        start=args.start,
+        end=args.end,
+        symbols=symbols,
         gcs_bucket=args.gcs_bucket or None,
         local_dir=args.local_dir or None,
         chunk_days=args.chunk_days or None,

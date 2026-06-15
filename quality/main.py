@@ -10,7 +10,7 @@ Env vars:
 
 import logging
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 from google.cloud import bigquery
@@ -28,7 +28,7 @@ def _expected_bars(frequency: str, lookback_days: int, market: str) -> int:
     window (skips weekends and holidays). Falls back to a simple estimate
     if the library is unavailable.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     start = now - timedelta(days=lookback_days)
 
     if frequency == "1d":
@@ -41,10 +41,12 @@ def _expected_bars(frequency: str, lookback_days: int, market: str) -> int:
     # Try exchange_calendars for accurate trading-day count
     try:
         import exchange_calendars as xcals
+
         code = "XNYS" if market == "us" else ("XHKG" if market == "hk" else None)
         if code:
             cal = xcals.get_calendar(code)
             import pandas as _pd
+
             sessions = cal.sessions_in_range(
                 _pd.Timestamp(start).normalize(),
                 _pd.Timestamp(now).normalize(),
@@ -73,14 +75,12 @@ def check_completeness(df: pd.DataFrame, expected_bars: int | None = None) -> li
 
 def check_freshness(df: pd.DataFrame, max_age_hours: int = 24) -> list[str]:
     issues = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for symbol, group in df.groupby("symbol"):
         latest = group["timestamp"].max()
         age = (now - latest).total_seconds() / 3600
         if age > max_age_hours:
-            issues.append(
-                f"Freshness: {symbol} latest bar is {latest.isoformat()} ({age:.1f}h ago)"
-            )
+            issues.append(f"Freshness: {symbol} latest bar is {latest.isoformat()} ({age:.1f}h ago)")
     return issues
 
 
@@ -88,23 +88,16 @@ def check_sanity(df: pd.DataFrame) -> list[str]:
     issues = []
     for _, row in df.iterrows():
         if row["high"] < row["low"]:
-            issues.append(
-                f"Sanity: {row['symbol']} at {row['timestamp']} high < low: "
-                f"{row['high']} < {row['low']}"
-            )
+            issues.append(f"Sanity: {row['symbol']} at {row['timestamp']} high < low: {row['high']} < {row['low']}")
         for col in ["open", "high", "low", "close"]:
             if row[col] <= 0:
-                issues.append(
-                    f"Sanity: {row['symbol']} at {row['timestamp']} has {col} = {row[col]}"
-                )
+                issues.append(f"Sanity: {row['symbol']} at {row['timestamp']} has {col} = {row[col]}")
     if len(df) > 30:
         vol_std = df["volume"].std()
         vol_mean = df["volume"].mean()
         spikes = df[df["volume"] > vol_mean + 10 * vol_std]
         for _, row in spikes.iterrows():
-            issues.append(
-                f"Sanity: {row['symbol']} at {row['timestamp']} volume spike: {row['volume']:,}"
-            )
+            issues.append(f"Sanity: {row['symbol']} at {row['timestamp']} volume spike: {row['volume']:,}")
     return issues
 
 
@@ -112,8 +105,8 @@ def query_bars(market: str, frequency: str, lookback_days: int) -> pd.DataFrame:
     project = os.environ.get("GCP_PROJECT", "deductive-notch-495015-c2")
     table = f"{project}.quant.{market}_bars_{frequency}"
 
-    start = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-    end = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    start = (datetime.now(UTC) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    end = datetime.now(UTC).strftime("%Y-%m-%d")
 
     query = f"""
         SELECT symbol, timestamp, open, high, low, close, volume
@@ -121,10 +114,12 @@ def query_bars(market: str, frequency: str, lookback_days: int) -> pd.DataFrame:
         WHERE DATE(timestamp) BETWEEN @start AND @end
         ORDER BY symbol, timestamp
     """
-    job_config = bigquery.QueryJobConfig(query_parameters=[
-        bigquery.ScalarQueryParameter("start", "STRING", start),
-        bigquery.ScalarQueryParameter("end", "STRING", end),
-    ])
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("start", "STRING", start),
+            bigquery.ScalarQueryParameter("end", "STRING", end),
+        ]
+    )
 
     client = bigquery.Client(project=project)
     logger.info("Querying %s (market=%s freq=%s range=%s..%s)", table, market, frequency, start, end)
@@ -155,7 +150,12 @@ def main(event=None, context=None):
     all_issues.extend(check_sanity(df))
     all_issues.extend(check_freshness(df, max_age_hours))
     expected = _expected_bars(frequency, lookback_days, market)
-    logger.info("Expected bars: %d (freq=%s, %d trading days)", expected, frequency, expected // (78 if frequency == "5m" else 1))
+    logger.info(
+        "Expected bars: %d (freq=%s, %d trading days)",
+        expected,
+        frequency,
+        expected // (78 if frequency == "5m" else 1),
+    )
     all_issues.extend(check_completeness(df, expected))
 
     if all_issues:

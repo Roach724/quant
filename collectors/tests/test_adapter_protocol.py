@@ -1,5 +1,4 @@
 # collectors/tests/test_adapter_protocol.py
-from datetime import date
 from collectors.adapters.base import MarketAdapter
 
 
@@ -23,5 +22,6 @@ def test_adapter_is_protocol():
 
 def test_adapter_protocol_requires_market():
     from typing import get_type_hints
-    hints = get_type_hints(MarketAdapter)
+
+    get_type_hints(MarketAdapter)
     assert "market" in MarketAdapter.__annotations__
