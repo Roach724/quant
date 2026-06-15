@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 import yaml
 from google.cloud import bigquery
+from pathlib import Path
 
 from engine.data import DataFrameSource
 from engine.strategy import StrategyContext, Signal as EngineSignal
@@ -25,7 +26,8 @@ logger = logging.getLogger(__name__)
 PROJECT = "deductive-notch-495015-c2"
 DATASET = "quant"
 BARS_1D_TABLE = f"{PROJECT}.{DATASET}.us_bars_1d"
-SYMBOLS_CONFIG = "/opt/quant-dev/config/symbols.yaml"
+QUANT_HOME = Path("/opt/quant") if Path("/opt/quant").exists() else Path("/opt/quant-dev")
+SYMBOLS_CONFIG = str(QUANT_HOME / "config/symbols.yaml")
 
 # Minimum lookback bars required for most strategies
 MIN_LOOKBACK_DAYS = 120  # enough for 20-bar momentum, 50-bar MA, etc.
