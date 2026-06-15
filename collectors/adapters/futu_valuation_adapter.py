@@ -5,6 +5,7 @@ We flatten trend dicts into (date, value) rows.
 """
 import pandas as pd
 from futu import RET_OK
+
 from collectors.adapters._futu_base import FutuBaseAdapter
 
 VALUATION_TYPES = {"pe": 1, "pb": 2, "ps": 3}

@@ -11,16 +11,18 @@ Scheduling:
 """
 
 from __future__ import annotations
-import logging, sys, time, json
-from datetime import datetime, timezone
+
+import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import yaml
 import yfinance as yf
-from common.logging_util import get_logger
 from google.cloud import bigquery
+
+from common.logging_util import get_logger
 
 BQ_PROJECT = "deductive-notch-495015-c2"
 BQ_DATASET = "quant"
@@ -34,7 +36,7 @@ def load_index_symbols() -> list[str]:
 
 def is_market_open() -> bool:
     """US market: Mon-Fri 09:30-16:00 ET = 13:30-20:00 UTC."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if now.weekday() >= 5:
         return False  # weekend
     market_open = now.replace(hour=13, minute=30, second=0, microsecond=0)
@@ -64,8 +66,8 @@ def fetch_and_write(symbol: str, freq: str, client) -> int:
     rows_written = 0
     batch = []
     for idx, row in df.iterrows():
-        ts = idx.to_pydatetime().replace(tzinfo=timezone.utc) if hasattr(idx, 'to_pydatetime') else idx
-        if latest and ts <= latest.replace(tzinfo=timezone.utc):
+        ts = idx.to_pydatetime().replace(tzinfo=UTC) if hasattr(idx, 'to_pydatetime') else idx
+        if latest and ts <= latest.replace(tzinfo=UTC):
             continue
         batch.append({
             "symbol": symbol,

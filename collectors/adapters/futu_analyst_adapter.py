@@ -4,6 +4,7 @@ API returns flat dict: {highest, average, lowest, rating, total, buy, hold, sell
 """
 import pandas as pd
 from futu import RET_OK
+
 from collectors.adapters._futu_base import FutuBaseAdapter
 
 

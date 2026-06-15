@@ -1,13 +1,15 @@
 """Futu OpenD cryptocurrency market adapter — LV1."""
 
-import os
 import logging
-from datetime import date, time, datetime
-from typing import Optional
+import os
+from datetime import date, datetime, time
 
 import pandas as pd
 from futu import (
-    OpenQuoteContext, RET_OK, AuType, KLType,
+    RET_OK,
+    AuType,
+    KLType,
+    OpenQuoteContext,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,10 +41,10 @@ class CryptoFutuAdapter:
         "1w": KLType.K_WEEK,
     }
 
-    def __init__(self, host: Optional[str] = None, port: Optional[int] = None):
+    def __init__(self, host: str | None = None, port: int | None = None):
         self.host = host or os.environ.get("OPEND_HOST", "127.0.0.1")
         self.port = port or int(os.environ.get("OPEND_PORT", "11111"))
-        self._ctx: Optional[OpenQuoteContext] = None
+        self._ctx: OpenQuoteContext | None = None
 
     def _get_ctx(self) -> OpenQuoteContext:
         if self._ctx is None:

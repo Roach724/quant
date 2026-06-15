@@ -10,7 +10,7 @@ Env vars:
 
 import logging
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 from google.cloud import bigquery
@@ -28,7 +28,7 @@ def _expected_bars(frequency: str, lookback_days: int, market: str) -> int:
     window (skips weekends and holidays). Falls back to a simple estimate
     if the library is unavailable.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     start = now - timedelta(days=lookback_days)
 
     if frequency == "1d":
@@ -73,7 +73,7 @@ def check_completeness(df: pd.DataFrame, expected_bars: int | None = None) -> li
 
 def check_freshness(df: pd.DataFrame, max_age_hours: int = 24) -> list[str]:
     issues = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for symbol, group in df.groupby("symbol"):
         latest = group["timestamp"].max()
         age = (now - latest).total_seconds() / 3600
@@ -112,8 +112,8 @@ def query_bars(market: str, frequency: str, lookback_days: int) -> pd.DataFrame:
     project = os.environ.get("GCP_PROJECT", "deductive-notch-495015-c2")
     table = f"{project}.quant.{market}_bars_{frequency}"
 
-    start = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-    end = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    start = (datetime.now(UTC) - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    end = datetime.now(UTC).strftime("%Y-%m-%d")
 
     query = f"""
         SELECT symbol, timestamp, open, high, low, close, volume
@@ -155,7 +155,10 @@ def main(event=None, context=None):
     all_issues.extend(check_sanity(df))
     all_issues.extend(check_freshness(df, max_age_hours))
     expected = _expected_bars(frequency, lookback_days, market)
-    logger.info("Expected bars: %d (freq=%s, %d trading days)", expected, frequency, expected // (78 if frequency == "5m" else 1))
+    logger.info(
+        "Expected bars: %d (freq=%s, %d trading days)",
+        expected, frequency, expected // (78 if frequency == "5m" else 1),
+    )
     all_issues.extend(check_completeness(df, expected))
 
     if all_issues:

@@ -1,6 +1,6 @@
 """Hong Kong stock market adapter via yfinance with akshare fallback."""
-from datetime import date, time, timezone
 import logging
+from datetime import date, time
 
 import pandas as pd
 import yfinance as yf
@@ -126,6 +126,7 @@ class YFinanceHKAdapter:
             List of 4-digit symbol strings (no .HK suffix), e.g. ["0700", "9988", ...].
         """
         import os
+
         import pandas as pd
 
         # Priority 1: pre-cached CSV snapshot

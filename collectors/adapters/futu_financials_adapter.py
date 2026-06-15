@@ -10,6 +10,7 @@ We expand item_list into individual rows.
 """
 import pandas as pd
 from futu import RET_OK
+
 from collectors.adapters._futu_base import FutuBaseAdapter
 
 STATEMENT_TYPES = {"income": 1, "balance_sheet": 2, "cash_flow": 3, "main_index": 4}
@@ -61,7 +62,7 @@ class FutuFinancialsAdapter(FutuBaseAdapter):
                 rl = data.get("report_list", [])
                 if rl and len(rl) >= 2:
                     # rl[0] = header row dict with keys like date_time, ..., item_list
-                    header = rl[0]
+                    _header = rl[0]
                     for row in rl[1:]:
                         item_list = row.get("item_list", [])
                         if isinstance(item_list, list):

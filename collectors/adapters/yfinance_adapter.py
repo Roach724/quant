@@ -1,5 +1,5 @@
-from datetime import date, datetime, time
 import logging
+from datetime import date, datetime, time
 
 import pandas as pd
 import yfinance as yf
@@ -135,7 +135,9 @@ class YFinanceUSAdapter:
                 #                  昨收价, 总市值, 市盈率, 成交量, 成交额, 振幅, 换手率, 代码
                 # "代码" is in format "105.MSFT"
                 if "代码" not in raw.columns:
-                    raise ValueError("unexpected akshare columns: %s" % raw.columns.tolist())
+                    raise ValueError(
+                        f"unexpected akshare columns: {raw.columns.tolist()}"
+                    )
 
                 df = raw.copy()
                 # Extract plain symbol from akshare code ("105.MSFT" → "MSFT")
@@ -173,7 +175,10 @@ class YFinanceUSAdapter:
                 sp_df = tables[0]
                 symbols = sp_df["Symbol"].astype(str).str.replace(".", "-", regex=False).tolist()
                 symbols = list(dict.fromkeys(symbols))  # deduplicate
-                logger.info("fetch_all_symbols: got %d symbols from Wikipedia S&P 500", len(symbols))
+                logger.info(
+                    "fetch_all_symbols: got %d symbols from Wikipedia S&P 500",
+                    len(symbols),
+                )
                 return symbols
         except Exception as e:
             logger.debug("Wikipedia S&P 500 fetch failed: %s", e)

@@ -47,16 +47,17 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from adapters.yfinance_adapter import YFinanceUSAdapter
-from adapters.crypto_binance_adapter import CryptoBinanceAdapter
-from adapters.yfinance_hk_adapter import YFinanceHKAdapter
 from adapters.akshare_hk_adapter import AkshareHKAdapter
 from adapters.akshare_us_adapter import AkshareUSAdapter
-from adapters.futu_stock_adapter import FutuStockAdapter
+from adapters.crypto_binance_adapter import CryptoBinanceAdapter
 from adapters.crypto_futu_adapter import CryptoFutuAdapter
-from storage import build_gcs_path, dataframe_to_parquet_bytes
+from adapters.futu_stock_adapter import FutuStockAdapter
+from adapters.yfinance_adapter import YFinanceUSAdapter
+from adapters.yfinance_hk_adapter import YFinanceHKAdapter
+from storage import build_gcs_path
+
 from common.bq_writer import write_bars_to_bq
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -108,6 +109,7 @@ def _backfill_us(
     gcs_bucket: str | None,
     local_dir: str | None,
     chunk_days: int = 365,
+    table_id: str | None = None,
 ):
     """Backfill US stocks: per-symbol serial processing with yfinance→akshare fallback.
 
@@ -284,7 +286,11 @@ def backfill(
 
     # --- Replace mode: delete existing data in date range before writing ---
     if replace:
-        storage_market = market if market else ("us" if source in ("yfinance", "alpaca", "futu_stock") else "hk" if source == "yfinancehk" else "crypto")
+        storage_market = market if market else (
+            "us" if source in ("yfinance", "alpaca", "futu_stock")
+            else "hk" if source == "yfinancehk"
+            else "crypto"
+        )
         _replace_existing_bars(storage_market, frequency, start, end, table_id=table_id)
     elif not skip_existing:
         logger.info("Append mode (skip_existing=False): all rows will be inserted")
@@ -383,10 +389,9 @@ def backfill(
 
 def _write_local(df, base_dir: str, market: str, frequency: str = "5m"):
     """Write bars to local filesystem (same Hive-path structure as GCS)."""
-    import pandas as pd
 
     df = df.copy()
-    df["_ingest_time"] = datetime.now(timezone.utc)
+    df["_ingest_time"] = datetime.now(UTC)
 
     groups = df.groupby(["symbol", df["timestamp"].dt.date])
     for (symbol, _date), group in groups:
@@ -428,9 +433,14 @@ if __name__ == "__main__":
                         choices=["yfinance", "alpaca", "cryptobinance", "yfinancehk",
                                  "futu_stock", "futu_crypto"],
                         help="Data source adapter (default: yfinance)")
-    parser.add_argument("--market", default="", choices=["us", "hk", ""], help="Filter symbols by market prefix (e.g. --market us for US. only)")
-    parser.add_argument("--replace", action="store_true",
-                        help="Delete existing data in date range before backfill (DANGER: may lose data if API incomplete)")
+    parser.add_argument(
+        "--market", default="", choices=["us", "hk", ""],
+        help="Filter symbols by market prefix (e.g. --market us for US. only)",
+    )
+    parser.add_argument(
+        "--replace", action="store_true",
+        help="Delete existing data in date range before backfill (DANGER: may lose data if API incomplete)",
+    )
     parser.add_argument("--skip-existing", action="store_true", default=True,
                         help="Skip rows already in BQ (default, safe)")
     parser.add_argument("--table", default="",

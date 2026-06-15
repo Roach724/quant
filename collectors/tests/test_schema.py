@@ -1,12 +1,13 @@
 # collectors/tests/test_schema.py
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from collectors.schema import Bar
 
 
 def test_bar_creation():
     bar = Bar(
         symbol="AAPL",
-        timestamp=datetime(2026, 5, 13, 10, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 5, 13, 10, 0, tzinfo=UTC),
         open=189.50,
         high=190.20,
         low=189.30,
@@ -26,7 +27,7 @@ def test_bar_to_parquet_roundtrip(tmp_path):
     bars = [
         Bar(
             symbol="AAPL",
-            timestamp=datetime(2026, 5, 13, 10, i, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 5, 13, 10, i, tzinfo=UTC),
             open=100.0 + i,
             high=101.0 + i,
             low=99.0 + i,

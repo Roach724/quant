@@ -8,7 +8,6 @@ Usage:
 
 import argparse
 import logging
-from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 

@@ -1,5 +1,5 @@
 import io
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 import pyarrow as pa
@@ -21,7 +21,7 @@ def build_gcs_path(market: str, data_type: str, frequency: str, symbol: str, tim
 
 def dataframe_to_parquet_bytes(df: pd.DataFrame) -> bytes:
     """Convert a DataFrame to Parquet bytes with Snappy compression.
-    
+
     Timestamp columns are cast to microsecond precision for BigQuery
     compatibility (BQ rejects nanosecond TIMESTAMP_NANOS).
     """
@@ -56,7 +56,7 @@ def write_bars_to_gcs(
 
     df = df.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df["_ingest_time"] = datetime.now(timezone.utc)
+    df["_ingest_time"] = datetime.now(UTC)
 
     client = storage.Client()
     bucket = client.bucket(bucket_name)

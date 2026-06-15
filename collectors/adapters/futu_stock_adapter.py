@@ -1,14 +1,16 @@
 """Futu OpenD stock market adapter — HK (LV2) + US (LV3) equities."""
 
-import os
 import logging
+import os
 import time as _time
-from datetime import date, time, datetime
-from typing import Optional
+from datetime import date, datetime, time
 
 import pandas as pd
 from futu import (
-    OpenQuoteContext, RET_OK, AuType, KLType,
+    RET_OK,
+    AuType,
+    KLType,
+    OpenQuoteContext,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,10 +35,10 @@ class FutuStockAdapter:
         "1w": KLType.K_WEEK,
     }
 
-    def __init__(self, host: Optional[str] = None, port: Optional[int] = None):
+    def __init__(self, host: str | None = None, port: int | None = None):
         self.host = host or os.environ.get("OPEND_HOST", "127.0.0.1")
         self.port = port or int(os.environ.get("OPEND_PORT", "11111"))
-        self._ctx: Optional[OpenQuoteContext] = None
+        self._ctx: OpenQuoteContext | None = None
 
     def _get_ctx(self) -> OpenQuoteContext:
         if self._ctx is None:
@@ -154,6 +156,7 @@ class FutuStockAdapter:
         Falls back to _DEFAULT_SYMBOLS if the config file is unavailable.
         """
         from pathlib import Path
+
         import yaml
 
         config_paths = [
@@ -168,7 +171,7 @@ class FutuStockAdapter:
                     symbols = []
                     for market_cfg in cfg.get("markets", {}).values():
                         for sym in market_cfg.get("symbols", []):
-                            prefix = f"{sym[:2].upper()}." if len(sym) > 2 else "HK."
+                            _prefix = f"{sym[:2].upper()}." if len(sym) > 2 else "HK."
                             # ws_collector format: "HK.00700", adapter format: "HK.00700"
                             symbols.append(sym)
                     if symbols:
@@ -190,7 +193,7 @@ class FutuStockAdapter:
 
     def market_hours(self, d: date) -> tuple[time, time]:
         """Return trading hours.
-        
+
         HK: 09:30-16:00, US: 09:30-16:00 ET
         TODO: Use get_market_state for dynamic hours.
         """

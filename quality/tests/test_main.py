@@ -1,5 +1,7 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 import pandas as pd
+
 from quality.main import check_completeness, check_sanity
 
 
@@ -35,7 +37,7 @@ def test_check_completeness_missing_bars():
 def test_check_sanity_high_less_than_low():
     df = pd.DataFrame({
         "symbol": ["AAPL"],
-        "timestamp": [datetime(2026, 5, 13, 10, 0, tzinfo=timezone.utc)],
+        "timestamp": [datetime(2026, 5, 13, 10, 0, tzinfo=UTC)],
         "open": [100.0], "high": [90.0],
         "low": [95.0], "close": [97.0], "volume": [1000],
         "market": ["US"], "frequency": ["1m"],
@@ -48,7 +50,7 @@ def test_check_sanity_high_less_than_low():
 def test_check_sanity_negative_price():
     df = pd.DataFrame({
         "symbol": ["AAPL"],
-        "timestamp": [datetime(2026, 5, 13, 10, 0, tzinfo=timezone.utc)],
+        "timestamp": [datetime(2026, 5, 13, 10, 0, tzinfo=UTC)],
         "open": [-5.0], "high": [100.0], "low": [95.0], "close": [97.0],
         "volume": [1000], "market": ["US"], "frequency": ["1m"],
     })

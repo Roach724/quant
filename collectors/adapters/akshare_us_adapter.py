@@ -1,6 +1,6 @@
 """US stock market adapter via akshare (fallback for yfinance)."""
-from datetime import date, time, timezone
 import logging
+from datetime import date, time
 
 import pandas as pd
 
@@ -116,7 +116,8 @@ class AkshareUSAdapter:
         all_records: list,
     ) -> None:
         """Extract standard OHLCV records from akshare raw DataFrame."""
-        # Expected akshare columns: 日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
+        # Expected akshare columns: 日期, 开盘, 收盘, 最高, 最低,
+        # 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
         col_map = {
             "日期": "timestamp",
             "开盘": "open",
@@ -156,7 +157,8 @@ class AkshareUSAdapter:
             })
 
     def fetch_supported_symbols(self) -> list[str]:
-        """Return empty list — symbol management is external (via YFinanceUSAdapter.fetch_all_symbols)."""
+        """Return empty list — symbol management is external
+        (via YFinanceUSAdapter.fetch_all_symbols)."""
         return []
 
     def market_hours(self, d: date) -> tuple[time, time]:

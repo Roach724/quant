@@ -16,17 +16,16 @@ import os
 import signal
 import sys
 import threading
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
-from adapters.alpaca_adapter import AlpacaUSAdapter
-from adapters.yfinance_adapter import YFinanceUSAdapter
-from adapters.yfinance_hk_adapter import YFinanceHKAdapter
 from adapters.akshare_hk_adapter import AkshareHKAdapter
 from adapters.akshare_us_adapter import AkshareUSAdapter
+from adapters.alpaca_adapter import AlpacaUSAdapter
 from adapters.crypto_binance_adapter import CryptoBinanceAdapter
-from adapters.futu_stock_adapter import FutuStockAdapter
 from adapters.crypto_futu_adapter import CryptoFutuAdapter
-from storage import write_bars_to_gcs
+from adapters.futu_stock_adapter import FutuStockAdapter
+from adapters.yfinance_adapter import YFinanceUSAdapter
+from adapters.yfinance_hk_adapter import YFinanceHKAdapter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -127,7 +126,7 @@ def get_symbols(source: str, frequency: str, market: str = None) -> list[str]:
 
 
 def main():
-    bucket = os.environ["GCS_BUCKET"]
+    _bucket = os.environ["GCS_BUCKET"]
     source = os.environ.get("COLLECTOR_SOURCE", "yfinance")
     frequency = os.environ.get("FREQUENCY", "1m")
     lookback = int(os.environ.get("LOOKBACK_MINUTES", "60"))
@@ -139,10 +138,10 @@ def main():
     # zombie processes that hang around for hours.
     # ------------------------------------------------------------------
     timeout_seconds = (lookback * 2) + 300
-    _start_time = datetime.now(timezone.utc)
+    _start_time = datetime.now(UTC)
 
     def _deadline_timer():
-        elapsed = (datetime.now(timezone.utc) - _start_time).total_seconds()
+        elapsed = (datetime.now(UTC) - _start_time).total_seconds()
         if elapsed >= timeout_seconds:
             logger.error(
                 "Global timeout reached (%d s elapsed, limit %d s) — forcing exit",
@@ -162,7 +161,7 @@ def main():
     signal.signal(signal.SIGINT, _signal_handler)
 
     symbols = get_symbols(source, frequency, market)
-    end = datetime.now(timezone.utc)
+    end = datetime.now(UTC)
     start = end - timedelta(minutes=lookback)
 
     logger.info("Starting collection: source=%s market=%s symbols=%d range=%s..%s freq=%s",

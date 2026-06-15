@@ -1,6 +1,8 @@
 """Tests for CryptoBinanceAdapter."""
+from datetime import UTC, datetime
+
 import pytest
-from datetime import datetime, timezone
+
 from collectors.adapters.crypto_binance_adapter import CryptoBinanceAdapter
 
 
@@ -24,8 +26,8 @@ def test_adapter_market_hours_24x7():
 @pytest.mark.vcr
 def test_fetch_bars_returns_valid_dataframe():
     adapter = CryptoBinanceAdapter()
-    start = datetime(2026, 5, 15, tzinfo=timezone.utc)
-    end = datetime(2026, 5, 16, tzinfo=timezone.utc)
+    start = datetime(2026, 5, 15, tzinfo=UTC)
+    end = datetime(2026, 5, 16, tzinfo=UTC)
     df = adapter.fetch_bars(["BTC/USDT"], start, end, frequency="1h")
     assert len(df) > 0
     assert "symbol" in df.columns

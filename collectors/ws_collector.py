@@ -18,10 +18,9 @@ import os
 import signal
 import sys
 import time
-from datetime import UTC, datetime
-import yaml
 from pathlib import Path
 
+import yaml
 from futu import (
     RET_OK,
     CurKlineHandlerBase,
@@ -36,9 +35,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-from live.market_calendar import MarketCalendar
 
-from storage import write_bars_to_gcs
+from live.market_calendar import MarketCalendar
 
 logging.basicConfig(
     level=logging.INFO,
@@ -310,11 +308,11 @@ def main():
             )
 
         # ── Watchdog: force reconnect if main loop frozen for > 2x heartbeat ──
-        WATCHDOG_TIMEOUT = HEARTBEAT_INTERVAL_SEC * 2
-        if now_ts - last_heartbeat > WATCHDOG_TIMEOUT:
+        watchdog_timeout = HEARTBEAT_INTERVAL_SEC * 2
+        if now_ts - last_heartbeat > watchdog_timeout:
             logger.error(
                 "WATCHDOG: no heartbeat for %ds (vs %ds limit), forcing reconnect",
-                int(now_ts - last_heartbeat), WATCHDOG_TIMEOUT,
+                int(now_ts - last_heartbeat), watchdog_timeout,
             )
             try:
                 ctx.close()

@@ -1,6 +1,6 @@
 """Unit tests for CryptoFutuAdapter — all mocked, no real OpenD connection."""
 
-from datetime import date, time, datetime
+from datetime import date, datetime, time
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -8,17 +8,16 @@ import pytest
 
 from collectors.adapters.crypto_futu_adapter import CryptoFutuAdapter
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_kline_row(time_key="2026-05-13 10:00:00", o=100.0, h=105.0, l=98.0, c=102.0, v=1000000):
+def _make_kline_row(time_key="2026-05-13 10:00:00", o=100.0, h=105.0, low=98.0, c=102.0, v=1000000):
     return pd.Series({
         "time_key": time_key,
         "open": o,
         "high": h,
-        "low": l,
+        "low": low,
         "close": c,
         "volume": v,
     })

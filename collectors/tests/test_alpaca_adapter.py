@@ -1,5 +1,5 @@
-from datetime import datetime, timezone
 import os
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pandas as pd
@@ -14,8 +14,8 @@ def test_alpaca_fetch_bars_returns_dataframe():
     api_secret = os.environ.get("ALPACA_API_SECRET", "test-secret")
     adapter = AlpacaUSAdapter(api_key=api_key, api_secret=api_secret)
 
-    start = datetime(2026, 5, 11, tzinfo=timezone.utc)
-    end = datetime(2026, 5, 13, tzinfo=timezone.utc)
+    start = datetime(2026, 5, 11, tzinfo=UTC)
+    end = datetime(2026, 5, 13, tzinfo=UTC)
 
     df = adapter.fetch_bars(["AAPL", "MSFT"], start, end, frequency="1m")
 

@@ -1,14 +1,14 @@
-from unittest.mock import patch
 import pandas as pd
+
 from collectors.adapters._futu_base import FutuBaseAdapter
 
 
 class DummyAdapter(FutuBaseAdapter):
     DATA_TYPE = "dummy"
-    
+
     def _call_api(self, symbol: str):
         return {"value": 1.0}
-    
+
     def _parse(self, symbol: str, raw) -> pd.DataFrame:
         return pd.DataFrame([{"symbol": symbol, "value": raw.get("value", 0)}])
 
