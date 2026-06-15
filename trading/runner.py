@@ -143,6 +143,19 @@ class TradingRunner:
         else:
             self._run_single_day(strategy_id, adapter, stop)
 
+    @staticmethod
+    def _resolve_bq_symbols(market: str) -> list[str]:
+        """Resolve trading symbols from the BQ 5m bars table."""
+        table = {"us": "us_bars_5m", "hk": "hk_bars_5m", "crypto": "crypto_bars_5m"}[market]
+        from google.cloud import bigquery as bq
+
+        client = bq.Client(project="deductive-notch-495015-c2")
+        df = client.query(f"SELECT DISTINCT symbol FROM quant.{table} ORDER BY symbol").result().to_dataframe()
+        from common.normalize import normalize_symbol
+
+        symbols = [normalize_symbol(str(s), market) for s in df["symbol"].tolist()]
+        return list(dict.fromkeys(symbols))  # deduplicate
+
     def _run_single_day(
         self,
         strategy_id: int,
@@ -154,8 +167,14 @@ class TradingRunner:
             from live.bq_datasource import BQDataSource
 
             market = self._strategies[strategy_id].market
+            symbols = self._resolve_bq_symbols(market)
+            logger.info(
+                "Strategy %d: resolved %d symbols from BQ",
+                strategy_id,
+                len(symbols),
+            )
             source = BQDataSource(
-                symbols=[],
+                symbols=symbols,
                 market=market,
                 poll_interval_sec=self.bar_interval,
             )
@@ -255,8 +274,14 @@ class TradingRunner:
                     )
 
             # ── BQ data source ──
+            symbols = self._resolve_bq_symbols(market)
+            logger.info(
+                "Strategy %d: resolved %d symbols from BQ",
+                strategy_id,
+                len(symbols),
+            )
             source = BQDataSource(
-                symbols=[],
+                symbols=symbols,
                 market=market,
                 poll_interval_sec=bar_interval,
             )
