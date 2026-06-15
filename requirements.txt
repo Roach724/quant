@@ -149,3 +149,4 @@ xlrd==2.0.2
 yarl==1.24.2
 yfinance==1.4.0
 zipp==1.0.0
+openai>=1.68.2
