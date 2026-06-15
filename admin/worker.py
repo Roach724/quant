@@ -18,6 +18,45 @@ POLL_INTERVAL = 2  # seconds
 _LOG_DIRS = ["/var/log/quant/prod/cron", "/var/log/quant/prod/factor", "/var/log/quant/prod/quality", "/var/log/quant/prod/loader"]
 
 
+def _handle_trading_start(task, env: str) -> None:
+    """Launch a trading strategy as a detached subprocess."""
+    import subprocess as _sp
+    import os as _os
+    from pathlib import Path
+
+    params = task.params or {}
+    if isinstance(params, str):
+        import json as _json
+        params = _json.loads(params)
+
+    strategy_id = params.get("strategy_id")
+    task.result = f"Launching trading_{env} strategy #{strategy_id}"
+
+    cmd = (
+        f"cd /opt/quant && PYTHONPATH=/opt/quant "
+        f"python3 trading/run.py --strategy-id {strategy_id} --env {env.replace('trading_', '')}"
+    )
+
+    # Detached subprocess (no wait — runs until stopped)
+    proc = _sp.Popen(
+        cmd,
+        shell=True,
+        stdout=_sp.DEVNULL,
+        stderr=_sp.DEVNULL,
+        start_new_session=True,
+    )
+
+    # Give it a moment to write the PID file, then verify
+    import time
+    time.sleep(2)
+    pid_dir = Path(f"/var/quant/trading/{env.replace('trading_', '')}/pids")
+    pid_file = pid_dir / f"strategy_{strategy_id}.pid"
+    if pid_file.exists():
+        task.result = f"Launched trading_{env} strategy #{strategy_id} (PID {proc.pid})"
+    else:
+        task.result = f"Launched trading_{env} strategy #{strategy_id} (PID {proc.pid}) — PID file check pending"
+
+
 def _handle_ai_decision_run(task) -> None:
     """Execute the AI Decision Engine pipeline for a pending task."""
     import sys, json
@@ -135,9 +174,16 @@ def run_one(task: Task) -> None:
         t.started_at = datetime.now(timezone.utc)
         session.commit()
 
-        task_type = (t.params or {}).get("type", "")
-        if task_type == "ai_decision_run" or t.type == "ai_decision_run":
+        task_type = (t.params or {}).get("type", "") or t.type
+        if task_type == "ai_decision_run":
             _handle_ai_decision_run(t)
+            t.status = "completed"
+            t.finished_at = datetime.now(timezone.utc)
+            session.commit()
+            return
+
+        if task_type in ("trading_sim", "trading_prod"):
+            _handle_trading_start(t, task_type)
             t.status = "completed"
             t.finished_at = datetime.now(timezone.utc)
             session.commit()
