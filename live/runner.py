@@ -279,6 +279,8 @@ class LiveRunner:
             from common.normalize import normalize_symbol
             symbols = [normalize_symbol(s, market) for s in symbols]
             symbols = list(dict.fromkeys(symbols))
+            # Filter out indices (^IXIC, ^DJI, ^GSPC, ^RUT) — not tradeable
+            symbols = [s for s in symbols if not s.startswith("^")]
         self._symbols = symbols
         if symbols:
             logger.info("Resolved %d symbols", len(symbols))

@@ -154,7 +154,11 @@ class TradingRunner:
         from common.normalize import normalize_symbol
 
         symbols = [normalize_symbol(str(s), market) for s in df["symbol"].tolist()]
-        return list(dict.fromkeys(symbols))  # deduplicate
+        symbols = list(dict.fromkeys(symbols))  # deduplicate
+
+        # Filter out indices (^IXIC, ^DJI, ^GSPC, ^RUT) — not tradeable
+        symbols = [s for s in symbols if not s.startswith("^")]
+        return symbols
 
     def _run_single_day(
         self,
