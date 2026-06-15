@@ -279,6 +279,8 @@ class LiveRunner:
             from common.normalize import normalize_symbol
             symbols = [normalize_symbol(s, market) for s in symbols]
             symbols = list(dict.fromkeys(symbols))
+            # Filter out indices (^IXIC, ^DJI, ^GSPC, ^RUT) — not tradeable
+            symbols = [s for s in symbols if not s.startswith("^")]
         self._symbols = symbols
         if symbols:
             logger.info("Resolved %d symbols", len(symbols))
@@ -1037,7 +1039,16 @@ class LiveRunner:
             # Otherwise BQDataSource replays historical bars → strategy.on_bar
             # re-generates signals → positions double → equity inflates.
             if live_state.get("trading_day", 1) > 1:
-                self._bq_source.last_ts = datetime.now(timezone.utc).strftime(
+                # BQ timestamps are in market-local time (ET/HKT) labeled as UTC.
+                # Must seed last_ts in market-local time, not real UTC.
+                from zoneinfo import ZoneInfo
+
+                tz = (
+                    ZoneInfo("Asia/Hong_Kong")
+                    if self._market == "hk"
+                    else ZoneInfo("America/New_York")
+                )
+                self._bq_source.last_ts = datetime.now(tz).strftime(
                     "%Y-%m-%d %H:%M:%S"
                 )
                 logger.info(
