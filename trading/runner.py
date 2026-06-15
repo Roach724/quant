@@ -455,6 +455,7 @@ class TradingRunner:
     @staticmethod
     def _wait_for_market_open(calendar, poll_sec: int = 60):
         """Sleep until market opens, polling every poll_sec seconds."""
+        _logged = False
         while True:
             if calendar.is_open_now():
                 return
@@ -463,7 +464,15 @@ class TradingRunner:
                 wait_sec = max((next_open - datetime.now(UTC)).total_seconds(), poll_sec)
             else:
                 wait_sec = poll_sec
-            logger.debug("Waiting for market open — sleeping %d s", int(wait_sec))
+            if not _logged:
+                logger.info(
+                    "Waiting for market open — next open at %s (%s)",
+                    next_open.isoformat() if next_open else "unknown",
+                    _format_duration(int(wait_sec)),
+                )
+                _logged = True
+            else:
+                logger.debug("Waiting for market open — sleeping %d s", int(wait_sec))
             time.sleep(min(wait_sec, poll_sec))
 
     def _make_context(
@@ -495,3 +504,14 @@ class TradingRunner:
                     "Execute failed for %s",
                     sig.symbol,
                 )
+
+
+def _format_duration(seconds: int) -> str:
+    """Format seconds as human-readable duration string."""
+    if seconds < 120:
+        return f"{seconds}s"
+    hours, remainder = divmod(seconds, 3600)
+    minutes = remainder // 60
+    if hours > 0:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m"
