@@ -26,13 +26,22 @@ def _setup_logging(strategy_id: int, env: str) -> logging.Logger:
     module = f"trading_{env}"
     log_dir = Path(f"/var/log/quant/prod/{module}")
     log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = str(log_dir / f"strategy_{strategy_id}.log")
 
     log = get_logger(
         name=f"trading.runner.{strategy_id}",
         env="prod",
         module=module,
-        log_file=str(log_dir / f"strategy_{strategy_id}.log"),
+        log_file=log_file,
     )
+
+    # Wire all trading.* sub-module loggers to the strategy log file
+    trading_logger = logging.getLogger("trading")
+    for h in log.handlers:
+        if not any(isinstance(eh, type(h)) for eh in trading_logger.handlers):
+            trading_logger.addHandler(h)
+    trading_logger.setLevel(log.level)
+
     return log
 
 
