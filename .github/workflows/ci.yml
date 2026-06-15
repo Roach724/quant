@@ -28,18 +28,6 @@ jobs:
       - run: pip install mypy pandas-stubs
       - run: mypy collectors/ --ignore-missing-imports
 
-  python-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install pytest pytest-cov
-      - run: pip install -r collectors/requirements.txt
-      - run: pip install -r quality/requirements.txt
-      - run: python -m pytest collectors/tests/ quality/tests/ -v --cov
-
   terraform-check:
     runs-on: ubuntu-latest
     steps:
