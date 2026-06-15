@@ -64,11 +64,22 @@ def _handle_ai_decision_run(task) -> None:
             run = session.query(AiDecisionRun).filter(AiDecisionRun.id == run_id).first()
             if run:
                 run.status = "success"
-                # Convert intermediate engine state to direct dict for SQLite JSON
-                candidates = [c.model_dump() for c in (engine.candidates or [])]
-                reports = [r.model_dump() for r in (engine.reports or [])]
-                fusion = [f.model_dump() for f in (engine.fusion_results or [])]
-                decisions = portfolio_plan.model_dump() if portfolio_plan else {}
+                # Convert intermediate engine state to JSON-safe dicts for SQLite
+                def _safe(obj):
+                    """Recursively convert non-serializable objects to strings."""
+                    import datetime as _dt
+                    if isinstance(obj, _dt.datetime):
+                        return obj.isoformat()
+                    if isinstance(obj, dict):
+                        return {k: _safe(v) for k, v in obj.items()}
+                    if isinstance(obj, (list, tuple)):
+                        return [_safe(i) for i in obj]
+                    return obj
+
+                candidates = [_safe(c.model_dump()) for c in (engine.candidates or [])]
+                reports = [_safe(r.model_dump()) for r in (engine.reports or [])]
+                fusion = [_safe(f.model_dump()) for f in (engine.fusion_results or [])]
+                decisions = _safe(portfolio_plan.model_dump()) if portfolio_plan else {}
 
                 run.recall_result = candidates
                 run.analysis_result = reports
