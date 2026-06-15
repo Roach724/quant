@@ -3,6 +3,7 @@
 Note: Futu F10 API return formats are inconsistent (DataFrame / dict / multi-value tuple).
 Each adapter's _call_api() returns the raw API response; _parse() normalizes into pd.DataFrame.
 """
+
 from __future__ import annotations
 
 import logging
@@ -115,6 +116,7 @@ class FutuBaseAdapter:
         """Load symbol pool from SSOT (config/symbols.yaml), falling back to static list."""
         try:
             from collectors.adapters.futu_stock_adapter import FutuStockAdapter
+
             adapter = FutuStockAdapter()
             syms = adapter.fetch_supported_symbols()
             adapter.close()
@@ -122,10 +124,13 @@ class FutuBaseAdapter:
             hk_count = sum(1 for s in syms if s.startswith("HK."))
             logger.info(
                 "Loaded %d symbols (%d US + %d HK) from SSOT",
-                len(syms), us_count, hk_count,
+                len(syms),
+                us_count,
+                hk_count,
             )
             return syms
         except Exception:
             logger.warning("Cannot load symbols from SSOT; using static fallback")
             from collectors.adapters.futu_stock_adapter import FutuStockAdapter
+
             return list(FutuStockAdapter._DEFAULT_SYMBOLS)

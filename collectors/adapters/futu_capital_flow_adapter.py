@@ -3,6 +3,7 @@
 NOTE: get_capital_flow() returns -1 for US stocks (HK-only).
 This adapter uses get_capital_distribution() which works for both US and HK.
 """
+
 import pandas as pd
 from futu import RET_OK
 

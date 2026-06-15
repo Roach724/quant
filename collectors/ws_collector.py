@@ -111,6 +111,7 @@ def _desired_symbols() -> set[str]:
 
 # ── K-line handler ──
 
+
 class BarHandler(CurKlineHandlerBase):
     """Receives K-line bar updates; keeps latest OHLCV per (symbol, timestamp).
 
@@ -162,7 +163,7 @@ class BarHandler(CurKlineHandlerBase):
 
         # Find latest timestamp per symbol
         latest_ts: dict[str, str] = {}
-        for (sym, ts) in self._latest:
+        for sym, ts in self._latest:
             if sym not in latest_ts or ts > latest_ts[sym]:
                 latest_ts[sym] = ts
 
@@ -213,8 +214,14 @@ def main():
 
     ctx: OpenQuoteContext | None = None
 
-    logger.info("ws_collector starting: bucket=%s opend=%s:%d flush=%ds buffer_max=%d",
-                GCS_BUCKET, OPEND_HOST, OPEND_PORT, FLUSH_INTERVAL_SEC, BUFFER_MAX)
+    logger.info(
+        "ws_collector starting: bucket=%s opend=%s:%d flush=%ds buffer_max=%d",
+        GCS_BUCKET,
+        OPEND_HOST,
+        OPEND_PORT,
+        FLUSH_INTERVAL_SEC,
+        BUFFER_MAX,
+    )
 
     while not _shutdown:
         now_ts = time.time()
@@ -232,7 +239,8 @@ def main():
                 if _INDEX_HK_SYMBOLS:
                     try:
                         ret, msg = ctx.subscribe(
-                            _INDEX_HK_SYMBOLS, [SubType.K_5M],
+                            _INDEX_HK_SYMBOLS,
+                            [SubType.K_5M],
                             subscribe_push=True,
                         )
                         if ret == RET_OK:
@@ -267,7 +275,8 @@ def main():
             if to_sub:
                 try:
                     ret, msg = ctx.subscribe(
-                        list(to_sub), [SubType.K_5M],
+                        list(to_sub),
+                        [SubType.K_5M],
                         subscribe_push=True,
                     )
                     if ret == RET_OK:
@@ -304,7 +313,9 @@ def main():
             last_heartbeat = now_ts
             logger.info(
                 "[HEARTBEAT] subscriptions=%d buffer=%d bars_received=%d",
-                len(current_subscriptions), len(buffer), handler.bar_count,
+                len(current_subscriptions),
+                len(buffer),
+                handler.bar_count,
             )
 
         # ── Watchdog: force reconnect if main loop frozen for > 2x heartbeat ──
@@ -312,7 +323,8 @@ def main():
         if now_ts - last_heartbeat > watchdog_timeout:
             logger.error(
                 "WATCHDOG: no heartbeat for %ds (vs %ds limit), forcing reconnect",
-                int(now_ts - last_heartbeat), watchdog_timeout,
+                int(now_ts - last_heartbeat),
+                watchdog_timeout,
             )
             try:
                 ctx.close()
@@ -376,12 +388,17 @@ def _flush_buffer(buffer: list, label: str):
                     idx_df.drop(columns=[drop_col], inplace=True)
             try:
                 from common.bq_writer import write_bars_to_bq
+
                 n = write_bars_to_bq(idx_df, table_id="hk_bars_index_5m")
                 logger.info("Flushed %d index bars (HK) → hk_bars_index_5m", n)
                 for _, row in idx_df.iterrows():
-                    logger.info("Index K-line written: %s %s O=%.2f C=%.2f",
-                               row["symbol"], row["timestamp"],
-                               row["open"], row["close"])
+                    logger.info(
+                        "Index K-line written: %s %s O=%.2f C=%.2f",
+                        row["symbol"],
+                        row["timestamp"],
+                        row["open"],
+                        row["close"],
+                    )
             except Exception as e:
                 logger.error("Index BQ write failed: %s", e)
                 return
@@ -394,6 +411,7 @@ def _flush_buffer(buffer: list, label: str):
             continue
         try:
             from common.bq_writer import write_bars_to_bq
+
             n = write_bars_to_bq(mkt_df, table_id=f"{market.lower()}_bars_5m")
             logger.info("Flushed %d bars (market=%s) → BQ", n, market)
         except Exception as e:

@@ -22,8 +22,13 @@ def test_dataframe_to_parquet_bytes():
     bar = Bar(
         symbol="AAPL",
         timestamp=datetime(2026, 5, 13, 10, 0, tzinfo=UTC),
-        open=100.0, high=101.0, low=99.0, close=100.5,
-        volume=1000, market="US", frequency="1m",
+        open=100.0,
+        high=101.0,
+        low=99.0,
+        close=100.5,
+        volume=1000,
+        market="US",
+        frequency="1m",
     )
     df = pd.DataFrame([bar.__dict__])
     buf = dataframe_to_parquet_bytes(df)
@@ -31,5 +36,6 @@ def test_dataframe_to_parquet_bytes():
     assert len(buf) > 0
 
     import io
+
     loaded = pd.read_parquet(io.BytesIO(buf))
     assert loaded.iloc[0]["symbol"] == "AAPL"

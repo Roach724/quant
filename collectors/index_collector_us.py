@@ -27,12 +27,15 @@ from common.logging_util import get_logger
 BQ_PROJECT = "deductive-notch-495015-c2"
 BQ_DATASET = "quant"
 
-logger = get_logger("index_collector.us", env="dev", module="collector",
-                    log_file="/var/log/quant/dev/collector/index_us.log")
+logger = get_logger(
+    "index_collector.us", env="dev", module="collector", log_file="/var/log/quant/dev/collector/index_us.log"
+)
+
 
 def load_index_symbols() -> list[str]:
     cfg = yaml.safe_load(open("config/symbols.yaml"))
     return cfg.get("indices", {}).get("us", {}).get("symbols", [])
+
 
 def is_market_open() -> bool:
     """US market: Mon-Fri 09:30-16:00 ET = 13:30-20:00 UTC."""
@@ -42,6 +45,7 @@ def is_market_open() -> bool:
     market_open = now.replace(hour=13, minute=30, second=0, microsecond=0)
     market_close = now.replace(hour=20, minute=0, second=0, microsecond=0)
     return market_open <= now <= market_close
+
 
 def fetch_and_write(symbol: str, freq: str, client) -> int:
     """Fetch intraday bars for one index, deduplicate, write to BQ.
@@ -66,18 +70,20 @@ def fetch_and_write(symbol: str, freq: str, client) -> int:
     rows_written = 0
     batch = []
     for idx, row in df.iterrows():
-        ts = idx.to_pydatetime().replace(tzinfo=UTC) if hasattr(idx, 'to_pydatetime') else idx
+        ts = idx.to_pydatetime().replace(tzinfo=UTC) if hasattr(idx, "to_pydatetime") else idx
         if latest and ts <= latest.replace(tzinfo=UTC):
             continue
-        batch.append({
-            "symbol": symbol,
-            "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
-            "open": float(row["Open"]),
-            "high": float(row["High"]),
-            "low": float(row["Low"]),
-            "close": float(row["Close"]),
-            "volume": float(row.get("Volume", 0) or 0),
-        })
+        batch.append(
+            {
+                "symbol": symbol,
+                "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                "open": float(row["Open"]),
+                "high": float(row["High"]),
+                "low": float(row["Low"]),
+                "close": float(row["Close"]),
+                "volume": float(row.get("Volume", 0) or 0),
+            }
+        )
 
     if batch:
         errors = client.insert_rows_json(table, batch)
@@ -88,6 +94,7 @@ def fetch_and_write(symbol: str, freq: str, client) -> int:
             logger.info("Wrote %d bars for %s (%s)", rows_written, symbol, freq)
 
     return rows_written
+
 
 def main():
     if not is_market_open():
@@ -105,6 +112,7 @@ def main():
         except Exception:
             logger.exception("Failed to fetch %s", sym)
     logger.info("Collection complete: %d bars written", total)
+
 
 if __name__ == "__main__":
     main()

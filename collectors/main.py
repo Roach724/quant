@@ -102,8 +102,7 @@ def get_symbols(source: str, frequency: str, market: str = None) -> list[str]:
             if market:
                 prefix = f"{market.upper()}."
                 symbols = [s for s in symbols if s.startswith(prefix)]
-                logger.info("Futu stock: %d total → %d after market=%s filter",
-                            total_count, len(symbols), market)
+                logger.info("Futu stock: %d total → %d after market=%s filter", total_count, len(symbols), market)
             else:
                 logger.info("Auto-discovered %d futu stock symbols (no market filter)", len(symbols))
         finally:
@@ -145,7 +144,8 @@ def main():
         if elapsed >= timeout_seconds:
             logger.error(
                 "Global timeout reached (%d s elapsed, limit %d s) — forcing exit",
-                elapsed, timeout_seconds,
+                elapsed,
+                timeout_seconds,
             )
             os._exit(1)
 
@@ -164,8 +164,15 @@ def main():
     end = datetime.now(UTC)
     start = end - timedelta(minutes=lookback)
 
-    logger.info("Starting collection: source=%s market=%s symbols=%d range=%s..%s freq=%s",
-                source, market or "all", len(symbols), start.isoformat(), end.isoformat(), frequency)
+    logger.info(
+        "Starting collection: source=%s market=%s symbols=%d range=%s..%s freq=%s",
+        source,
+        market or "all",
+        len(symbols),
+        start.isoformat(),
+        end.isoformat(),
+        frequency,
+    )
 
     adapter = None
     try:
@@ -183,6 +190,7 @@ def main():
             return
 
         from common.bq_writer import write_bars_to_bq
+
         market_dir = os.environ.get("MARKET", adapter.market.lower())
         table = f"{market_dir}_bars_{frequency}"
         n = write_bars_to_bq(df, table_id=table)

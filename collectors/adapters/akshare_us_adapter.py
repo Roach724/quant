@@ -1,4 +1,5 @@
 """US stock market adapter via akshare (fallback for yfinance)."""
+
 import logging
 from datetime import date, time
 
@@ -47,10 +48,19 @@ class AkshareUSAdapter:
             DataFrame with columns: symbol, timestamp, open, high, low, close,
             volume, market, frequency. All timestamps in UTC.
         """
-        empty_df = pd.DataFrame(columns=[
-            "symbol", "timestamp", "open", "high", "low", "close",
-            "volume", "market", "frequency",
-        ])
+        empty_df = pd.DataFrame(
+            columns=[
+                "symbol",
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "market",
+                "frequency",
+            ]
+        )
 
         if frequency != "1d":
             return empty_df
@@ -144,17 +154,19 @@ class AkshareUSAdapter:
             else:
                 ts = ts.tz_convert("UTC")
 
-            all_records.append({
-                "symbol": symbol,
-                "timestamp": ts,
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-                "volume": int(float(row["volume"])),
-                "market": "US",
-                "frequency": frequency,
-            })
+            all_records.append(
+                {
+                    "symbol": symbol,
+                    "timestamp": ts,
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "volume": int(float(row["volume"])),
+                    "market": "US",
+                    "frequency": frequency,
+                }
+            )
 
     def fetch_supported_symbols(self) -> list[str]:
         """Return empty list — symbol management is external

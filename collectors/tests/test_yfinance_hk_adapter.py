@@ -1,4 +1,5 @@
 """Tests for YFinanceHKAdapter."""
+
 from datetime import UTC, date, datetime
 
 import pytest
@@ -10,17 +11,20 @@ def test_adapter_has_hk_market():
     adapter = YFinanceHKAdapter()
     assert adapter.market == "HK"
 
+
 def test_adapter_symbols_include_tencent():
     adapter = YFinanceHKAdapter()
     symbols = adapter.fetch_supported_symbols()
     assert isinstance(symbols, list)
     assert "0700" in symbols
 
+
 def test_adapter_market_hours_hkt():
     adapter = YFinanceHKAdapter()
     open_time, close_time = adapter.market_hours(date.today())
     assert open_time.hour == 9 and open_time.minute == 30
     assert close_time.hour == 16 and close_time.minute == 0
+
 
 @pytest.mark.vcr
 def test_fetch_bars_daily_returns_dataframe():

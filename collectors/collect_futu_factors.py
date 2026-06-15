@@ -67,6 +67,7 @@ def collect_table(table_name: str):  # type: ignore[no-untyped-def]
 
     if not df.empty:
         from common.bq_writer import write_rows_to_bq
+
         n = write_rows_to_bq(df, table_name=table_name)
         logger.info(f"Wrote {n} rows to BQ table {table_name}")
 
@@ -76,9 +77,7 @@ def collect_table(table_name: str):  # type: ignore[no-untyped-def]
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="Collect Futu factor data")
-    parser.add_argument(
-        "--table", choices=list(COLLECTOR_MAP.keys()), help="Single table to collect"
-    )
+    parser.add_argument("--table", choices=list(COLLECTOR_MAP.keys()), help="Single table to collect")
     parser.add_argument("--all", action="store_true", help="Collect all tables")
     parser.add_argument("--market", choices=["us", "hk"], help="Filter --all by market")
     args = parser.parse_args()

@@ -22,5 +22,6 @@ def test_adapter_is_protocol():
 
 def test_adapter_protocol_requires_market():
     from typing import get_type_hints
+
     get_type_hints(MarketAdapter)
     assert "market" in MarketAdapter.__annotations__

@@ -7,6 +7,7 @@ Usage:
     GCS_BUCKET=xxx python collectors/fundamental_collector.py --source valuation
     GCS_BUCKET=xxx python collectors/fundamental_collector.py --source all
 """
+
 import argparse
 import io
 import logging

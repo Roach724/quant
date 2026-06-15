@@ -2,6 +2,7 @@
 
 API returns flat dict: {highest, average, lowest, rating, total, buy, hold, sell, update_time}.
 """
+
 import pandas as pd
 from futu import RET_OK
 

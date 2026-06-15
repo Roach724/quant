@@ -26,9 +26,16 @@ class CryptoFutuAdapter:
     market = "CRYPTO"
 
     _SUPPORTED_SYMBOLS = [
-        "BTC/USDT", "ETH/USDT", "SOL/USDT", "LTC/USDT",
-        "XRP/USDT", "DOT/USDT", "ADA/USDT", "AVAX/USDT",
-        "LINK/USDT", "UNI/USDT",
+        "BTC/USDT",
+        "ETH/USDT",
+        "SOL/USDT",
+        "LTC/USDT",
+        "XRP/USDT",
+        "DOT/USDT",
+        "ADA/USDT",
+        "AVAX/USDT",
+        "LINK/USDT",
+        "UNI/USDT",
     ]
 
     _FREQ_MAP = {
@@ -93,25 +100,31 @@ class CryptoFutuAdapter:
 
             while True:
                 ret, data, page_key = ctx.request_history_kline(
-                    futu_code, start=start_str, end=end_str,
-                    ktype=ktype, autype=AuType.NONE,
-                    max_count=1000, page_req_key=page_key,
+                    futu_code,
+                    start=start_str,
+                    end=end_str,
+                    ktype=ktype,
+                    autype=AuType.NONE,
+                    max_count=1000,
+                    page_req_key=page_key,
                 )
                 if ret != RET_OK:
                     logger.warning("Futu crypto fetch failed for %s: %s", sym, data)
                     break
 
                 for _, row in data.iterrows():
-                    records.append({
-                        "symbol": sym,
-                        "timestamp": row["time_key"],
-                        "open": float(row["open"]),
-                        "high": float(row["high"]),
-                        "low": float(row["low"]),
-                        "close": float(row["close"]),
-                        "volume": int(float(row["volume"])),
-                        "market": self.market,
-                    })
+                    records.append(
+                        {
+                            "symbol": sym,
+                            "timestamp": row["time_key"],
+                            "open": float(row["open"]),
+                            "high": float(row["high"]),
+                            "low": float(row["low"]),
+                            "close": float(row["close"]),
+                            "volume": int(float(row["volume"])),
+                            "market": self.market,
+                        }
+                    )
 
                 if page_key is None:
                     break

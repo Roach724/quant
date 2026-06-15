@@ -41,10 +41,12 @@ def _expected_bars(frequency: str, lookback_days: int, market: str) -> int:
     # Try exchange_calendars for accurate trading-day count
     try:
         import exchange_calendars as xcals
+
         code = "XNYS" if market == "us" else ("XHKG" if market == "hk" else None)
         if code:
             cal = xcals.get_calendar(code)
             import pandas as _pd
+
             sessions = cal.sessions_in_range(
                 _pd.Timestamp(start).normalize(),
                 _pd.Timestamp(now).normalize(),
@@ -78,9 +80,7 @@ def check_freshness(df: pd.DataFrame, max_age_hours: int = 24) -> list[str]:
         latest = group["timestamp"].max()
         age = (now - latest).total_seconds() / 3600
         if age > max_age_hours:
-            issues.append(
-                f"Freshness: {symbol} latest bar is {latest.isoformat()} ({age:.1f}h ago)"
-            )
+            issues.append(f"Freshness: {symbol} latest bar is {latest.isoformat()} ({age:.1f}h ago)")
     return issues
 
 
@@ -88,23 +88,16 @@ def check_sanity(df: pd.DataFrame) -> list[str]:
     issues = []
     for _, row in df.iterrows():
         if row["high"] < row["low"]:
-            issues.append(
-                f"Sanity: {row['symbol']} at {row['timestamp']} high < low: "
-                f"{row['high']} < {row['low']}"
-            )
+            issues.append(f"Sanity: {row['symbol']} at {row['timestamp']} high < low: {row['high']} < {row['low']}")
         for col in ["open", "high", "low", "close"]:
             if row[col] <= 0:
-                issues.append(
-                    f"Sanity: {row['symbol']} at {row['timestamp']} has {col} = {row[col]}"
-                )
+                issues.append(f"Sanity: {row['symbol']} at {row['timestamp']} has {col} = {row[col]}")
     if len(df) > 30:
         vol_std = df["volume"].std()
         vol_mean = df["volume"].mean()
         spikes = df[df["volume"] > vol_mean + 10 * vol_std]
         for _, row in spikes.iterrows():
-            issues.append(
-                f"Sanity: {row['symbol']} at {row['timestamp']} volume spike: {row['volume']:,}"
-            )
+            issues.append(f"Sanity: {row['symbol']} at {row['timestamp']} volume spike: {row['volume']:,}")
     return issues
 
 
@@ -121,10 +114,12 @@ def query_bars(market: str, frequency: str, lookback_days: int) -> pd.DataFrame:
         WHERE DATE(timestamp) BETWEEN @start AND @end
         ORDER BY symbol, timestamp
     """
-    job_config = bigquery.QueryJobConfig(query_parameters=[
-        bigquery.ScalarQueryParameter("start", "STRING", start),
-        bigquery.ScalarQueryParameter("end", "STRING", end),
-    ])
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("start", "STRING", start),
+            bigquery.ScalarQueryParameter("end", "STRING", end),
+        ]
+    )
 
     client = bigquery.Client(project=project)
     logger.info("Querying %s (market=%s freq=%s range=%s..%s)", table, market, frequency, start, end)
@@ -157,7 +152,9 @@ def main(event=None, context=None):
     expected = _expected_bars(frequency, lookback_days, market)
     logger.info(
         "Expected bars: %d (freq=%s, %d trading days)",
-        expected, frequency, expected // (78 if frequency == "5m" else 1),
+        expected,
+        frequency,
+        expected // (78 if frequency == "5m" else 1),
     )
     all_issues.extend(check_completeness(df, expected))
 

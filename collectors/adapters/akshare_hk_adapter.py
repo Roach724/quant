@@ -1,4 +1,5 @@
 """Hong Kong stock market adapter via akshare (fallback for yfinance)."""
+
 from datetime import date, time
 
 import pandas as pd
@@ -15,6 +16,7 @@ class AkshareHKAdapter:
     Used as a fallback when yfinance returns empty or insufficient data.
     Only supports daily frequency; minute-level data is out of scope.
     """
+
     market = "HK"
 
     def fetch_bars(
@@ -36,10 +38,19 @@ class AkshareHKAdapter:
             DataFrame with columns: symbol, timestamp, open, high, low, close,
             volume, market, frequency. All timestamps in UTC.
         """
-        empty_df = pd.DataFrame(columns=[
-            "symbol", "timestamp", "open", "high", "low", "close",
-            "volume", "market", "frequency",
-        ])
+        empty_df = pd.DataFrame(
+            columns=[
+                "symbol",
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "market",
+                "frequency",
+            ]
+        )
 
         if frequency != "1d":
             return empty_df
@@ -98,17 +109,19 @@ class AkshareHKAdapter:
                 else:
                     ts = ts.tz_convert("UTC")
 
-                all_records.append({
-                    "symbol": sym,
-                    "timestamp": ts,
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "volume": int(row["volume"]),
-                    "market": self.market,
-                    "frequency": frequency,
-                })
+                all_records.append(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "open": float(row["open"]),
+                        "high": float(row["high"]),
+                        "low": float(row["low"]),
+                        "close": float(row["close"]),
+                        "volume": int(row["volume"]),
+                        "market": self.market,
+                        "frequency": frequency,
+                    }
+                )
 
         return pd.DataFrame(all_records) if all_records else empty_df
 

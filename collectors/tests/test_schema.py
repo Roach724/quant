@@ -45,5 +45,13 @@ def test_bar_to_parquet_roundtrip(tmp_path):
     loaded = pd.read_parquet(path)
     assert len(loaded) == 5
     assert list(loaded.columns) == [
-        "symbol", "timestamp", "open", "high", "low", "close", "volume", "market", "frequency"
+        "symbol",
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "market",
+        "frequency",
     ]

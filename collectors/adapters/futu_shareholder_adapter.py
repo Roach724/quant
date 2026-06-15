@@ -3,6 +3,7 @@
 API returns standard (ret, DataFrame) for both endpoints.
 Works for both US and HK.
 """
+
 import pandas as pd
 from futu import RET_OK
 
