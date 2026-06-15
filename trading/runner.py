@@ -10,9 +10,7 @@ import asyncio
 import logging
 import threading
 import time
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Optional
+from datetime import UTC, datetime
 
 import pandas as pd
 import yaml
@@ -22,9 +20,9 @@ from engine.portfolio import Portfolio
 from engine.strategy import StrategyContext
 from trading.adapter import StrategyAdapter
 from trading.capital import CapitalManager
-from trading.state import TradingStateManager
-from trading.signal_bridge import SignalBridge
 from trading.models import TradingStrategy as TSModel
+from trading.signal_bridge import SignalBridge
+from trading.state import TradingStateManager
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +51,7 @@ class TradingRunner:
         self.market = market
         self.bar_interval = bar_interval
         self.reconcile_every = reconcile_every
-        self._strategies: dict[int, TSModel] = {
-            s.id: s for s in strategies
-        }
+        self._strategies: dict[int, TSModel] = {s.id: s for s in strategies}
         self._adapters: dict[int, StrategyAdapter] = {}
         self._threads: dict[int, threading.Thread] = {}
         self._stop_events: dict[int, threading.Event] = {}
@@ -126,7 +122,9 @@ class TradingRunner:
         thread.start()
         logger.info(
             "Started %s (#%d) with $%.0f",
-            strat.name, strat.id, strat.capital_allocated,
+            strat.name,
+            strat.id,
+            strat.capital_allocated,
         )
 
     def _run_loop(
@@ -144,13 +142,14 @@ class TradingRunner:
             self._run_multi_day(strategy_id, adapter, stop, cfg)
         else:
             self._run_single_day(strategy_id, adapter, stop)
+
     def _run_single_day(
         self,
         strategy_id: int,
         adapter: StrategyAdapter,
         stop: threading.Event,
     ):
-        """单日轮询循环"""
+        """单日轮询循环 — 使用 BQDataSource on_bar 回调模式"""
         try:
             from live.bq_datasource import BQDataSource
 
@@ -160,50 +159,43 @@ class TradingRunner:
                 market=market,
                 poll_interval_sec=self.bar_interval,
             )
-            source.start()
-            time.sleep(3)
 
-            ctx = None
-            bar_count = 0
+            _ctx = {"ctx": None}
+            _bar_count = 0
 
-            while not stop.is_set():
-                try:
-                    bar_data = source.get_latest()
-                    if bar_data is None:
-                        time.sleep(self.bar_interval)
-                        continue
+            def _on_bar(bar_data: dict):
+                nonlocal _bar_count
+                close_prices = bar_data.get("close", {})
+                symbols = list(close_prices.keys())
 
-                    close_prices = bar_data.get("close", {})
-                    symbols = list(close_prices.keys())
+                if adapter._strategy is None and symbols:
+                    _ctx["ctx"] = self._make_context(bar_data, symbols)
+                    adapter.load(symbols, _ctx["ctx"])
 
-                    if adapter._strategy is None and symbols:
-                        ctx = self._make_context(bar_data, symbols)
-                        adapter.load(symbols, ctx)
-
-                    if adapter._strategy and ctx:
-                        ctx._set_bar_data(bar_data)
-                        signals = adapter.generate_signals(
-                            ctx, bar_count, strategy_id,
-                        )
-                        if signals:
-                            logger.info(
-                                "Strategy %d: %d signals at bar %d",
-                                strategy_id, len(signals), bar_count,
-                            )
-                            self._execute_signals(signals, bar_data)
-
-                    if bar_count > 0 and bar_count % self.reconcile_every == 0:
-                        self.state.reconcile_and_continue(strategy_id)
-
-                    bar_count += 1
-                    time.sleep(self.bar_interval)
-
-                except Exception:
-                    logger.exception(
-                        "Strategy %d loop error at bar %d",
-                        strategy_id, bar_count,
+                if adapter._strategy and _ctx["ctx"]:
+                    _ctx["ctx"]._set_bar_data(bar_data)
+                    signals = adapter.generate_signals(
+                        _ctx["ctx"],
+                        _bar_count,
+                        strategy_id,
                     )
-                    time.sleep(self.bar_interval)
+                    if signals:
+                        logger.info(
+                            "Strategy %d: %d signals at bar %d",
+                            strategy_id,
+                            len(signals),
+                            _bar_count,
+                        )
+                        self._execute_signals(signals, bar_data)
+
+                if _bar_count > 0 and _bar_count % self.reconcile_every == 0:
+                    self.state.reconcile_and_continue(strategy_id)
+
+                _bar_count += 1
+
+            source.stop_check = lambda: stop.is_set()
+            source.on_bar = _on_bar
+            source.run()
 
         except Exception:
             logger.exception("Strategy %d loop fatal", strategy_id)
@@ -217,13 +209,13 @@ class TradingRunner:
         stop: threading.Event,
         cfg: dict,
     ):
-        """多日交易循环 — 跨交易日状态持久化"""
+        """多日交易循环 — BQDataSource on_bar 回调 + 跨日状态持久化"""
         schedule = cfg.get("schedule", {})
         state_cfg = cfg.get("state", {})
         risk_cfg = cfg.get("risk", {})
         max_trading_days = int(schedule.get("max_trading_days", 0))
         max_duration_per_day = int(schedule.get("max_duration_per_day", 390))
-        max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))
+        _max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))  # TODO: implement drawdown check
         bar_interval = int(schedule.get("bar_interval", self.bar_interval))
 
         try:
@@ -252,10 +244,15 @@ class TradingRunner:
                     peak_equity = saved.get("live_state", {}).get("peak_equity", 0.0)
                     logger.info(
                         "Strategy %d: restored multi-day state (day=%d, bars=%d)",
-                        strategy_id, trading_day, bar_count,
+                        strategy_id,
+                        trading_day,
+                        bar_count,
                     )
                 except Exception:
-                    logger.warning("Strategy %d: failed to load state, starting fresh", strategy_id)
+                    logger.warning(
+                        "Strategy %d: failed to load state, starting fresh",
+                        strategy_id,
+                    )
 
             # ── BQ data source ──
             source = BQDataSource(
@@ -263,17 +260,67 @@ class TradingRunner:
                 market=market,
                 poll_interval_sec=bar_interval,
             )
-            source.start()
-            time.sleep(3)
 
-            ctx = None
-            daily_start_equity = 0.0
+            _ctx = {"ctx": None}
+            day_bars = 0
+            day_start_ts = None
+            day_stop_reason = None
             stop_reason = None
-            max_bars_per_day = max_duration_per_day * 60 // bar_interval if bar_interval > 0 else 390
+
+            def _on_bar(bar_data: dict):
+                """Per-bar callback — called by BQDataSource._poll()"""
+                nonlocal bar_count, day_bars, peak_equity, day_start_ts
+
+                close_prices = bar_data.get("close", {})
+                symbols = list(close_prices.keys())
+
+                if adapter._strategy is None and symbols:
+                    _ctx["ctx"] = self._make_context(bar_data, symbols)
+                    adapter.load(symbols, _ctx["ctx"])
+                    day_start_ts = bar_data.get("timestamp")
+
+                if adapter._strategy and _ctx["ctx"]:
+                    _ctx["ctx"]._set_bar_data(bar_data)
+                    signals = adapter.generate_signals(
+                        _ctx["ctx"],
+                        bar_count,
+                        strategy_id,
+                    )
+                    if signals:
+                        logger.info(
+                            "Strategy %d: %d signals at bar %d (day %d)",
+                            strategy_id,
+                            len(signals),
+                            bar_count,
+                            trading_day,
+                        )
+                        self._execute_signals(signals, bar_data)
+
+                bar_count += 1
+                day_bars += 1
+
+                # Periodic checkpoint
+                checkpoint_interval = int(state_cfg.get("checkpoint_interval", 300))
+                if state_mgr and bar_count > 0 and bar_count % checkpoint_interval == 0:
+                    try:
+                        state_mgr.save_checkpoint(
+                            None,
+                            {
+                                "trading_day": trading_day,
+                                "bar_count": bar_count,
+                                "peak_equity": peak_equity,
+                            },
+                        )
+                    except Exception:
+                        pass
+
+            source.on_bar = _on_bar
 
             logger.info(
-                "Strategy %d: multi-day loop starting (day %d, max_days=%d, max_bars/day=%d)",
-                strategy_id, trading_day + 1, max_trading_days, max_bars_per_day,
+                "Strategy %d: multi-day loop starting (day %d, max_days=%d)",
+                strategy_id,
+                trading_day + 1,
+                max_trading_days,
             )
 
             while not stop.is_set():
@@ -281,7 +328,11 @@ class TradingRunner:
 
                 # Check max trading days
                 if max_trading_days > 0 and trading_day > max_trading_days:
-                    logger.info("Strategy %d: max_trading_days=%d reached", strategy_id, max_trading_days)
+                    logger.info(
+                        "Strategy %d: max_trading_days=%d reached",
+                        strategy_id,
+                        max_trading_days,
+                    )
                     stop_reason = "MAX_TRADING_DAYS"
                     break
 
@@ -295,115 +346,105 @@ class TradingRunner:
                     try:
                         cp = state_mgr.load_checkpoint()
                         if cp:
-                            bar_count = cp.get("live_state", {}).get("bar_count", bar_count)
-                            peak_equity = cp.get("live_state", {}).get("peak_equity", peak_equity)
-                            logger.info("Strategy %d: recovered from checkpoint", strategy_id)
-                    except Exception:
-                        logger.warning("Strategy %d: failed to load checkpoint", strategy_id)
-
-                daily_start_equity = 0.0
-                day_bars = 0
-                day_stop_reason = None
-
-                logger.info("Strategy %d: ── Day %d starting ──", strategy_id, trading_day)
-
-                # ── Run one trading day ──
-                while not stop.is_set() and day_bars < max_bars_per_day:
-                    try:
-                        # Check if market is still open
-                        if not calendar.is_open_now():
-                            day_stop_reason = "market_close"
-                            break
-
-                        bar_data = source.get_latest()
-                        if bar_data is None:
-                            time.sleep(bar_interval)
-                            continue
-
-                        close_prices = bar_data.get("close", {})
-                        symbols = list(close_prices.keys())
-
-                        if adapter._strategy is None and symbols:
-                            ctx = self._make_context(bar_data, symbols)
-                            adapter.load(symbols, ctx)
-
-                        if adapter._strategy and ctx:
-                            ctx._set_bar_data(bar_data)
-                            signals = adapter.generate_signals(ctx, bar_count, strategy_id)
-                            if signals:
-                                logger.info(
-                                    "Strategy %d: %d signals at bar %d (day %d)",
-                                    strategy_id, len(signals), bar_count, trading_day,
-                                )
-                                self._execute_signals(signals, bar_data)
-
-                        # Checkpoint periodically
-                        checkpoint_interval = int(state_cfg.get("checkpoint_interval", 300))
-                        if state_mgr and bar_count > 0 and bar_count % checkpoint_interval == 0:
-                            state_mgr.save_checkpoint(
-                                None,  # portfolio not tracked yet
-                                {
-                                    "trading_day": trading_day,
-                                    "bar_count": bar_count,
-                                    "peak_equity": peak_equity,
-                                    "daily_start_equity": daily_start_equity,
-                                },
+                            bar_count = cp.get("bar_count", bar_count)
+                            peak_equity = cp.get("peak_equity", peak_equity)
+                            logger.info(
+                                "Strategy %d: recovered from checkpoint",
+                                strategy_id,
                             )
-
-                        day_bars += 1
-                        bar_count += 1
-                        time.sleep(bar_interval)
-
                     except Exception:
-                        logger.exception(
-                            "Strategy %d: multi-day error at bar %d (day %d)",
-                            strategy_id, bar_count, trading_day,
+                        logger.warning(
+                            "Strategy %d: failed to load checkpoint",
+                            strategy_id,
                         )
-                        time.sleep(bar_interval)
-                        day_bars += 1
-                        bar_count += 1
+
+                # ── Reset day state ──
+                day_bars = 0
+                day_start_ts = None
+                day_stop_reason = None
+                max_bars_per_day = max_duration_per_day * 60 // bar_interval if bar_interval > 0 else 390
+
+                logger.info(
+                    "Strategy %d: ── Day %d starting ── (max_bars=%d)",
+                    strategy_id,
+                    trading_day,
+                    max_bars_per_day,
+                )
+
+                # ── Set up stop conditions for this day ──
+                def _should_stop():
+                    nonlocal day_stop_reason
+                    if stop.is_set():
+                        day_stop_reason = "stopped"
+                        return True
+                    if not calendar.is_open_now():
+                        day_stop_reason = "market_close"
+                        return True
+                    if day_bars >= max_bars_per_day:
+                        day_stop_reason = f"MAX_BARS ({max_bars_per_day})"
+                        logger.warning("Strategy %d: %s", strategy_id, day_stop_reason)
+                        return True
+                    return False
+
+                source.stop_check = _should_stop
+                source.on_bar = _on_bar
+
+                # ── Run one trading day (blocking) ──
+                try:
+                    source.run()
+                    day_stop_reason = day_stop_reason or "market_close"
+                except Exception:
+                    logger.exception(
+                        "Strategy %d: BQDataSource.run() raised at day %d",
+                        strategy_id,
+                        trading_day,
+                    )
+                    day_stop_reason = day_stop_reason or "exception"
 
                 # ── End of day: save state ──
                 logger.info(
-                    "Strategy %d: ── Day %d ended (%s) ── bars=%d",
-                    strategy_id, trading_day, day_stop_reason or "max_bars", day_bars,
+                    "Strategy %d: ── Day %d ended (%s) ── bars=%d total=%d",
+                    strategy_id,
+                    trading_day,
+                    day_stop_reason or "unknown",
+                    day_bars,
+                    bar_count,
                 )
 
                 if state_mgr:
                     try:
                         state_mgr.save(
-                            None,  # portfolio not tracked yet
-                            None,  # position_tracker not tracked yet
+                            None,
+                            None,
                             {
                                 "trading_day": trading_day,
                                 "bar_count": bar_count,
                                 "peak_equity": peak_equity,
-                                "daily_start_equity": daily_start_equity,
                                 "stop_reason": day_stop_reason,
-                                "last_bq_ts": str(datetime.now(timezone.utc)),
+                                "last_bq_ts": str(datetime.now(UTC)),
                             },
                         )
                         state_mgr.clear_checkpoint()
-                        logger.debug("Strategy %d: state saved for day %d", strategy_id, trading_day)
+                        logger.debug(
+                            "Strategy %d: state saved for day %d",
+                            strategy_id,
+                            trading_day,
+                        )
                     except Exception:
-                        logger.exception("Strategy %d: failed to save state", strategy_id)
+                        logger.exception(
+                            "Strategy %d: failed to save state",
+                            strategy_id,
+                        )
 
-                # Check stop conditions
-                if day_stop_reason and day_stop_reason not in ("market_close", "max_bars"):
+                # Check non-market stop reasons
+                if day_stop_reason and day_stop_reason not in ("market_close",):
                     stop_reason = day_stop_reason
                     break
 
-                # Check max drawdown (placeholder — will be accurate when portfolio is tracked)
-                if peak_equity > 0 and max_drawdown > 0:
-                    current_dd = 0.0  # TODO: compute from actual portfolio equity
-                    if current_dd >= max_drawdown:
-                        stop_reason = f"MAX_DRAWDOWN ({current_dd*100:.1f}%)"
-                        logger.warning("Strategy %d: %s", strategy_id, stop_reason)
-                        break
-
             logger.info(
                 "Strategy %d: multi-day loop complete (%s)",
-                strategy_id, stop_reason or "stopped",
+                strategy_id,
+                stop_reason or "stopped",
             )
 
         except Exception:
@@ -419,21 +460,25 @@ class TradingRunner:
                 return
             next_open = calendar.next_open_datetime()
             if next_open:
-                wait_sec = max((next_open - datetime.now(timezone.utc)).total_seconds(), poll_sec)
+                wait_sec = max((next_open - datetime.now(UTC)).total_seconds(), poll_sec)
             else:
                 wait_sec = poll_sec
             logger.debug("Waiting for market open — sleeping %d s", int(wait_sec))
             time.sleep(min(wait_sec, poll_sec))
 
     def _make_context(
-        self, bar_data: dict, symbols: list[str],
+        self,
+        bar_data: dict,
+        symbols: list[str],
     ) -> StrategyContext:
         """构造策略上下文"""
         close = pd.DataFrame([bar_data.get("close", {})])
         src = DataFrameSource(close=close)
         pf = Portfolio(initial_capital=0)
         return StrategyContext(
-            data=src, portfolio=pf, config={"symbols": symbols},
+            data=src,
+            portfolio=pf,
+            config={"symbols": symbols},
         )
 
     def _execute_signals(self, signals, bar_data: dict):
@@ -447,5 +492,6 @@ class TradingRunner:
                 asyncio.run(self.bridge.execute(sig, current_price))
             except Exception:
                 logger.exception(
-                    "Execute failed for %s", sig.symbol,
+                    "Execute failed for %s",
+                    sig.symbol,
                 )
