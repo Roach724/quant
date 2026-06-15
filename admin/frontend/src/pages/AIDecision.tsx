@@ -5,12 +5,10 @@ import type { ProColumns, ActionType } from '@ant-design/pro-table';
 import { PlayCircleOutlined, PlusOutlined, DeleteOutlined, EyeOutlined, EditOutlined, CaretRightOutlined, PauseCircleOutlined } from '@ant-design/icons';
 import { api } from '../api';
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 const { TextArea } = Input;
 
 // ── Helpers ──
-
-const stripYaml = (name: string) => name.replace(/\.yaml$/, '');
 
 const statusColor: Record<string, string> = {
   running: 'processing',
