@@ -1,14 +1,16 @@
 """Futu OpenD stock market adapter — HK (LV2) + US (LV3) equities."""
 
-import os
 import logging
+import os
 import time as _time
-from datetime import date, time, datetime
-from typing import Optional
+from datetime import date, datetime, time
 
 import pandas as pd
 from futu import (
-    OpenQuoteContext, RET_OK, AuType, KLType,
+    RET_OK,
+    AuType,
+    KLType,
+    OpenQuoteContext,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,10 +35,10 @@ class FutuStockAdapter:
         "1w": KLType.K_WEEK,
     }
 
-    def __init__(self, host: Optional[str] = None, port: Optional[int] = None):
+    def __init__(self, host: str | None = None, port: int | None = None):
         self.host = host or os.environ.get("OPEND_HOST", "127.0.0.1")
         self.port = port or int(os.environ.get("OPEND_PORT", "11111"))
-        self._ctx: Optional[OpenQuoteContext] = None
+        self._ctx: OpenQuoteContext | None = None
 
     def _get_ctx(self) -> OpenQuoteContext:
         if self._ctx is None:
@@ -86,25 +88,31 @@ class FutuStockAdapter:
 
             while True:
                 ret, data, page_key = ctx.request_history_kline(
-                    code, start=start_str, end=end_str,
-                    ktype=ktype, autype=autype,
-                    max_count=1000, page_req_key=page_key,
+                    code,
+                    start=start_str,
+                    end=end_str,
+                    ktype=ktype,
+                    autype=autype,
+                    max_count=1000,
+                    page_req_key=page_key,
                 )
                 if ret != RET_OK:
                     logger.warning("Futu fetch failed for %s: %s", code, data)
                     break
 
                 for _, row in data.iterrows():
-                    records.append({
-                        "symbol": code,
-                        "timestamp": row["time_key"],
-                        "open": float(row["open"]),
-                        "high": float(row["high"]),
-                        "low": float(row["low"]),
-                        "close": float(row["close"]),
-                        "volume": int(float(row["volume"])),
-                        "market": "HK" if code.startswith("HK.") else "US",
-                    })
+                    records.append(
+                        {
+                            "symbol": code,
+                            "timestamp": row["time_key"],
+                            "open": float(row["open"]),
+                            "high": float(row["high"]),
+                            "low": float(row["low"]),
+                            "close": float(row["close"]),
+                            "volume": int(float(row["volume"])),
+                            "market": "HK" if code.startswith("HK.") else "US",
+                        }
+                    )
 
                 if page_key is None:
                     break
@@ -117,34 +125,256 @@ class FutuStockAdapter:
 
     _DEFAULT_SYMBOLS = [
         # HK — 15 stocks (fallback only, SSOT is config/symbols.yaml)
-        "HK.00700", "HK.09988", "HK.00941", "HK.00005", "HK.00388",
-        "HK.01299", "HK.02318", "HK.01810", "HK.00883", "HK.02382",
-        "HK.01093", "HK.03968", "HK.02269", "HK.03690", "HK.09633",
+        "HK.00700",
+        "HK.09988",
+        "HK.00941",
+        "HK.00005",
+        "HK.00388",
+        "HK.01299",
+        "HK.02318",
+        "HK.01810",
+        "HK.00883",
+        "HK.02382",
+        "HK.01093",
+        "HK.03968",
+        "HK.02269",
+        "HK.03690",
+        "HK.09633",
         # US — Nasdaq 100 + S&P 500 top 150 (deduplicated, ~239, fallback only)
-        "US.AAPL","US.MSFT","US.NVDA","US.AMZN","US.META","US.GOOGL","US.AVGO","US.TSLA","US.COST","US.NFLX",
-        "US.ADBE","US.AMD","US.PEP","US.CSCO","US.LIN","US.INTU","US.QCOM","US.TXN","US.AMGN","US.ISRG",
-        "US.AMAT","US.CMCSA","US.HON","US.BKNG","US.GILD","US.MU","US.LRCX","US.ADI","US.VRTX","US.SBUX",
-        "US.MDLZ","US.INTC","US.KLAC","US.REGN","US.SNPS","US.ADP","US.PANW","US.CDNS","US.MELI","US.ABNB",
-        "US.ADSK","US.CRWD","US.FTNT","US.MAR","US.CTAS","US.ORLY","US.CSX","US.MRVL","US.NXPI","US.WDAY",
-        "US.ROP","US.CEG","US.DASH","US.PCAR","US.MCHP","US.ROST","US.MNST","US.CPRT","US.AEP","US.KDP",
-        "US.PAYX","US.KHC","US.ODFL","US.FAST","US.TTD","US.GEHC","US.IDXX","US.EXC","US.BKR","US.CTSH",
-        "US.CCEP","US.DDOG","US.MRNA","US.TTWO","US.AZN","US.LULU","US.CDW","US.DXCM","US.TEAM",
-        "US.BIIB","US.CHTR","US.DLTR",
-        "US.XEL","US.CSGP","US.EA","US.ILMN","US.VRSK","US.GFS","US.BRK.B","US.JPM","US.V","US.UNH","US.WBD","US.PDD","US.ZS","US.FANG","US.MDB","US.ON",
-        "US.XOM","US.MA","US.JNJ","US.WMT","US.PG","US.HD","US.BAC","US.CVX","US.ABBV","US.KO",
-        "US.MRK","US.WFC","US.ORCL","US.CRM","US.PFE","US.DIS","US.IBM","US.CAT","US.GS","US.NEE",
-        "US.T","US.VZ","US.RTX","US.MS","US.AXP","US.C","US.LOW","US.BLK","US.TMO","US.GE",
-        "US.UPS","US.SPGI","US.NOW","US.UBER","US.BMY","US.SYK","US.CI","US.SCHW","US.ETN","US.ELV",
-        "US.CB","US.BSX","US.MDT","US.PLD","US.DE","US.SO","US.TMUS","US.DUK",
-        "US.ICE","US.MO","US.EQIX","US.WM","US.CME","US.PYPL","US.TT","US.SHW","US.WELL","US.ZTS",
-        "US.PNC","US.USB","US.APH","US.EOG","US.BDX","US.ITW","US.PH","US.CL","US.FCX","US.LMT",
-        "US.CVS","US.NOC","US.APD","US.TGT","US.MMM","US.EMR","US.AON","US.KKR","US.GD","US.HUM",
-        "US.NKE","US.SLB","US.TDG","US.ECL","US.CARR","US.DHI","US.LEN","US.MCO","US.OXY","US.AZO",
-        "US.F","US.PSA","US.JCI","US.HLT","US.KMB","US.NSC","US.MPC","US.TFC","US.AFL","US.GM",
-        "US.MET","US.D","US.AIG","US.ALL","US.TRV","US.CP","US.WMB","US.LHX","US.SRE","US.PCG",
-        "US.OKE","US.KMI","US.ED","US.VST","US.NRG","US.EIX","US.AWK","US.VLTO","US.AME","US.URI",
-        "US.IR","US.XYL","US.OTIS","US.ROK","US.PWR","US.HWM","US.MLM","US.VMC","US.FTV","US.DOV",
-        "US.GRMN","US.PPG","US.LYB","US.DD","US.DOW","US.HAL","US.NEM","US.DVN",
+        "US.AAPL",
+        "US.MSFT",
+        "US.NVDA",
+        "US.AMZN",
+        "US.META",
+        "US.GOOGL",
+        "US.AVGO",
+        "US.TSLA",
+        "US.COST",
+        "US.NFLX",
+        "US.ADBE",
+        "US.AMD",
+        "US.PEP",
+        "US.CSCO",
+        "US.LIN",
+        "US.INTU",
+        "US.QCOM",
+        "US.TXN",
+        "US.AMGN",
+        "US.ISRG",
+        "US.AMAT",
+        "US.CMCSA",
+        "US.HON",
+        "US.BKNG",
+        "US.GILD",
+        "US.MU",
+        "US.LRCX",
+        "US.ADI",
+        "US.VRTX",
+        "US.SBUX",
+        "US.MDLZ",
+        "US.INTC",
+        "US.KLAC",
+        "US.REGN",
+        "US.SNPS",
+        "US.ADP",
+        "US.PANW",
+        "US.CDNS",
+        "US.MELI",
+        "US.ABNB",
+        "US.ADSK",
+        "US.CRWD",
+        "US.FTNT",
+        "US.MAR",
+        "US.CTAS",
+        "US.ORLY",
+        "US.CSX",
+        "US.MRVL",
+        "US.NXPI",
+        "US.WDAY",
+        "US.ROP",
+        "US.CEG",
+        "US.DASH",
+        "US.PCAR",
+        "US.MCHP",
+        "US.ROST",
+        "US.MNST",
+        "US.CPRT",
+        "US.AEP",
+        "US.KDP",
+        "US.PAYX",
+        "US.KHC",
+        "US.ODFL",
+        "US.FAST",
+        "US.TTD",
+        "US.GEHC",
+        "US.IDXX",
+        "US.EXC",
+        "US.BKR",
+        "US.CTSH",
+        "US.CCEP",
+        "US.DDOG",
+        "US.MRNA",
+        "US.TTWO",
+        "US.AZN",
+        "US.LULU",
+        "US.CDW",
+        "US.DXCM",
+        "US.TEAM",
+        "US.BIIB",
+        "US.CHTR",
+        "US.DLTR",
+        "US.XEL",
+        "US.CSGP",
+        "US.EA",
+        "US.ILMN",
+        "US.VRSK",
+        "US.GFS",
+        "US.BRK.B",
+        "US.JPM",
+        "US.V",
+        "US.UNH",
+        "US.WBD",
+        "US.PDD",
+        "US.ZS",
+        "US.FANG",
+        "US.MDB",
+        "US.ON",
+        "US.XOM",
+        "US.MA",
+        "US.JNJ",
+        "US.WMT",
+        "US.PG",
+        "US.HD",
+        "US.BAC",
+        "US.CVX",
+        "US.ABBV",
+        "US.KO",
+        "US.MRK",
+        "US.WFC",
+        "US.ORCL",
+        "US.CRM",
+        "US.PFE",
+        "US.DIS",
+        "US.IBM",
+        "US.CAT",
+        "US.GS",
+        "US.NEE",
+        "US.T",
+        "US.VZ",
+        "US.RTX",
+        "US.MS",
+        "US.AXP",
+        "US.C",
+        "US.LOW",
+        "US.BLK",
+        "US.TMO",
+        "US.GE",
+        "US.UPS",
+        "US.SPGI",
+        "US.NOW",
+        "US.UBER",
+        "US.BMY",
+        "US.SYK",
+        "US.CI",
+        "US.SCHW",
+        "US.ETN",
+        "US.ELV",
+        "US.CB",
+        "US.BSX",
+        "US.MDT",
+        "US.PLD",
+        "US.DE",
+        "US.SO",
+        "US.TMUS",
+        "US.DUK",
+        "US.ICE",
+        "US.MO",
+        "US.EQIX",
+        "US.WM",
+        "US.CME",
+        "US.PYPL",
+        "US.TT",
+        "US.SHW",
+        "US.WELL",
+        "US.ZTS",
+        "US.PNC",
+        "US.USB",
+        "US.APH",
+        "US.EOG",
+        "US.BDX",
+        "US.ITW",
+        "US.PH",
+        "US.CL",
+        "US.FCX",
+        "US.LMT",
+        "US.CVS",
+        "US.NOC",
+        "US.APD",
+        "US.TGT",
+        "US.MMM",
+        "US.EMR",
+        "US.AON",
+        "US.KKR",
+        "US.GD",
+        "US.HUM",
+        "US.NKE",
+        "US.SLB",
+        "US.TDG",
+        "US.ECL",
+        "US.CARR",
+        "US.DHI",
+        "US.LEN",
+        "US.MCO",
+        "US.OXY",
+        "US.AZO",
+        "US.F",
+        "US.PSA",
+        "US.JCI",
+        "US.HLT",
+        "US.KMB",
+        "US.NSC",
+        "US.MPC",
+        "US.TFC",
+        "US.AFL",
+        "US.GM",
+        "US.MET",
+        "US.D",
+        "US.AIG",
+        "US.ALL",
+        "US.TRV",
+        "US.CP",
+        "US.WMB",
+        "US.LHX",
+        "US.SRE",
+        "US.PCG",
+        "US.OKE",
+        "US.KMI",
+        "US.ED",
+        "US.VST",
+        "US.NRG",
+        "US.EIX",
+        "US.AWK",
+        "US.VLTO",
+        "US.AME",
+        "US.URI",
+        "US.IR",
+        "US.XYL",
+        "US.OTIS",
+        "US.ROK",
+        "US.PWR",
+        "US.HWM",
+        "US.MLM",
+        "US.VMC",
+        "US.FTV",
+        "US.DOV",
+        "US.GRMN",
+        "US.PPG",
+        "US.LYB",
+        "US.DD",
+        "US.DOW",
+        "US.HAL",
+        "US.NEM",
+        "US.DVN",
     ]
 
     @staticmethod
@@ -154,6 +384,7 @@ class FutuStockAdapter:
         Falls back to _DEFAULT_SYMBOLS if the config file is unavailable.
         """
         from pathlib import Path
+
         import yaml
 
         config_paths = [
@@ -168,14 +399,13 @@ class FutuStockAdapter:
                     symbols = []
                     for market_cfg in cfg.get("markets", {}).values():
                         for sym in market_cfg.get("symbols", []):
-                            prefix = f"{sym[:2].upper()}." if len(sym) > 2 else "HK."
+                            _prefix = f"{sym[:2].upper()}." if len(sym) > 2 else "HK."
                             # ws_collector format: "HK.00700", adapter format: "HK.00700"
                             symbols.append(sym)
                     if symbols:
                         import logging
-                        logging.getLogger(__name__).info(
-                            "Loaded %d symbols from %s", len(symbols), p
-                        )
+
+                        logging.getLogger(__name__).info("Loaded %d symbols from %s", len(symbols), p)
                         return symbols
                 except Exception:
                     pass
@@ -190,7 +420,7 @@ class FutuStockAdapter:
 
     def market_hours(self, d: date) -> tuple[time, time]:
         """Return trading hours.
-        
+
         HK: 09:30-16:00, US: 09:30-16:00 ET
         TODO: Use get_market_state for dynamic hours.
         """

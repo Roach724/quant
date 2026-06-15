@@ -1,5 +1,6 @@
 """Hong Kong stock market adapter via akshare (fallback for yfinance)."""
-from datetime import date, time, timezone
+
+from datetime import date, time
 
 import pandas as pd
 
@@ -11,10 +12,11 @@ except ImportError:
 
 class AkshareHKAdapter:
     """HK stock data adapter using akshare stock_hk_hist.
-    
+
     Used as a fallback when yfinance returns empty or insufficient data.
     Only supports daily frequency; minute-level data is out of scope.
     """
+
     market = "HK"
 
     def fetch_bars(
@@ -36,10 +38,19 @@ class AkshareHKAdapter:
             DataFrame with columns: symbol, timestamp, open, high, low, close,
             volume, market, frequency. All timestamps in UTC.
         """
-        empty_df = pd.DataFrame(columns=[
-            "symbol", "timestamp", "open", "high", "low", "close",
-            "volume", "market", "frequency",
-        ])
+        empty_df = pd.DataFrame(
+            columns=[
+                "symbol",
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "market",
+                "frequency",
+            ]
+        )
 
         if frequency != "1d":
             return empty_df
@@ -71,7 +82,8 @@ class AkshareHKAdapter:
             if raw is None or raw.empty:
                 continue
 
-            # Expected akshare columns: 日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
+            # Expected akshare columns: 日期, 开盘, 收盘, 最高, 最低, 成交量,
+            # 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
             col_map = {
                 "日期": "timestamp",
                 "开盘": "open",
@@ -97,22 +109,25 @@ class AkshareHKAdapter:
                 else:
                     ts = ts.tz_convert("UTC")
 
-                all_records.append({
-                    "symbol": sym,
-                    "timestamp": ts,
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "volume": int(row["volume"]),
-                    "market": self.market,
-                    "frequency": frequency,
-                })
+                all_records.append(
+                    {
+                        "symbol": sym,
+                        "timestamp": ts,
+                        "open": float(row["open"]),
+                        "high": float(row["high"]),
+                        "low": float(row["low"]),
+                        "close": float(row["close"]),
+                        "volume": int(row["volume"]),
+                        "market": self.market,
+                        "frequency": frequency,
+                    }
+                )
 
         return pd.DataFrame(all_records) if all_records else empty_df
 
     def fetch_supported_symbols(self) -> list[str]:
-        """Return empty list — symbol management is external (via YFinanceHKAdapter.fetch_all_symbols)."""
+        """Return empty list — symbol management is external
+        (via YFinanceHKAdapter.fetch_all_symbols)."""
         return []
 
     def market_hours(self, d: date) -> tuple[time, time]:

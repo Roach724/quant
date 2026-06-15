@@ -1,6 +1,7 @@
 """US stock market adapter via akshare (fallback for yfinance)."""
-from datetime import date, time, timezone
+
 import logging
+from datetime import date, time
 
 import pandas as pd
 
@@ -47,10 +48,19 @@ class AkshareUSAdapter:
             DataFrame with columns: symbol, timestamp, open, high, low, close,
             volume, market, frequency. All timestamps in UTC.
         """
-        empty_df = pd.DataFrame(columns=[
-            "symbol", "timestamp", "open", "high", "low", "close",
-            "volume", "market", "frequency",
-        ])
+        empty_df = pd.DataFrame(
+            columns=[
+                "symbol",
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "market",
+                "frequency",
+            ]
+        )
 
         if frequency != "1d":
             return empty_df
@@ -116,7 +126,8 @@ class AkshareUSAdapter:
         all_records: list,
     ) -> None:
         """Extract standard OHLCV records from akshare raw DataFrame."""
-        # Expected akshare columns: 日期, 开盘, 收盘, 最高, 最低, 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
+        # Expected akshare columns: 日期, 开盘, 收盘, 最高, 最低,
+        # 成交量, 成交额, 振幅, 涨跌幅, 涨跌额, 换手率
         col_map = {
             "日期": "timestamp",
             "开盘": "open",
@@ -143,20 +154,23 @@ class AkshareUSAdapter:
             else:
                 ts = ts.tz_convert("UTC")
 
-            all_records.append({
-                "symbol": symbol,
-                "timestamp": ts,
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-                "volume": int(float(row["volume"])),
-                "market": "US",
-                "frequency": frequency,
-            })
+            all_records.append(
+                {
+                    "symbol": symbol,
+                    "timestamp": ts,
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "volume": int(float(row["volume"])),
+                    "market": "US",
+                    "frequency": frequency,
+                }
+            )
 
     def fetch_supported_symbols(self) -> list[str]:
-        """Return empty list — symbol management is external (via YFinanceUSAdapter.fetch_all_symbols)."""
+        """Return empty list — symbol management is external
+        (via YFinanceUSAdapter.fetch_all_symbols)."""
         return []
 
     def market_hours(self, d: date) -> tuple[time, time]:

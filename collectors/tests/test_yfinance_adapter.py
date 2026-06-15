@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 import pandas as pd
 import pytest
 
@@ -8,8 +9,8 @@ def test_yfinance_fetch_bars_returns_dataframe():
     from collectors.adapters.yfinance_adapter import YFinanceUSAdapter
 
     adapter = YFinanceUSAdapter()
-    start = datetime(2026, 5, 11, tzinfo=timezone.utc)
-    end = datetime(2026, 5, 13, tzinfo=timezone.utc)
+    start = datetime(2026, 5, 11, tzinfo=UTC)
+    end = datetime(2026, 5, 13, tzinfo=UTC)
 
     df = adapter.fetch_bars(["AAPL"], start, end, frequency="1m")
 
@@ -34,6 +35,7 @@ def test_yfinance_symbols_returns_list():
 
 def test_yfinance_market_hours_returns_tuple():
     from datetime import date
+
     from collectors.adapters.yfinance_adapter import YFinanceUSAdapter
 
     adapter = YFinanceUSAdapter()

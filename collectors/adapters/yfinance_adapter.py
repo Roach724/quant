@@ -1,5 +1,5 @@
-from datetime import date, datetime, time
 import logging
+from datetime import date, datetime, time
 
 import pandas as pd
 import yfinance as yf
@@ -12,12 +12,58 @@ class YFinanceUSAdapter:
 
     # Minimal fallback list used when dynamic discovery fails
     _FALLBACK_SYMBOLS = [
-        "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B",
-        "JPM", "V", "JNJ", "WMT", "PG", "MA", "UNH", "HD", "DIS", "BAC",
-        "PYPL", "ADBE", "CRM", "NFLX", "INTC", "CSCO", "VZ", "PFE", "MRK",
-        "ABT", "KO", "PEP", "TMO", "NKE", "ORCL", "ABBV", "ACN", "AVGO",
-        "COST", "CVX", "MCD", "WFC", "TXN", "QCOM", "AMD", "AMGN", "HON",
-        "INTU", "IBM", "PM", "MS", "LOW", "CAT", "SPY",
+        "AAPL",
+        "MSFT",
+        "GOOGL",
+        "AMZN",
+        "NVDA",
+        "META",
+        "TSLA",
+        "BRK-B",
+        "JPM",
+        "V",
+        "JNJ",
+        "WMT",
+        "PG",
+        "MA",
+        "UNH",
+        "HD",
+        "DIS",
+        "BAC",
+        "PYPL",
+        "ADBE",
+        "CRM",
+        "NFLX",
+        "INTC",
+        "CSCO",
+        "VZ",
+        "PFE",
+        "MRK",
+        "ABT",
+        "KO",
+        "PEP",
+        "TMO",
+        "NKE",
+        "ORCL",
+        "ABBV",
+        "ACN",
+        "AVGO",
+        "COST",
+        "CVX",
+        "MCD",
+        "WFC",
+        "TXN",
+        "QCOM",
+        "AMD",
+        "AMGN",
+        "HON",
+        "INTU",
+        "IBM",
+        "PM",
+        "MS",
+        "LOW",
+        "CAT",
+        "SPY",
     ]
 
     def __init__(self, fallback_adapter=None):
@@ -47,10 +93,19 @@ class YFinanceUSAdapter:
         Returns:
             DataFrame with standard OHLCV columns.
         """
-        empty_df = pd.DataFrame(columns=[
-            "symbol", "timestamp", "open", "high", "low", "close",
-            "volume", "market", "frequency",
-        ])
+        empty_df = pd.DataFrame(
+            columns=[
+                "symbol",
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "market",
+                "frequency",
+            ]
+        )
 
         # --- Primary: yfinance ---
         df = self._fetch_yfinance(symbols, start, end, frequency)
@@ -60,8 +115,7 @@ class YFinanceUSAdapter:
 
         # --- Fallback: akshare (only for 1d) ---
         if self._fallback is not None and frequency == "1d":
-            logger.info("yfinance returned %d rows (<5), falling back to akshare",
-                        len(df) if df is not None else 0)
+            logger.info("yfinance returned %d rows (<5), falling back to akshare", len(df) if df is not None else 0)
             try:
                 df_fb = self._fallback.fetch_bars(symbols, start, end, frequency)
                 if df_fb is not None and not df_fb.empty:
@@ -98,17 +152,19 @@ class YFinanceUSAdapter:
                 continue
             sym_df = df.xs(symbol, level=1, axis=1).dropna(subset=["Open"])
             for ts, row in sym_df.iterrows():
-                records.append({
-                    "symbol": symbol,
-                    "timestamp": ts.tz_convert("UTC") if ts.tzinfo else ts.tz_localize("UTC"),
-                    "open": float(row["Open"]),
-                    "high": float(row["High"]),
-                    "low": float(row["Low"]),
-                    "close": float(row["Close"]),
-                    "volume": int(row["Volume"]),
-                    "market": self.market,
-                    "frequency": frequency,
-                })
+                records.append(
+                    {
+                        "symbol": symbol,
+                        "timestamp": ts.tz_convert("UTC") if ts.tzinfo else ts.tz_localize("UTC"),
+                        "open": float(row["Open"]),
+                        "high": float(row["High"]),
+                        "low": float(row["Low"]),
+                        "close": float(row["Close"]),
+                        "volume": int(row["Volume"]),
+                        "market": self.market,
+                        "frequency": frequency,
+                    }
+                )
 
         return pd.DataFrame(records) if records else None
 
@@ -135,7 +191,7 @@ class YFinanceUSAdapter:
                 #                  昨收价, 总市值, 市盈率, 成交量, 成交额, 振幅, 换手率, 代码
                 # "代码" is in format "105.MSFT"
                 if "代码" not in raw.columns:
-                    raise ValueError("unexpected akshare columns: %s" % raw.columns.tolist())
+                    raise ValueError(f"unexpected akshare columns: {raw.columns.tolist()}")
 
                 df = raw.copy()
                 # Extract plain symbol from akshare code ("105.MSFT" → "MSFT")
@@ -143,7 +199,7 @@ class YFinanceUSAdapter:
                 df["plain_symbol"] = df["plain_symbol"].str.strip()
 
                 # Filter: only valid US ticker patterns (1-5 uppercase letters)
-                df = df[df["plain_symbol"].str.match(r'^[A-Z0-9\.\-]{1,10}$')]
+                df = df[df["plain_symbol"].str.match(r"^[A-Z0-9\.\-]{1,10}$")]
 
                 # Price filter (>= $1)
                 if "最新价" in df.columns:
@@ -173,7 +229,10 @@ class YFinanceUSAdapter:
                 sp_df = tables[0]
                 symbols = sp_df["Symbol"].astype(str).str.replace(".", "-", regex=False).tolist()
                 symbols = list(dict.fromkeys(symbols))  # deduplicate
-                logger.info("fetch_all_symbols: got %d symbols from Wikipedia S&P 500", len(symbols))
+                logger.info(
+                    "fetch_all_symbols: got %d symbols from Wikipedia S&P 500",
+                    len(symbols),
+                )
                 return symbols
         except Exception as e:
             logger.debug("Wikipedia S&P 500 fetch failed: %s", e)

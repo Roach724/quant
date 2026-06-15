@@ -12,7 +12,7 @@ _sessions: dict[str, scoped_session] = {}
 
 
 def _db_path(env: str) -> str:
-    return f"/var/quant/trading/{env}/trading.db"
+    return f"/var/data/trading/{env}/trading.db"
 
 
 def init_db(env: str = "sim"):

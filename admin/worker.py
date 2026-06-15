@@ -49,7 +49,7 @@ def _handle_trading_start(task, env: str) -> None:
     # Give it a moment to write the PID file, then verify
     import time
     time.sleep(2)
-    pid_dir = Path(f"/var/quant/trading/{env.replace('trading_', '')}/pids")
+    pid_dir = Path(f"/var/data/trading/{env.replace('trading_', '')}/pids")
     pid_file = pid_dir / f"strategy_{strategy_id}.pid"
     if pid_file.exists():
         task.result = f"Launched trading_{env} strategy #{strategy_id} (PID {proc.pid})"

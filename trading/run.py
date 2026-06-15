@@ -53,18 +53,17 @@ def run_strategy(strategy_id: int, env: str) -> None:
 
     log.info("Starting strategy #%d (%s)", strategy_id, env)
 
-    # Load strategy from DB
+    # Load strategy from DB (session stays open — used by CapitalManager/StateManager)
     session = get_trading_session(env)
-    try:
-        strat = session.get(TSModel, strategy_id)
-        if not strat:
-            log.error("Strategy #%d not found", strategy_id)
-            return
-        if strat.status != "running":
-            log.warning("Strategy #%d status is '%s', not 'running' — aborting", strategy_id, strat.status)
-            return
-    finally:
+    strat = session.get(TSModel, strategy_id)
+    if not strat:
+        log.error("Strategy #%d not found", strategy_id)
         session.close()
+        return
+    if strat.status != "running":
+        log.warning("Strategy #%d status is '%s', not 'running' — aborting", strategy_id, strat.status)
+        session.close()
+        return
 
     # Parse config
     cfg = yaml.safe_load(strat.config_yaml) or {}
@@ -76,15 +75,11 @@ def run_strategy(strategy_id: int, env: str) -> None:
         strat.name, market, strat.capital_allocated,
     )
 
-    # Initialize components
-    from trading.capital import CapitalManager
-    from trading.state import TradingStateManager
-    from trading.signal_bridge import SignalBridge
-
-    capital = CapitalManager(strat.capital_allocated)
-    state_mgr = TradingStateManager(strategy_id, env)
-    bridge = SignalBridge(strategy_id, env)
-    broker = None  # Will be lazily created
+    # Initialize components with the trading DB session
+    broker = None  # Will be lazily created in TradingRunner
+    capital = CapitalManager(session)
+    state_mgr = TradingStateManager(session)
+    bridge = SignalBridge(broker, capital)
 
     runner = TradingRunner(
         broker=broker,
@@ -96,7 +91,7 @@ def run_strategy(strategy_id: int, env: str) -> None:
     )
 
     # Write PID file for the admin worker to track
-    pid_dir = Path(f"/var/quant/trading/{env}/pids")
+    pid_dir = Path(f"/var/data/trading/{env}/pids")
     pid_dir.mkdir(parents=True, exist_ok=True)
     pid_file = pid_dir / f"strategy_{strategy_id}.pid"
     pid_file.write_text(str(os.getpid()))

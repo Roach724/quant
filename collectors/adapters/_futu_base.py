@@ -3,12 +3,13 @@
 Note: Futu F10 API return formats are inconsistent (DataFrame / dict / multi-value tuple).
 Each adapter's _call_api() returns the raw API response; _parse() normalizes into pd.DataFrame.
 """
+
 from __future__ import annotations
 
 import logging
 import os
 import time as _time
-from typing import Optional, Any
+from typing import Any
 
 import pandas as pd
 from futu import OpenQuoteContext
@@ -31,14 +32,14 @@ class FutuBaseAdapter:
 
     def __init__(
         self,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        symbols: Optional[list[str]] = None,
+        host: str | None = None,
+        port: int | None = None,
+        symbols: list[str] | None = None,
     ):
         self.host = host or os.environ.get("OPEND_HOST", "127.0.0.1")
         self.port = port or int(os.environ.get("OPEND_PORT", "11111"))
         self.symbols = symbols or self._default_symbols()
-        self._ctx: Optional[OpenQuoteContext] = None
+        self._ctx: OpenQuoteContext | None = None
         self._last_request_time = 0.0
 
     def _get_ctx(self) -> OpenQuoteContext:
@@ -115,14 +116,21 @@ class FutuBaseAdapter:
         """Load symbol pool from SSOT (config/symbols.yaml), falling back to static list."""
         try:
             from collectors.adapters.futu_stock_adapter import FutuStockAdapter
+
             adapter = FutuStockAdapter()
             syms = adapter.fetch_supported_symbols()
             adapter.close()
             us_count = sum(1 for s in syms if s.startswith("US."))
             hk_count = sum(1 for s in syms if s.startswith("HK."))
-            logger.info("Loaded %d symbols (%d US + %d HK) from SSOT", len(syms), us_count, hk_count)
+            logger.info(
+                "Loaded %d symbols (%d US + %d HK) from SSOT",
+                len(syms),
+                us_count,
+                hk_count,
+            )
             return syms
         except Exception:
             logger.warning("Cannot load symbols from SSOT; using static fallback")
             from collectors.adapters.futu_stock_adapter import FutuStockAdapter
+
             return list(FutuStockAdapter._DEFAULT_SYMBOLS)

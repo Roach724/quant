@@ -25,7 +25,7 @@ class TradingStateManager:
     def __init__(
         self,
         session: DBSession,
-        state_dir: str = "/var/quant/trading/state",
+        state_dir: str = "/var/data/trading/state",
     ):
         self.session = session
         self.state_dir = Path(state_dir)

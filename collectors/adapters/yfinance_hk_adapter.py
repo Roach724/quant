@@ -1,6 +1,7 @@
 """Hong Kong stock market adapter via yfinance with akshare fallback."""
-from datetime import date, time, timezone
+
 import logging
+from datetime import date, time
 
 import pandas as pd
 import yfinance as yf
@@ -15,10 +16,43 @@ class YFinanceHKAdapter:
 
     # Built-in fallback list used when akshare is unavailable
     _FALLBACK_SYMBOLS = [
-        "0700", "9988", "3690", "9618", "9999", "9888", "2015", "9868", "1810", "1024", "9626",
-        "0005", "0388", "1299", "2318", "3968", "1398", "3988", "2628", "0011",
-        "0001", "0002", "0003", "0016", "0027", "0175", "0267", "0291", "0669", "0823",
-        "0883", "0941", "1044", "1093", "1177", "1928", "2269",
+        "0700",
+        "9988",
+        "3690",
+        "9618",
+        "9999",
+        "9888",
+        "2015",
+        "9868",
+        "1810",
+        "1024",
+        "9626",
+        "0005",
+        "0388",
+        "1299",
+        "2318",
+        "3968",
+        "1398",
+        "3988",
+        "2628",
+        "0011",
+        "0001",
+        "0002",
+        "0003",
+        "0016",
+        "0027",
+        "0175",
+        "0267",
+        "0291",
+        "0669",
+        "0823",
+        "0883",
+        "0941",
+        "1044",
+        "1093",
+        "1177",
+        "1928",
+        "2269",
     ]
 
     def __init__(self, fallback_adapter=None):
@@ -48,10 +82,19 @@ class YFinanceHKAdapter:
         Returns:
             DataFrame with standard OHLCV columns.
         """
-        empty_df = pd.DataFrame(columns=[
-            "symbol", "timestamp", "open", "high", "low", "close",
-            "volume", "market", "frequency",
-        ])
+        empty_df = pd.DataFrame(
+            columns=[
+                "symbol",
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "market",
+                "frequency",
+            ]
+        )
 
         # --- Primary: yfinance ---
         df = self._fetch_yfinance(symbols, start, end, frequency)
@@ -61,8 +104,7 @@ class YFinanceHKAdapter:
 
         # --- Fallback: akshare (only for 1d) ---
         if self._fallback is not None and frequency == "1d":
-            logger.info("yfinance returned %d rows (<5), falling back to akshare",
-                        len(df) if df is not None else 0)
+            logger.info("yfinance returned %d rows (<5), falling back to akshare", len(df) if df is not None else 0)
             fallback_symbols = [s.replace(".HK", "").zfill(5) for s in symbols]
             try:
                 df_fb = self._fallback.fetch_bars(fallback_symbols, start, end, frequency)
@@ -99,17 +141,19 @@ class YFinanceHKAdapter:
                 continue
             sym_df = df.xs(symbol, level=1, axis=1).dropna(subset=["Open"])
             for ts, row in sym_df.iterrows():
-                records.append({
-                    "symbol": clean_sym,
-                    "timestamp": ts.tz_convert("UTC") if ts.tzinfo else ts.tz_localize("UTC"),
-                    "open": float(row["Open"]),
-                    "high": float(row["High"]),
-                    "low": float(row["Low"]),
-                    "close": float(row["Close"]),
-                    "volume": int(row["Volume"]),
-                    "market": self.market,
-                    "frequency": frequency,
-                })
+                records.append(
+                    {
+                        "symbol": clean_sym,
+                        "timestamp": ts.tz_convert("UTC") if ts.tzinfo else ts.tz_localize("UTC"),
+                        "open": float(row["Open"]),
+                        "high": float(row["High"]),
+                        "low": float(row["Low"]),
+                        "close": float(row["Close"]),
+                        "volume": int(row["Volume"]),
+                        "market": self.market,
+                        "frequency": frequency,
+                    }
+                )
 
         return pd.DataFrame(records) if records else None
 
@@ -126,22 +170,20 @@ class YFinanceHKAdapter:
             List of 4-digit symbol strings (no .HK suffix), e.g. ["0700", "9988", ...].
         """
         import os
+
         import pandas as pd
 
         # Priority 1: pre-cached CSV snapshot
-        csv_path = os.path.normpath(os.path.join(
-            os.path.dirname(__file__), "..", "..", "config", "stock_pool_hk.csv"
-        ))
+        csv_path = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "config", "stock_pool_hk.csv"))
         if os.path.exists(csv_path):
             try:
                 df = pd.read_csv(csv_path, header=None, names=["symbol"])
-                symbols = sorted(
-                    df["symbol"].astype(str).str.strip().str.zfill(4).tolist()
-                )
+                symbols = sorted(df["symbol"].astype(str).str.strip().str.zfill(4).tolist())
                 if len(symbols) > 100:
                     logger.info(
                         "fetch_all_symbols: loaded %d symbols from %s",
-                        len(symbols), csv_path,
+                        len(symbols),
+                        csv_path,
                     )
                     return symbols
             except Exception as e:
@@ -156,13 +198,15 @@ class YFinanceHKAdapter:
                 raise ValueError("akshare returned empty dataframe")
 
             # Standardize columns
-            df = raw.rename(columns={
-                "代码": "symbol",
-                "名称": "name",
-                "最新价": "price",
-                "成交量": "volume",
-                "成交额": "turnover",
-            })
+            df = raw.rename(
+                columns={
+                    "代码": "symbol",
+                    "名称": "name",
+                    "最新价": "price",
+                    "成交量": "volume",
+                    "成交额": "turnover",
+                }
+            )
             df["symbol"] = df["symbol"].astype(str).str.lstrip("0")
             df["symbol"] = df["symbol"].apply(lambda s: s if s else "0")
             df["symbol"] = df["symbol"].str.zfill(4)
@@ -178,9 +222,7 @@ class YFinanceHKAdapter:
             return symbols
 
         except Exception as e:
-            logger.warning(
-                "fetch_all_symbols via akshare failed (%s), using built-in fallback list", e
-            )
+            logger.warning("fetch_all_symbols via akshare failed (%s), using built-in fallback list", e)
             return list(YFinanceHKAdapter._FALLBACK_SYMBOLS)
 
     def fetch_supported_symbols(self) -> list[str]:
