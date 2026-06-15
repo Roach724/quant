@@ -63,6 +63,52 @@ class MlConfig(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class AiStrategy(Base):
+    """AI Decision Engine strategy instance (one per configured strategy)."""
+    __tablename__ = "ai_strategies"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), unique=True, nullable=False)
+    market = Column(String(10), nullable=False, default="us")
+    enabled = Column(Integer, nullable=False, default=0)  # 0=disabled, 1=enabled
+    config_yaml = Column(Text, nullable=False)
+    cron_schedule = Column(String(100), nullable=True)
+    last_run_at = Column(DateTime, nullable=True)
+    last_run_status = Column(String(20), nullable=True)  # success | failed | running
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class AiDecisionRun(Base):
+    """Single execution record of the AI Decision Engine."""
+    __tablename__ = "ai_decision_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    strategy_id = Column(Integer, nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="running")  # running | success | failed
+    recall_result = Column(JSON, nullable=True)
+    analysis_result = Column(JSON, nullable=True)
+    fusion_result = Column(JSON, nullable=True)
+    decision_result = Column(JSON, nullable=True)
+    summary = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    finished_at = Column(DateTime, nullable=True)
+
+
+class AiDecisionConfig(Base):
+    """YAML config template for AI Decision Engine strategies."""
+    __tablename__ = "ai_decision_configs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), unique=True, nullable=False)
+    market = Column(String(10), nullable=False, default="us")
+    description = Column(String(500), nullable=True)
+    config_yaml = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 class CronRun(Base):
     """Unified run history for all cron jobs — manual and scheduled."""
     __tablename__ = "cron_runs"

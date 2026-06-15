@@ -22,7 +22,7 @@ from typing import Optional, Any
 
 from google.cloud import bigquery
 
-from admin.models import init_db, get_session, Task, CronRun
+from admin.models import init_db, get_session, Task, CronRun, AiStrategy, AiDecisionRun, AiDecisionConfig
 from live.experiment_manager import ExperimentManager
 from factors.registry import FactorRegistry
 
@@ -3870,6 +3870,278 @@ async def dash_market_bars(market: str, symbol: str, limit: int = 78, days: int 
                  "l": r.low, "c": r.close, "v": r.volume} for r in rows]
 
     return await cache.get_or_compute_async(key, _query)
+
+
+# ── AI Decision Engine API ───────────────────────────────────────────────────
+
+@app.get("/api/admin/ai/configs")
+async def ai_list_configs(db: Session = DB_SESSION_DEP):
+    """List all AI decision config templates."""
+    configs = db.query(AiDecisionConfig).order_by(AiDecisionConfig.created_at.desc()).all()
+    return [
+        {
+            "id": c.id,
+            "name": c.name,
+            "market": c.market,
+            "description": c.description,
+            "created_at": _db_serialize(c.created_at),
+            "updated_at": _db_serialize(c.updated_at),
+        }
+        for c in configs
+    ]
+
+
+@app.post("/api/admin/ai/configs")
+async def ai_create_config(data: dict = Body(...), db: Session = DB_SESSION_DEP):
+    """Create a new AI decision config template."""
+    name = data.get("name", "").strip()
+    if not name:
+        return {"error": "name is required"}, 400
+    if db.query(AiDecisionConfig).filter(AiDecisionConfig.name == name).first():
+        return {"error": f"Config '{name}' already exists"}, 400
+    cfg = AiDecisionConfig(
+        name=name,
+        market=data.get("market", "us"),
+        description=data.get("description", ""),
+        config_yaml=data.get("config_yaml", ""),
+    )
+    db.add(cfg)
+    db.commit()
+    return {"id": cfg.id, "name": cfg.name}
+
+
+@app.get("/api/admin/ai/configs/{name}")
+async def ai_get_config(name: str, db: Session = DB_SESSION_DEP):
+    """Get full config template by name (including YAML content)."""
+    cfg = db.query(AiDecisionConfig).filter(AiDecisionConfig.name == name).first()
+    if not cfg:
+        return {"error": "config not found"}, 404
+    return {
+        "id": cfg.id,
+        "name": cfg.name,
+        "market": cfg.market,
+        "description": cfg.description,
+        "config_yaml": cfg.config_yaml,
+        "created_at": _db_serialize(cfg.created_at),
+        "updated_at": _db_serialize(cfg.updated_at),
+    }
+
+
+@app.put("/api/admin/ai/configs/{name}")
+async def ai_update_config(name: str, data: dict = Body(...), db: Session = DB_SESSION_DEP):
+    """Update an AI decision config template."""
+    cfg = db.query(AiDecisionConfig).filter(AiDecisionConfig.name == name).first()
+    if not cfg:
+        return {"error": "config not found"}, 404
+    if "description" in data:
+        cfg.description = data["description"]
+    if "config_yaml" in data:
+        cfg.config_yaml = data["config_yaml"]
+    if "market" in data:
+        cfg.market = data["market"]
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/admin/ai/configs/{name}")
+async def ai_delete_config(name: str, db: Session = DB_SESSION_DEP):
+    """Delete an AI decision config template."""
+    cfg = db.query(AiDecisionConfig).filter(AiDecisionConfig.name == name).first()
+    if not cfg:
+        return {"error": "config not found"}, 404
+    db.delete(cfg)
+    db.commit()
+    return {"ok": True}
+
+
+# ── AI Strategies ──
+
+@app.get("/api/admin/ai/strategies")
+async def ai_list_strategies(db: Session = DB_SESSION_DEP):
+    """List all AI decision strategies."""
+    strategies = db.query(AiStrategy).order_by(AiStrategy.created_at.desc()).all()
+    return [
+        {
+            "id": s.id,
+            "name": s.name,
+            "market": s.market,
+            "enabled": bool(s.enabled),
+            "config_yaml": s.config_yaml,
+            "cron_schedule": s.cron_schedule,
+            "last_run_at": _db_serialize(s.last_run_at) if s.last_run_at else None,
+            "last_run_status": s.last_run_status,
+            "created_at": _db_serialize(s.created_at),
+            "updated_at": _db_serialize(s.updated_at),
+        }
+        for s in strategies
+    ]
+
+
+@app.post("/api/admin/ai/strategies")
+async def ai_create_strategy(data: dict = Body(...), db: Session = DB_SESSION_DEP):
+    """Create an AI strategy from a config template."""
+    template_name = data.get("template", "")
+    if not template_name:
+        return {"error": "template is required"}, 400
+
+    cfg = db.query(AiDecisionConfig).filter(AiDecisionConfig.name == template_name).first()
+    if not cfg:
+        return {"error": f"Config template '{template_name}' not found"}, 404
+
+    name = data.get("name", "").strip() or cfg.name.replace("ai_", "", 1)
+    if db.query(AiStrategy).filter(AiStrategy.name == name).first():
+        return {"error": f"Strategy '{name}' already exists"}, 400
+
+    market = data.get("market", cfg.market)
+    config_yaml = data.get("config_yaml", cfg.config_yaml)
+
+    strategy = AiStrategy(
+        name=name,
+        market=market,
+        config_yaml=config_yaml,
+        cron_schedule=data.get("cron_schedule"),
+    )
+    db.add(strategy)
+    db.commit()
+    return {"id": strategy.id, "name": strategy.name}
+
+
+@app.put("/api/admin/ai/strategies/{strategy_id}")
+async def ai_update_strategy(strategy_id: int, data: dict = Body(...), db: Session = DB_SESSION_DEP):
+    s = db.query(AiStrategy).filter(AiStrategy.id == strategy_id).first()
+    if not s:
+        return {"error": "strategy not found"}, 404
+    if "name" in data:
+        s.name = data["name"]
+    if "market" in data:
+        s.market = data["market"]
+    if "config_yaml" in data:
+        s.config_yaml = data["config_yaml"]
+    if "cron_schedule" in data:
+        s.cron_schedule = data["cron_schedule"]
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/admin/ai/strategies/{strategy_id}")
+async def ai_delete_strategy(strategy_id: int, db: Session = DB_SESSION_DEP):
+    s = db.query(AiStrategy).filter(AiStrategy.id == strategy_id).first()
+    if not s:
+        return {"error": "strategy not found"}, 404
+    # Also delete associated runs
+    db.query(AiDecisionRun).filter(AiDecisionRun.strategy_id == strategy_id).delete()
+    db.delete(s)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/admin/ai/strategies/{strategy_id}/enable")
+async def ai_enable_strategy(strategy_id: int, db: Session = DB_SESSION_DEP):
+    s = db.query(AiStrategy).filter(AiStrategy.id == strategy_id).first()
+    if not s:
+        return {"error": "strategy not found"}, 404
+    s.enabled = 1
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/admin/ai/strategies/{strategy_id}/disable")
+async def ai_disable_strategy(strategy_id: int, db: Session = DB_SESSION_DEP):
+    s = db.query(AiStrategy).filter(AiStrategy.id == strategy_id).first()
+    if not s:
+        return {"error": "strategy not found"}, 404
+    s.enabled = 0
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/admin/ai/strategies/{strategy_id}/run")
+async def ai_run_strategy(strategy_id: int, db: Session = DB_SESSION_DEP):
+    """Run the AI Decision Engine pipeline asynchronously via the Task worker."""
+    s = db.query(AiStrategy).filter(AiStrategy.id == strategy_id).first()
+    if not s:
+        return {"error": "strategy not found"}, 404
+
+    run_record = AiDecisionRun(
+        strategy_id=strategy_id,
+        status="running",
+    )
+    db.add(run_record)
+    db.commit()
+    run_id = run_record.id
+
+    # Create a background task
+    task = Task(
+        type="ai_decision_run",
+        params={
+            "strategy_id": strategy_id,
+            "strategy_name": s.name,
+            "market": s.market,
+            "config_yaml": s.config_yaml,
+            "run_id": run_id,
+        },
+        status="pending",
+    )
+    db.add(task)
+    db.commit()
+
+    s.last_run_status = "running"
+    s.last_run_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return {"task_id": task.id, "run_id": run_id}
+
+
+# ── AI Decision Runs ──
+
+@app.get("/api/admin/ai/runs")
+async def ai_list_runs(strategy_id: int | None = None, db: Session = DB_SESSION_DEP):
+    q = db.query(AiDecisionRun).order_by(AiDecisionRun.started_at.desc()).limit(50)
+    if strategy_id:
+        q = q.filter(AiDecisionRun.strategy_id == strategy_id)
+    runs = q.all()
+    return [
+        {
+            "id": r.id,
+            "strategy_id": r.strategy_id,
+            "status": r.status,
+            "started_at": _db_serialize(r.started_at),
+            "finished_at": _db_serialize(r.finished_at) if r.finished_at else None,
+            "summary": r.summary,
+            "error": r.error,
+        }
+        for r in runs
+    ]
+
+
+@app.get("/api/admin/ai/runs/{run_id}")
+async def ai_get_run(run_id: int, db: Session = DB_SESSION_DEP):
+    r = db.query(AiDecisionRun).filter(AiDecisionRun.id == run_id).first()
+    if not r:
+        return {"error": "run not found"}, 404
+    return {
+        "id": r.id,
+        "strategy_id": r.strategy_id,
+        "status": r.status,
+        "recall_result": r.recall_result,
+        "analysis_result": r.analysis_result,
+        "fusion_result": r.fusion_result,
+        "decision_result": r.decision_result,
+        "summary": r.summary,
+        "error": r.error,
+        "started_at": _db_serialize(r.started_at),
+        "finished_at": _db_serialize(r.finished_at) if r.finished_at else None,
+    }
+
+
+@app.delete("/api/admin/ai/runs/{run_id}")
+async def ai_delete_run(run_id: int, db: Session = DB_SESSION_DEP):
+    r = db.query(AiDecisionRun).filter(AiDecisionRun.id == run_id).first()
+    if not r:
+        return {"error": "run not found"}, 404
+    db.delete(r)
+    db.commit()
+    return {"ok": True}
 
 
 # ── Static + SPA fallback (production build, after all API routes) ────────────

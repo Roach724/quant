@@ -1,0 +1,75 @@
+You are a trading decision engine evaluating a single stock for execution.
+
+## Stock
+- Symbol: {{ symbol }}
+- Fusion Rank: #{{ rank }} / {{ total }} (final score: {{ "%.3f" | format(final_score) }})
+
+## AI Analysis
+- Direction: {{ analysis.direction }}
+- Confidence: {{ "%.2f" | format(analysis.confidence) }}
+{% if analysis.rating %}
+- Rating: {{ analysis.rating }}
+{% endif %}
+- Key Arguments:
+{% for arg in analysis.key_arguments %}
+  - {{ arg }}
+{% endfor %}
+- Risk Factors:
+{% for risk in analysis.risk_factors %}
+  - {{ risk }}
+{% endfor %}
+- Suggested Weight Modifier: {{ "%+.2f" | format(analysis.suggested_weight_modifier) }}
+
+## Current Market Snapshot
+{% set has_snapshot = snapshot.get('price') is not none %}
+{% if has_snapshot %}
+- Price: {{ "%.2f" | format(snapshot['price']) }}
+{% endif %}
+{% if snapshot.get('ma_20') %}
+- MA(20): {{ "%.2f" | format(snapshot['ma_20']) }} (price is {{ 'above' if snapshot['price'] > snapshot['ma_20'] else 'below' }})
+{% endif %}
+{% if snapshot.get('rsi_14') is not none %}
+- RSI(14): {{ "%.1f" | format(snapshot['rsi_14']) }}
+{% endif %}
+{% set macd_val = snapshot.get('macd') %}
+{% set macd_sig = snapshot.get('macd_signal') %}
+{% if macd_val is not none and macd_sig is not none %}
+- MACD: {{ "%.4f" | format(macd_val) }} (signal: {{ "%.4f" | format(macd_sig) }})
+  → {{ 'bullish' if macd_val > macd_sig else 'bearish' }} crossover
+{% endif %}
+{% if not has_snapshot %}
+- Market snapshot: unavailable
+{% endif %}
+
+## Current Position
+{% if holding and holding.qty > 0 %}
+- Shares held: {{ holding.qty }}
+- Portfolio weight: {{ "%.1f%%" | format(holding.pct * 100) }}
+- Unrealized P/L: {{ "%.2f" | format(holding.unrealized_pl) }}
+{% else %}
+- No current position in this stock
+{% endif %}
+
+## Constraints
+- Max position per stock: {{ "%.0f%%" | format(max_position_pct * 100) }}
+{% if holding and holding.qty > 0 %}
+- Current weight: {{ "%.1f%%" | format(holding.pct * 100) }}
+{% endif %}
+
+## Task
+
+Decide what action to take on this stock. Output ONLY a JSON object:
+
+{
+  "action": "buy" | "sell" | "hold" | "watch",
+  "suggested_weight": 0.0 to {{ "%.2f" | format(max_position_pct) }},
+  "reason": "one sentence explaining your decision",
+  "urgency": "high" | "medium" | "low"
+}
+
+Rules:
+- "buy": enter or increase position (suggested_weight > 0)
+- "sell": exit or reduce position (suggested_weight = 0)
+- "hold": maintain current position
+- "watch": no position now, but monitor for entry
+- suggested_weight = 0 means close position entirely
