@@ -1,8 +1,8 @@
 # AI 决策引擎 — 系统设计
 
-> 版本: v3  
+> 版本: v4  
 > 日期: 2026-06-14  
-> 状态: Phase 1 数据层进行中  
+> 状态: Phase 1-6 完成, Phase 7 LLMQuant 集成待讨论  
 > 市场: **初始仅 US 市场** (HK/Crypto 暂不支持)
 
 ---
@@ -559,17 +559,32 @@ ai_decision/                          # 新模块
 - 集成 data_provider 数据采集
 - 测试: Top-3 标的跑分析 → 验证报告质量
 
-### Phase 4: 融合层
+### Phase 4: 计算因子补全 🔧
 
-**目标**: 多策略信号融合排序
+**背景**: Phase 1 发现 factor_values 表中 ma_20/ma_50/atr_14/bb_upper/bb_lower 不存在。当前 `data_provider.py` 已定义这些字段为 `COMPUTED_FIELDS`，但尚未实现计算逻辑。
+
+**目标**: 从 BQ 日线数据 (us_bars_1d) 实时计算缺失的技术指标。
+
+**产出**:
+- `data_provider.py` 扩展: `_compute_fields()` 方法
+  - `ma_20`: close 的 20 日滚动均值
+  - `ma_50`: close 的 50 日滚动均值
+  - `atr_14`: true range 的 14 日滚动均值
+  - `bb_upper` / `bb_lower`: close ± 2×bb_width (需要 bb_position 配合换算)
+- 不修改 `factor_values` 表 (因子计算归因子模块,这里做 on-the-fly 补充)
+- 测试: 3 只标的验证 MA/ATR/BB 计算值与预期一致
+
+### Phase 5: 融合层
+
+**目标**: 多策略信号融合排序 (原 Phase 4)
 
 **产出**:
 - `ai_decision/fusion.py` — 投票/加权模式
 - 配合分析层结果做端到端排序
 
-### Phase 5: 执行层 + 集成
+### Phase 6: 执行层 + 集成
 
-**目标**: 分层决策 → 换仓方案 → OMS
+**目标**: 分层决策 → 换仓方案 → OMS (原 Phase 5)
 
 **产出**:
 - `ai_decision/executor/stock_evaluator.py` — 标的层 LLM
@@ -578,9 +593,26 @@ ai_decision/                          # 新模块
 - `trading/runner.py` — AI 决策集成入口
 - cron 任务: `ai-decision-engine`
 
-### Phase 6: Admin UI + 监控
+### Phase 7: LLMQuant 数据后端集成 🔧
 
-**目标**: Admin 管理台新侧边栏模块 + 全链路可视化 + 策略生命周期管理 + 看板集成
+**背景**: 当前 `LLMQuantProvider` 为 stub — 6 个基本面/情绪字段全部返回 None。llmquant skills 仅是 AI agent 工作流指令，无运行中的数据后端。需要搭建 MCP 服务或 REST API 来提供基本面、情绪、机构持仓等数据。
+
+**目标**: 打通 LLMQuant 数据链路，补齐分析层的基本面数据覆盖。
+
+**待讨论**:
+- llmquant 数据后端的部署架构 (MCP server vs REST API)
+- 数据源选择 (第三方 API 如 Yahoo Finance / Alpha Vantage，还是自建数据采集)
+- 覆盖字段: pe, forward_pe, revenue_growth, net_margin, debt_equity, news_sentiment, news_headlines
+- 调用方式: `LLMQuantProvider.fetch()` 从 stub → 真实 HTTP/MCP 调用
+
+**产出**:
+- `data_provider.py`: `LLMQuantProvider.fetch()` 真实实现
+- 数据后端部署 (待定架构)
+- 测试: 3 只标的验证基本面/情绪字段有真实数据
+
+### Phase 8: Admin UI + 监控
+
+**目标**: Admin 管理台新侧边栏模块 + 全链路可视化 + 策略生命周期管理 + 看板集成 (原 Phase 7)
 
 ---
 
