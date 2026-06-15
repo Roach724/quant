@@ -321,30 +321,44 @@ class LLMQuantMCPProvider:
         self._ctx = None
         self._read = None
         self._write = None
+        self._disabled = False
 
     async def _ensure_session(self):
         """Lazy-init MCP session (reused across calls)."""
         if self._session is not None:
+            return
+        if self._disabled:
+            return
+
+        import shutil
+        if shutil.which("npx") is None:
+            logger.warning("npx not available — LLMQuant MCP disabled")
+            self._disabled = True
             return
 
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
         import asyncio
 
-        params = StdioServerParameters(
-            command="npx",
-            args=["-y", "@llmquant/data-mcp"],
-            env={"LLMQUANT_API_KEY": self.api_key or ""},
-        )
+        try:
+            params = StdioServerParameters(
+                command="npx",
+                args=["-y", "@llmquant/data-mcp"],
+                env={"LLMQUANT_API_KEY": self.api_key or ""},
+            )
 
-        # Use proper async context manager
-        self._ctx = stdio_client(params)
-        self._read, self._write = await self._ctx.__aenter__()
-        self._session = ClientSession(self._read, self._write)
-        await self._session.__aenter__()
-        await asyncio.sleep(1)  # let server settle
-        await self._session.initialize()
-        logger.info("LLMQuant MCP session initialized")
+            # Use proper async context manager
+            self._ctx = stdio_client(params)
+            self._read, self._write = await self._ctx.__aenter__()
+            self._session = ClientSession(self._read, self._write)
+            await self._session.__aenter__()
+            await asyncio.sleep(1)  # let server settle
+            await self._session.initialize()
+            logger.info("LLMQuant MCP session initialized")
+        except Exception as e:
+            logger.warning(f"LLMQuant MCP init failed: {e} — disabled")
+            self._disabled = True
+            self._session = None
 
     async def close(self):
         """Close MCP session."""
@@ -378,6 +392,8 @@ class LLMQuantMCPProvider:
             return result
 
         await self._ensure_session()
+        if self._session is None:
+            return {f: None for f in fields}  # gracefully skip
 
         # ── News: 8-K events as proxy for headlines ──
         if needs_news:
