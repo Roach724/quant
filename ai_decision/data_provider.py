@@ -393,7 +393,16 @@ class LLMQuantMCPProvider:
 
         await self._ensure_session()
         if self._session is None:
-            return {f: None for f in fields}  # gracefully skip
+            # Return empty defaults matching schema types
+            default = {}
+            for f in fields:
+                if f == "news_headlines":
+                    default[f] = []
+                elif f in ("sec_filings", "institutional_flow"):
+                    default[f] = {}
+                else:
+                    default[f] = None
+            return default
 
         # ── News: 8-K events as proxy for headlines ──
         if needs_news:
