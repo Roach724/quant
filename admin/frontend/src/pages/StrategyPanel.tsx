@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import ProTable from '@ant-design/pro-table';
 import {
   Button, Space, message, Modal, Input, Select,
@@ -7,7 +8,7 @@ import {
 import {
   PlayCircleOutlined, PauseCircleOutlined, PlusOutlined,
   DeleteOutlined, EyeOutlined, EditOutlined,
-  DashboardOutlined,
+  DashboardOutlined, FileTextOutlined,
 } from '@ant-design/icons';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
 import { api } from '../api';
@@ -17,6 +18,7 @@ const stripYaml = (name: string) => name.replace(/\.yaml$/, '');
 const { Text } = Typography;
 
 export default function StrategyPanel({ env, onJumpToDashboard }: { env: string; onJumpToDashboard: (id: number) => void }) {
+  const navigate = useNavigate();
   const actionRef = useRef<ActionType>(undefined);
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = () => setRefreshKey(k => k + 1);
@@ -109,6 +111,7 @@ export default function StrategyPanel({ env, onJumpToDashboard }: { env: string;
         <Space>
           <Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(r)}>详情</Button>
           <Button size="small" icon={<DashboardOutlined />} onClick={() => onJumpToDashboard(r.id)}>看板</Button>
+          <Button size="small" icon={<FileTextOutlined />} onClick={() => navigate(`/logs?module=trading_${env}&keyword=${r.name}`)}>日志</Button>
           {r.status !== 'running'
             ? <Button size="small" type="primary" icon={<PlayCircleOutlined />}
                 onClick={async () => { await api.post(`/api/admin/trading/strategies/${r.id}/start?env=${env}`); refresh(); }}>启动</Button>

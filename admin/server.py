@@ -791,28 +791,89 @@ def admin_trading_create_strategy(body: dict = Body(...), env: str = "sim"):
 
 @app.post("/api/admin/trading/strategies/{strategy_id}/start")
 def admin_trading_start_strategy(strategy_id: int, env: str = "sim"):
-    """启动交易策略"""
+    """启动交易策略 — 创建 Task 由 worker 负责启动子进程"""
     session = get_trading_session(env)
     strat = session.get(TSModel, strategy_id)
     if not strat:
         raise HTTPException(404, "Strategy not found")
+
+    # Check if already running (PID file exists)
+    pid_file = f"/var/quant/trading/{env}/pids/strategy_{strategy_id}.pid"
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file) as pf:
+                old_pid = int(pf.read().strip())
+            # Check if process is alive
+            os.kill(old_pid, 0)
+            return {"error": f"Strategy already running (PID {old_pid})"}, 409
+        except (OSError, ValueError):
+            # Stale PID file
+            try:
+                os.unlink(pid_file)
+            except OSError:
+                pass
+
     strat.status = "running"
     strat.updated_at = datetime.now(timezone.utc)
     session.commit()
-    return {"status": "ok", "strategy_id": strategy_id}
+
+    # Create background task for worker to launch the subprocess
+    from admin.models import get_session as get_admin_session
+    from admin.models import Task as AdminTask
+    admin_db = get_admin_session()
+    try:
+        task = AdminTask(
+            type=f"trading_{env}",
+            params={
+                "action": "start",
+                "strategy_id": strategy_id,
+                "strategy_name": strat.name,
+                "env": env,
+            },
+            status="pending",
+        )
+        admin_db.add(task)
+        admin_db.commit()
+        task_id = task.id
+    finally:
+        admin_db.close()
+
+    return {"status": "ok", "strategy_id": strategy_id, "task_id": task_id}
 
 
 @app.post("/api/admin/trading/strategies/{strategy_id}/stop")
 def admin_trading_stop_strategy(strategy_id: int, env: str = "sim"):
-    """停止交易策略"""
+    """停止交易策略 — 发 SIGTERM 给子进程"""
     session = get_trading_session(env)
     strat = session.get(TSModel, strategy_id)
     if not strat:
         raise HTTPException(404, "Strategy not found")
+
+    # Stop via PID file
+    pid_file = f"/var/quant/trading/{env}/pids/strategy_{strategy_id}.pid"
+    killed = False
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file) as pf:
+                pid = int(pf.read().strip())
+            os.kill(pid, _sig.SIGTERM)
+            killed = True
+            try:
+                os.unlink(pid_file)
+            except OSError:
+                pass
+        except (OSError, ValueError) as e:
+            logger.warning("Failed to kill strategy %d: %s", strategy_id, e)
+            try:
+                os.unlink(pid_file)
+            except OSError:
+                pass
+
     strat.status = "stopped"
     strat.updated_at = datetime.now(timezone.utc)
     session.commit()
-    return {"status": "ok", "strategy_id": strategy_id}
+
+    return {"status": "ok", "strategy_id": strategy_id, "killed": killed}
 
 
 @app.get("/api/admin/trading/strategies/{strategy_id}/trades")
