@@ -67,6 +67,8 @@ class FutuStockBroker:
             )
         return self._ctx
 
+    _lot_cache: dict[str, int] = {}
+
     @staticmethod
     def _format_symbol(symbol: str, market: str) -> str:
         """Add market prefix to symbol if required by Futu API.
@@ -79,6 +81,52 @@ class FutuStockBroker:
             return f"{prefix}{symbol}"
         return symbol
 
+    @staticmethod
+    def _market_from_symbol(symbol: str) -> str | None:
+        """Extract Futu market code from symbol prefix.
+
+        US.AAPL → 'US', HK.00700 → 'HK', plain AAPL → None
+        """
+        if "." in symbol:
+            return symbol.split(".")[0]
+        return None
+
+    def _ensure_lot(self, symbol: str, qty: int) -> int:
+        """Round quantity down to board lot size.
+
+        Query Futu for the stock's lot_size and round down.
+        US lot_size=1 (no constraint), HK varies (100/500/...).
+        """
+        futu_market = self._market_from_symbol(symbol)
+        if not futu_market:
+            return qty
+        # Use raw symbol (without prefix) as cache key
+        raw = symbol.split(".", 1)[1] if "." in symbol else symbol
+        lot = self._lot_cache.get(raw)
+        if lot is None:
+            from futu import OpenQuoteContext
+            try:
+                ctx = OpenQuoteContext(host=self.host, port=self.port)
+                ret, data = ctx.get_stock_basicinfo(
+                    futu_market, "STOCK", [symbol]
+                )
+                if ret == 0 and data is not None and len(data) > 0:
+                    lot = int(data.iloc[0]["lot_size"])
+                    self._lot_cache[raw] = lot
+                    logger.info("Lot size for %s = %d", symbol, lot)
+                else:
+                    lot = 1
+                    logger.warning(
+                        "Lot size query failed for %s, default 1", symbol
+                    )
+                ctx.close()
+            except Exception as e:
+                lot = 1
+                logger.warning(
+                    "Lot size query error for %s: %s, default 1", symbol, e
+                )
+        return (qty // lot) * lot
+
     async def submit_order(
         self,
         symbol: str,
@@ -89,6 +137,11 @@ class FutuStockBroker:
     ) -> BrokerOrder:
         """Submit a market or limit order."""
         symbol = self._format_symbol(symbol, self.market)
+        qty = self._ensure_lot(symbol, int(qty))
+        if qty <= 0:
+            raise RuntimeError(
+                f"Quantity too small after lot rounding for {symbol}: {qty}"
+            )
         ctx = self._get_ctx()
         futu_side = TrdSide.BUY if side == "buy" else TrdSide.SELL
         futu_order_type = (
