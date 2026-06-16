@@ -81,36 +81,49 @@ class FutuStockBroker:
             return f"{prefix}{symbol}"
         return symbol
 
-    def _ensure_lot(self, symbol: str, qty: int) -> int:
-        """Round quantity down to board lot size for HK stocks.
+    @staticmethod
+    def _market_from_symbol(symbol: str) -> str | None:
+        """Extract Futu market code from symbol prefix.
 
-        US stocks lot size is 1 (any qty OK).
-        HK stocks require multiples of board lot (e.g. 100, 500).
+        US.AAPL → 'US', HK.00700 → 'HK', plain AAPL → None
         """
-        if self.market != "hk":
+        if "." in symbol:
+            return symbol.split(".")[0]
+        return None
+
+    def _ensure_lot(self, symbol: str, qty: int) -> int:
+        """Round quantity down to board lot size.
+
+        Query Futu for the stock's lot_size and round down.
+        US lot_size=1 (no constraint), HK varies (100/500/...).
+        """
+        futu_market = self._market_from_symbol(symbol)
+        if not futu_market:
             return qty
-        # Strip HK. prefix for cache key
-        raw = symbol.replace("HK.", "")
+        # Use raw symbol (without prefix) as cache key
+        raw = symbol.split(".", 1)[1] if "." in symbol else symbol
         lot = self._lot_cache.get(raw)
         if lot is None:
             from futu import OpenQuoteContext
             try:
                 ctx = OpenQuoteContext(host=self.host, port=self.port)
-                ret, data = ctx.get_stock_basicinfo("HK", "STOCK", [symbol])
+                ret, data = ctx.get_stock_basicinfo(
+                    futu_market, "STOCK", [symbol]
+                )
                 if ret == 0 and data is not None and len(data) > 0:
                     lot = int(data.iloc[0]["lot_size"])
                     self._lot_cache[raw] = lot
                     logger.info("Lot size for %s = %d", symbol, lot)
                 else:
-                    lot = 100
+                    lot = 1
                     logger.warning(
-                        "Lot size query failed for %s, default 100", symbol
+                        "Lot size query failed for %s, default 1", symbol
                     )
                 ctx.close()
             except Exception as e:
-                lot = 100
+                lot = 1
                 logger.warning(
-                    "Lot size query error for %s: %s, default 100", symbol, e
+                    "Lot size query error for %s: %s, default 1", symbol, e
                 )
         return (qty // lot) * lot
 
