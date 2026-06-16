@@ -16,7 +16,7 @@ import pandas as pd
 import yaml
 
 from engine.data import DataFrameSource
-from engine.portfolio import Portfolio
+from engine.portfolio import Portfolio, Position
 from engine.strategy import StrategyContext
 from trading.adapter import StrategyAdapter
 from trading.capital import CapitalManager
@@ -218,7 +218,7 @@ class TradingRunner:
                 src.timestamp = [_live_bars[i].get("timestamp", "") for i in range(n)]
                 return StrategyContext(
                     data=src,
-                    portfolio=Portfolio(initial_capital=0),
+                    portfolio=_portfolio,
                     config={"symbols": symbols_list},
                 )
 
@@ -247,6 +247,13 @@ class TradingRunner:
                             _bar_count,
                         )
                         self._execute_signals(signals, bar_data)
+                        # Update in-memory portfolio so the strategy knows what it holds
+                        for sig in signals:
+                            if sig.side in ("sell", "close"):
+                                _portfolio.positions.pop(sig.symbol, None)
+                            elif sig.side == "buy":
+                                if sig.symbol not in _portfolio.positions:
+                                    _portfolio.positions[sig.symbol] = Position(symbol=sig.symbol)
 
                 # reconcile disabled for now — Futu sim 无对应仓位时会误删虚拟持仓
 
@@ -330,6 +337,7 @@ class TradingRunner:
             day_start_ts = None
             day_stop_reason = None
             stop_reason = None
+            _portfolio = Portfolio(initial_capital=0)
 
             def _rebuild_ctx():
                 """Rebuild StrategyContext from accumulated live bars (wide format)."""
@@ -363,7 +371,7 @@ class TradingRunner:
                 src.timestamp = [_live_bars[i].get("timestamp", "") for i in range(n)]
                 return StrategyContext(
                     data=src,
-                    portfolio=Portfolio(initial_capital=0),
+                    portfolio=_portfolio,
                     config={"symbols": symbols_list},
                 )
 
@@ -402,6 +410,13 @@ class TradingRunner:
                             trading_day,
                         )
                         self._execute_signals(signals, bar_data)
+                        # Update in-memory portfolio so the strategy knows what it holds
+                        for sig in signals:
+                            if sig.side in ("sell", "close"):
+                                _portfolio.positions.pop(sig.symbol, None)
+                            elif sig.side == "buy":
+                                if sig.symbol not in _portfolio.positions:
+                                    _portfolio.positions[sig.symbol] = Position(symbol=sig.symbol)
 
                 # Heartbeat every 30 bars to confirm the loop is alive
                 if bar_count % 30 == 0:
