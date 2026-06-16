@@ -71,11 +71,12 @@ class FutuStockBroker:
     def _format_symbol(symbol: str, market: str) -> str:
         """Add market prefix to symbol if required by Futu API.
 
-        HK stocks need HK. prefix (e.g. 06656 → HK.06656).
-        US stocks need no prefix.
+        Futu expects format: US.AAPL / HK.00700 / SZ.000001
         """
-        if market == "hk" and not symbol.startswith("HK."):
-            return f"HK.{symbol}"
+        prefix_map = {"hk": "HK.", "us": "US."}
+        prefix = prefix_map.get(market)
+        if prefix and not symbol.startswith(prefix):
+            return f"{prefix}{symbol}"
         return symbol
 
     async def submit_order(
