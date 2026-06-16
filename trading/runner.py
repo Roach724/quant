@@ -194,13 +194,28 @@ class TradingRunner:
                 symbols_list = list(_live_bars[-1].get("close", {}).keys())
                 if not symbols_list:
                     return None
-                close_cols = {sym: [float("nan")] * n for sym in symbols_list}
-                for i in range(n):
-                    bc = _live_bars[i].get("close", {})
-                    for sym in symbols_list:
-                        close_cols[sym][i] = bc.get(sym, float("nan"))
-                close_df = pd.DataFrame(close_cols)
-                src = DataFrameSource(close=close_df)
+
+                def _build_df(key: str, default=float("nan")):
+                    cols = {sym: [default] * n for sym in symbols_list}
+                    for i in range(n):
+                        bar_col = _live_bars[i].get(key, {})
+                        for sym in symbols_list:
+                            cols[sym][i] = bar_col.get(sym, default)
+                    return pd.DataFrame(cols)
+
+                close_df = _build_df("close", float("nan"))
+                open_df = _build_df("open", float("nan"))
+                high_df = _build_df("high", float("nan"))
+                low_df = _build_df("low", float("nan"))
+                volume_df = _build_df("volume", 0.0)
+                src = DataFrameSource(
+                    close=close_df,
+                    open=open_df,
+                    high=high_df,
+                    low=low_df,
+                    volume=volume_df,
+                )
+                src.timestamp = [_live_bars[i].get("timestamp", "") for i in range(n)]
                 return StrategyContext(
                     data=src,
                     portfolio=Portfolio(initial_capital=0),
@@ -325,13 +340,28 @@ class TradingRunner:
                 symbols_list = list(_live_bars[-1].get("close", {}).keys())
                 if not symbols_list:
                     return None
-                close_cols: dict = {sym: [float("nan")] * n for sym in symbols_list}
-                for i in range(n):
-                    bar_close = _live_bars[i].get("close", {})
-                    for sym in symbols_list:
-                        close_cols[sym][i] = bar_close.get(sym, float("nan"))
-                close_df = pd.DataFrame(close_cols)
-                src = DataFrameSource(close=close_df)
+
+                def _build_df(key: str, default=float("nan")):
+                    cols = {sym: [default] * n for sym in symbols_list}
+                    for i in range(n):
+                        bar_col = _live_bars[i].get(key, {})
+                        for sym in symbols_list:
+                            cols[sym][i] = bar_col.get(sym, default)
+                    return pd.DataFrame(cols)
+
+                close_df = _build_df("close", float("nan"))
+                open_df = _build_df("open", float("nan"))
+                high_df = _build_df("high", float("nan"))
+                low_df = _build_df("low", float("nan"))
+                volume_df = _build_df("volume", 0.0)
+                src = DataFrameSource(
+                    close=close_df,
+                    open=open_df,
+                    high=high_df,
+                    low=low_df,
+                    volume=volume_df,
+                )
+                src.timestamp = [_live_bars[i].get("timestamp", "") for i in range(n)]
                 return StrategyContext(
                     data=src,
                     portfolio=Portfolio(initial_capital=0),
@@ -388,7 +418,7 @@ class TradingRunner:
                 if state_mgr and bar_count > 0 and bar_count % checkpoint_interval == 0:
                     try:
                         state_mgr.save_checkpoint(
-                            None,
+                            Portfolio(initial_capital=0),
                             {
                                 "trading_day": trading_day,
                                 "bar_count": bar_count,
@@ -519,7 +549,7 @@ class TradingRunner:
                 if state_mgr:
                     try:
                         state_mgr.save(
-                            None,
+                            Portfolio(initial_capital=0),
                             None,
                             {
                                 "trading_day": trading_day,

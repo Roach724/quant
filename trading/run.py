@@ -48,6 +48,13 @@ def _setup_logging(strategy_id: int, env: str) -> logging.Logger:
             live_logger.addHandler(h)
     live_logger.setLevel(log.level)
 
+    # Wire strategies.* logger (MLPrediction, MACrossover, etc.)
+    strategies_logger = logging.getLogger("strategies")
+    for h in log.handlers:
+        if not any(isinstance(eh, type(h)) for eh in strategies_logger.handlers):
+            strategies_logger.addHandler(h)
+    strategies_logger.setLevel(log.level)
+
     return log
 
 
