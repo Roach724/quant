@@ -184,24 +184,46 @@ class TradingRunner:
             )
 
             _ctx = {"ctx": None}
+            _live_bars: list[dict] = []
             _bar_count = 0
+
+            def _rebuild_ctx():
+                n = len(_live_bars)
+                if n == 0:
+                    return None
+                symbols_list = list(_live_bars[-1].get("close", {}).keys())
+                if not symbols_list:
+                    return None
+                close_cols = {sym: [float("nan")] * n for sym in symbols_list}
+                for i in range(n):
+                    bc = _live_bars[i].get("close", {})
+                    for sym in symbols_list:
+                        close_cols[sym][i] = bc.get(sym, float("nan"))
+                close_df = pd.DataFrame(close_cols)
+                src = DataFrameSource(close=close_df)
+                return StrategyContext(
+                    data=src,
+                    portfolio=Portfolio(initial_capital=0),
+                    config={"symbols": symbols_list},
+                )
 
             def _on_bar(bar_data: dict):
                 nonlocal _bar_count
-                close_prices = bar_data.get("close", {})
-                symbols = list(close_prices.keys())
+                _live_bars.append(bar_data)
+                _bar_count += 1
+
+                ctx = _rebuild_ctx()
+                if ctx is None:
+                    return
+                symbols = list(ctx.config.get("symbols", []))
 
                 if adapter._strategy is None and symbols:
-                    _ctx["ctx"] = self._make_context(bar_data, symbols)
-                    adapter.load(symbols, _ctx["ctx"])
+                    _ctx["ctx"] = ctx
+                    adapter.load(symbols, ctx)
 
                 if adapter._strategy and _ctx["ctx"]:
-                    _ctx["ctx"]._set_bar_data(bar_data)
-                    signals = adapter.generate_signals(
-                        _ctx["ctx"],
-                        _bar_count,
-                        strategy_id,
-                    )
+                    _ctx["ctx"] = ctx
+                    signals = adapter.generate_signals(ctx, _bar_count, strategy_id)
                     if signals:
                         logger.info(
                             "Strategy %d: %d signals at bar %d",
@@ -213,8 +235,6 @@ class TradingRunner:
 
                 if _bar_count > 0 and _bar_count % self.reconcile_every == 0:
                     self.state.reconcile_and_continue(strategy_id)
-
-                _bar_count += 1
 
             source.stop_check = lambda: stop.is_set()
             source.on_bar = _on_bar
@@ -291,27 +311,56 @@ class TradingRunner:
             )
 
             _ctx = {"ctx": None}
+            _live_bars: list[dict] = []
             day_bars = 0
             day_start_ts = None
             day_stop_reason = None
             stop_reason = None
 
+            def _rebuild_ctx():
+                """Rebuild StrategyContext from accumulated live bars (wide format)."""
+                n = len(_live_bars)
+                if n == 0:
+                    return None
+                symbols_list = list(_live_bars[-1].get("close", {}).keys())
+                if not symbols_list:
+                    return None
+                close_cols: dict = {sym: [float("nan")] * n for sym in symbols_list}
+                for i in range(n):
+                    bar_close = _live_bars[i].get("close", {})
+                    for sym in symbols_list:
+                        close_cols[sym][i] = bar_close.get(sym, float("nan"))
+                close_df = pd.DataFrame(close_cols)
+                src = DataFrameSource(close=close_df)
+                return StrategyContext(
+                    data=src,
+                    portfolio=Portfolio(initial_capital=0),
+                    config={"symbols": symbols_list},
+                )
+
             def _on_bar(bar_data: dict):
                 """Per-bar callback — called by BQDataSource._poll()"""
                 nonlocal bar_count, day_bars, peak_equity, day_start_ts
 
-                close_prices = bar_data.get("close", {})
-                symbols = list(close_prices.keys())
+                _live_bars.append(bar_data)
+                bar_count += 1
+                day_bars += 1
+
+                ctx = _rebuild_ctx()
+                if ctx is None:
+                    return
+                symbols = list(ctx.config.get("symbols", []))
 
                 if adapter._strategy is None and symbols:
-                    _ctx["ctx"] = self._make_context(bar_data, symbols)
-                    adapter.load(symbols, _ctx["ctx"])
+                    _ctx["ctx"] = ctx
+                    adapter.load(symbols, ctx)
                     day_start_ts = bar_data.get("timestamp")
+                    ctx._set_bar_data(bar_data)
 
                 if adapter._strategy and _ctx["ctx"]:
-                    _ctx["ctx"]._set_bar_data(bar_data)
+                    _ctx["ctx"] = ctx
                     signals = adapter.generate_signals(
-                        _ctx["ctx"],
+                        ctx,
                         bar_count,
                         strategy_id,
                     )
@@ -325,16 +374,13 @@ class TradingRunner:
                         )
                         self._execute_signals(signals, bar_data)
 
-                bar_count += 1
-                day_bars += 1
-
                 # Heartbeat every 30 bars to confirm the loop is alive
                 if bar_count % 30 == 0:
-                    logger.debug(
-                        "Strategy %d: heartbeat — bar=%d day_bars=%d",
+                    logger.info(
+                        "Strategy %d: heartbeat — bar=%d accumulated=%d",
                         strategy_id,
                         bar_count,
-                        day_bars,
+                        len(_live_bars),
                     )
 
                 # Periodic checkpoint
@@ -533,21 +579,6 @@ class TradingRunner:
             else:
                 logger.debug("Waiting for market open — sleeping %d s", int(wait_sec))
             time.sleep(min(wait_sec, poll_sec))
-
-    def _make_context(
-        self,
-        bar_data: dict,
-        symbols: list[str],
-    ) -> StrategyContext:
-        """构造策略上下文"""
-        close = pd.DataFrame([bar_data.get("close", {})])
-        src = DataFrameSource(close=close)
-        pf = Portfolio(initial_capital=0)
-        return StrategyContext(
-            data=src,
-            portfolio=pf,
-            config={"symbols": symbols},
-        )
 
     def _execute_signals(self, signals, bar_data: dict):
         """执行信号列表"""
