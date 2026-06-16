@@ -283,6 +283,25 @@ async def cache_refresh(body: CacheRefreshRequest):
 
 # ── Request / response schemas ────────────────────────────────────────────────
 
+
+
+
+@app.put("/api/admin/cache/modules/{name}/ttl")
+def cache_set_ttl(name: str, body: dict = Body(...)):
+    """Update a cache module's TTL (seconds)."""
+    try:
+        new_ttl = float(body.get("ttl", 0))
+        if new_ttl < 0:
+            return {"error": "TTL must be >= 0"}, 400
+        _cache_mgr.set_ttl(name, new_ttl)
+        logger.info("cache:set_ttl  %s → %ss (admin)", name, new_ttl)
+        return {"ok": True, "name": name, "ttl": new_ttl}
+    except KeyError:
+        return {"error": f"Cache module '{name}' not found"}, 404
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+
 class TaskCreate(BaseModel):
     type: str = "shell"
     command: str

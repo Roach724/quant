@@ -43,6 +43,12 @@ class CacheModule:
         """Synchronous cache write."""
         self._backend.set(key, value)
 
+    def set_ttl(self, new_ttl: float) -> None:
+        """Update the module's TTL. Existing cache entries are dropped."""
+        self.ttl = new_ttl
+        self._backend = MemoryBackend(max_size=self._max_size, ttl=new_ttl)
+        logger.info("cache:set_ttl  %s  → %ss", self.name, new_ttl)
+
     def invalidate(self, key: Optional[str] = None) -> int:
         """Remove *key* (or *all* keys when None). Returns count removed."""
         return self._backend.invalidate(key)

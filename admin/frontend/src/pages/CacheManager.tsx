@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Table, Button, message, Tag, Popconfirm, Typography, Space } from 'antd';
-import { ReloadOutlined, DeleteOutlined, SyncOutlined } from '@ant-design/icons';
+import { Table, Button, message, Tag, Popconfirm, Typography, Space, InputNumber, Tooltip } from 'antd';
+import { ReloadOutlined, DeleteOutlined, SyncOutlined, EditOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import { api } from '../api';
 
 const { Text } = Typography;
@@ -29,6 +29,8 @@ export default function CacheManager() {
   const [modules, setModules] = useState<CacheModuleInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshingModule, setRefreshingModule] = useState<string | null>(null);
+  const [editingTtl, setEditingTtl] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState<number>(0);
 
   const fetchModules = useCallback(async () => {
     setLoading(true);
@@ -88,8 +90,48 @@ export default function CacheManager() {
       title: 'TTL',
       dataIndex: 'ttl',
       key: 'ttl',
-      width: 80,
-      render: (ttl: number) => <Tag>{fmtTTL(ttl)}</Tag>,
+      width: 120,
+      render: (ttl: number, row: CacheModuleInfo) => {
+        if (editingTtl === row.name) {
+          return (
+            <Space size="small">
+              <InputNumber
+                size="small"
+                min={0}
+                max={86400 * 30}
+                value={editValue}
+                onChange={v => setEditValue(v ?? 0)}
+                style={{ width: 90 }}
+                addonAfter="s"
+              />
+              <Tooltip title="保存">
+                <Button size="small" type="primary" icon={<CheckOutlined />}
+                  onClick={async () => {
+                    try {
+                      await api.put(`/api/admin/cache/modules/${row.name}/ttl`, { ttl: editValue });
+                      message.success(`TTL 已更新为 ${editValue}s`);
+                      setEditingTtl(null);
+                      fetchModules();
+                    } catch { message.error('更新 TTL 失败'); }
+                  }}
+                />
+              </Tooltip>
+              <Tooltip title="取消">
+                <Button size="small" icon={<CloseOutlined />} onClick={() => setEditingTtl(null)} />
+              </Tooltip>
+            </Space>
+          );
+        }
+        return (
+          <Space>
+            <Tag>{fmtTTL(ttl)}</Tag>
+            <Tooltip title="修改缓存时长">
+              <Button size="small" type="text" icon={<EditOutlined />}
+                onClick={() => { setEditingTtl(row.name); setEditValue(ttl); }} />
+            </Tooltip>
+          </Space>
+        );
+      },
     },
     {
       title: '条目',

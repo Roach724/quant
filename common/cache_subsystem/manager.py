@@ -62,6 +62,15 @@ class CacheManager:
         """Return sorted list of registered module names."""
         return sorted(self._modules.keys())
 
+    # ── TTL update ─────────────────────────────────────────────────────────
+
+    def set_ttl(self, name: str, new_ttl: float) -> None:
+        """Update a module's TTL. Raises KeyError if not found."""
+        mod = self._modules.get(name)
+        if mod is None:
+            raise KeyError(f"CacheModule '{name}' not found")
+        mod.set_ttl(new_ttl)
+
     # ── invalidation ────────────────────────────────────────────────────────
 
     def invalidate(self, pattern: str) -> dict:
