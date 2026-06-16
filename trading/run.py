@@ -20,12 +20,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from common.logging_util import get_logger
 
 
-def _setup_logging(strategy_id: int, env: str) -> logging.Logger:
+def _setup_logging(strategy_id: int, strategy_name: str, env: str) -> logging.Logger:
     """Configure JSON logging to /var/log/quant/prod/trading_{env}/."""
     module = f"trading_{env}"
     log_dir = Path(f"/var/log/quant/prod/{module}")
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = str(log_dir / f"strategy_{strategy_id}.log")
+    log_file = str(log_dir / f"{strategy_name}.log")
 
     log = get_logger(
         name=f"trading.runner.{strategy_id}",
@@ -60,7 +60,7 @@ def _setup_logging(strategy_id: int, env: str) -> logging.Logger:
 
 def run_strategy(strategy_id: int, env: str) -> None:
     """Load a strategy from the trading DB and run it."""
-    log = _setup_logging(strategy_id, env)
+    log = _setup_logging(strategy_id, strat.name, env)
 
     # Import here so logging is configured first
     import yaml
