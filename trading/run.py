@@ -60,9 +60,6 @@ def _setup_logging(strategy_id: int, strategy_name: str, env: str) -> logging.Lo
 
 def run_strategy(strategy_id: int, env: str) -> None:
     """Load a strategy from the trading DB and run it."""
-    log = _setup_logging(strategy_id, strat.name, env)
-
-    # Import here so logging is configured first
     import yaml
 
     from trading import get_trading_session
@@ -72,19 +69,21 @@ def run_strategy(strategy_id: int, env: str) -> None:
     from trading.signal_bridge import SignalBridge
     from trading.state import TradingStateManager
 
-    log.info("Starting strategy #%d (%s)", strategy_id, env)
-
-    # Load strategy from DB (session stays open — used by CapitalManager/StateManager)
+    # Load strategy from DB first to get its name for log file naming
     session = get_trading_session(env)
     strat = session.get(TSModel, strategy_id)
     if not strat:
-        log.error("Strategy #%d not found", strategy_id)
+        print(f"Strategy #{strategy_id} not found in trading DB", flush=True)
         session.close()
         return
     if strat.status != "running":
-        log.warning("Strategy #%d status is '%s', not 'running' — aborting", strategy_id, strat.status)
+        print(f"Strategy #{strategy_id} status is '{strat.status}', not 'running' — aborting", flush=True)
         session.close()
         return
+
+    # Setup logging with strategy name AFTER we know it
+    log = _setup_logging(strategy_id, strat.name, env)
+    log.info("Starting strategy #%d (%s) — %s", strategy_id, strat.name, env)
 
     # Parse config
     cfg = yaml.safe_load(strat.config_yaml) or {}
