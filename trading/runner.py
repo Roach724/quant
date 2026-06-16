@@ -238,7 +238,7 @@ class TradingRunner:
 
                 if adapter._strategy and _ctx["ctx"]:
                     _ctx["ctx"] = ctx
-                    signals = adapter.generate_signals(ctx, _bar_count, strategy_id)
+                    signals = adapter.generate_signals(ctx, _bar_count - 1, strategy_id)
                     if signals:
                         logger.info(
                             "Strategy %d: %d signals at bar %d",
@@ -391,7 +391,7 @@ class TradingRunner:
                     _ctx["ctx"] = ctx
                     signals = adapter.generate_signals(
                         ctx,
-                        bar_count,
+                        bar_count - 1,
                         strategy_id,
                     )
                     if signals:

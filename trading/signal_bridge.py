@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
+from oms.broker import BrokerOrder
+from oms.broker.futu_stock_broker import FutuStockBroker
 from trading.adapter import TradingSignal
 from trading.capital import CapitalManager
-from oms.broker.futu_stock_broker import FutuStockBroker
-from oms.broker import BrokerOrder
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +26,7 @@ class SignalBridge:
         slippage_bps: float = 5.0,
         commission_bps: float = 1.0,
         min_commission: float = 1.0,
-        execution_algo: Optional[str] = None,  # "twap" | "vwap" | None
+        execution_algo: str | None = None,  # "twap" | "vwap" | None
         execution_slices: int = 10,
         execution_window: int = 1800,
     ):
@@ -74,8 +73,14 @@ class SignalBridge:
         self,
         signal: TradingSignal,
         current_price: float,
-    ) -> Optional[list[BrokerOrder]]:
+    ) -> list[BrokerOrder] | None:
         """执行单个信号。配置了执行算法则拆单，否则全量下单。"""
+        if self.broker is None:
+            from oms.broker.futu_stock_broker import FutuStockBroker
+
+            self.broker = FutuStockBroker()
+            logger.info("Lazy-initialized FutuStockBroker")
+
         acct = self.capital.get_account(signal.strategy_id)
         if not acct:
             logger.warning("No account for strategy %d", signal.strategy_id)
