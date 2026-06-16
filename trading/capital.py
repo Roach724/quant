@@ -57,6 +57,11 @@ class CapitalManager:
             strategy_id=strategy_id
         ).all()
 
+    def get_position(self, strategy_id: int, symbol: str) -> Optional[VirtualPosition]:
+        return self.session.query(VirtualPosition).filter_by(
+            strategy_id=strategy_id, symbol=symbol
+        ).first()
+
     # ── Position updates ──
 
     def update_position(

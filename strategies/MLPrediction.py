@@ -138,16 +138,15 @@ class MLPrediction(Strategy):
 
             # ── Sell: positions no longer in top-K ──
             for sym in list(ctx.portfolio.positions.keys()):
-                if sym not in top_symbols and ctx.portfolio.positions[sym].size > 0:
+                if sym not in top_symbols:
                     signals.append(Signal.close(sym))
 
             # ── Buy: top-K symbols not yet held ──
-            buy_count = sum(1 for s in top_symbols if s not in ctx.portfolio.positions
-                           or ctx.portfolio.positions[s].size == 0)
+            buy_count = sum(1 for s in top_symbols if s not in ctx.portfolio.positions)
             if buy_count > 0:
                 buy_weight = 1.0 / max(buy_count, 1)
                 for i, (sym, score) in enumerate(ranked):
-                    if sym not in ctx.portfolio.positions or ctx.portfolio.positions[sym].size == 0:
+                    if sym not in ctx.portfolio.positions:
                         signals.append(Signal.buy(
                             sym, weight=buy_weight, score=float(score), rank=i + 1,
                         ))

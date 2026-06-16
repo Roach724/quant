@@ -91,7 +91,14 @@ class SignalBridge:
         exec_price = self._exec_price(signal, current_price)
 
         # 计算数量
-        if signal.qty is None:
+        if signal.side in ("sell", "close"):
+            # 卖出/平仓：用持仓量，不用现金
+            pos = self.capital.get_position(signal.strategy_id, signal.symbol)
+            if not pos or pos.qty <= 0:
+                logger.debug("No position to close for %s", signal.symbol)
+                return None
+            qty = int(pos.qty)
+        elif signal.qty is None:
             weight = signal.weight or 1.0
             cash_avail = acct.cash * weight
             qty = max(1, int(cash_avail / exec_price))
