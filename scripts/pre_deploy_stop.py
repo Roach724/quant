@@ -76,6 +76,59 @@ def main():
     )
     print("ws_collector stopped")
 
+    # 3. Stop trading strategies
+    import glob
+    import time
+
+    trading_pid_dirs = ["/var/data/trading/sim/pids", "/var/data/trading/real/pids"]
+    for pid_dir in trading_pid_dirs:
+        if not os.path.isdir(pid_dir):
+            continue
+        for pid_file in sorted(glob.glob(f"{pid_dir}/strategy_*.pid")):
+            pid = None
+            try:
+                with open(pid_file) as pf:
+                    pid = int(pf.read().strip())
+            except (ValueError, OSError):
+                continue
+
+            if pid:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    for _ in range(30):
+                        try:
+                            os.kill(pid, 0)
+                        except OSError:
+                            break
+                        time.sleep(0.5)
+                    else:
+                        os.kill(pid, signal.SIGKILL)
+                    print(f"Stopped trading strategy {os.path.basename(pid_file)} (PID {pid})")
+                except (ProcessLookupError, OSError):
+                    pass
+                try:
+                    os.remove(pid_file)
+                except OSError:
+                    pass
+
+    # 4. Mark trading strategies as stopped in DB
+    try:
+        import sqlite3
+
+        for env in ["sim", "real"]:
+            db_path = f"/var/data/trading/{env}/trading.db"
+            if not os.path.exists(db_path):
+                continue
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "UPDATE trading_strategies SET status='stopped' WHERE status='running'"
+            )
+            conn.commit()
+            conn.close()
+        print("Trading strategies marked as stopped in DB")
+    except Exception as e:
+        print(f"WARNING: failed to update trading DB: {e}")
+
 
 if __name__ == "__main__":
     main()
