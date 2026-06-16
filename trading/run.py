@@ -20,6 +20,18 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from common.logging_util import get_logger
 
 
+def _parse_freq(freq_str: str) -> int:
+    """Parse frequency string like '5m', '1h', '1d' to minutes."""
+    freq_str = freq_str.strip().lower()
+    if freq_str.endswith("m") and not freq_str.endswith("hm"):
+        return int(freq_str[:-1])
+    if freq_str.endswith("h"):
+        return int(freq_str[:-1]) * 60
+    if freq_str.endswith("d"):
+        return int(freq_str[:-1]) * 1440
+    raise ValueError(f"Unsupported freq format: {freq_str}")
+
+
 def _setup_logging(strategy_id: int, strategy_name: str, env: str) -> logging.Logger:
     """Configure JSON logging to /var/log/quant/prod/trading_{env}/."""
     module = f"trading_{env}"
@@ -88,6 +100,7 @@ def run_strategy(strategy_id: int, env: str) -> None:
     # Parse config
     cfg = yaml.safe_load(strat.config_yaml) or {}
     market = strat.market or cfg.get("live", {}).get("market", "us")
+    live_cfg = cfg.get("live", {}) or {}
     _broker_cfg = cfg.get("broker", {})
 
     log.info(
@@ -97,11 +110,34 @@ def run_strategy(strategy_id: int, env: str) -> None:
         strat.capital_allocated,
     )
 
+    # Parse scheduler config
+    freq_str = live_cfg.get("freq", "5m")
+    lookback_bars = live_cfg.get("lookback_bars", 0)
+    freq_minutes = _parse_freq(freq_str)
+    log.info(
+        "Scheduler config: freq=%s (%dmin) lookback=%d bars rebalance_every=%d",
+        freq_str, freq_minutes, lookback_bars,
+        live_cfg.get("rebalance_every", 1),
+    )
+
     # Initialize components with the trading DB session
     broker = None  # Will be lazily created in TradingRunner
     capital = CapitalManager(session)
     state_mgr = TradingStateManager(session)
     bridge = SignalBridge(broker, capital, market=market)
+
+    # Create scheduler if lookback configured
+    from trading.scheduler import RebalanceScheduler
+    scheduler = None
+    if lookback_bars > 0:
+        state_dir = Path(f"/var/data/trading/{env}/state")
+        scheduler = RebalanceScheduler.from_file(
+            file_path=str(state_dir / f"strategy_{strategy_id}_scheduler.json"),
+            freq_minutes=freq_minutes,
+            lookback_bars=lookback_bars,
+            rebalance_every=int(live_cfg.get("rebalance_every", 1)),
+        )
+        log.info("Scheduler state path: %s", scheduler.state_path)
 
     runner = TradingRunner(
         broker=broker,
@@ -110,6 +146,7 @@ def run_strategy(strategy_id: int, env: str) -> None:
         bridge=bridge,
         strategies=[strat],
         market=market,
+        scheduler=scheduler,
     )
 
     # Write PID file for the admin worker to track
