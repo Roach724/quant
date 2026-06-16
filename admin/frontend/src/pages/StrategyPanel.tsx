@@ -111,7 +111,7 @@ export default function StrategyPanel({ env, onJumpToDashboard }: { env: string;
         <Space>
           <Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(r)}>详情</Button>
           <Button size="small" icon={<DashboardOutlined />} onClick={() => onJumpToDashboard(r.id)}>看板</Button>
-          <Button size="small" icon={<FileTextOutlined />} onClick={() => navigate(`/logs?module=trading_${env}&keyword=${r.name}`)}>日志</Button>
+          <Button size="small" icon={<FileTextOutlined />} onClick={() => navigate(`/logs?module=trading_${env}&file=${encodeURIComponent(r.name + '.log')}`)}>日志</Button>
           {r.status !== 'running'
             ? <Button size="small" type="primary" icon={<PlayCircleOutlined />}
                 onClick={async () => { await api.post(`/api/admin/trading/strategies/${r.id}/start?env=${env}`); refresh(); }}>启动</Button>
