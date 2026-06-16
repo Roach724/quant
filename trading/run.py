@@ -101,7 +101,7 @@ def run_strategy(strategy_id: int, env: str) -> None:
     broker = None  # Will be lazily created in TradingRunner
     capital = CapitalManager(session)
     state_mgr = TradingStateManager(session)
-    bridge = SignalBridge(broker, capital)
+    bridge = SignalBridge(broker, capital, market=market)
 
     runner = TradingRunner(
         broker=broker,
