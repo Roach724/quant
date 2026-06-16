@@ -1026,130 +1026,69 @@ from oms.broker.futu_stock_broker import FutuStockBroker
 from futu import TrdEnv
 
 
-def _query_trading_account(trd_env, market: str) -> dict:
-    """Query account from a single market, or 'all' for combined HK+US."""
-    import asyncio
-
-    async def _query_one(mkt: str) -> dict:
-        broker = FutuStockBroker(trd_env=trd_env, market=mkt)
-        try:
-            acct = await broker.get_account()
-            positions = await broker.get_positions()
-            broker.close()
-            return {
-                "cash": acct.cash, "equity": acct.equity,
-                "buying_power": acct.buying_power,
-                "positions": [{
-                    "symbol": p.symbol, "qty": p.qty,
-                    "avg_entry_price": p.avg_entry_price,
-                    "market_value": p.market_value,
-                    "unrealized_pnl": p.unrealized_pnl,
-                } for p in positions],
-            }
-        except Exception as e:
-            broker.close()
-            return {"cash": 0, "equity": 0, "buying_power": 0, "positions": []}
-
-    if market == "all":
-        hk = asyncio.run(_query_one("hk"))
-        us = asyncio.run(_query_one("us"))
-        all_positions = hk["positions"] + us["positions"]
-        mkt_val = sum(p["market_value"] for p in all_positions)
-        pnl = sum(p["unrealized_pnl"] for p in all_positions)
-        total_equity = hk["equity"] + us["equity"]
-        total_cash = hk["cash"] + us["cash"]
-        total_bp = hk["buying_power"] + us["buying_power"]
-        init = max(total_equity - pnl, 1)
-        return {
-            "cash": total_cash, "equity": total_equity,
-            "buying_power": total_bp,
-            "market_value": mkt_val, "total_pnl": pnl,
-            "pnl_pct": round(pnl / init * 100, 2),
-            "positions": all_positions,
-        }
-
-    result = asyncio.run(_query_one(market))
-    mkt_val = sum(p["market_value"] for p in result["positions"])
-    pnl = sum(p["unrealized_pnl"] for p in result["positions"])
-    init = max(result["equity"] - pnl, 1)
-    result["market_value"] = mkt_val
-    result["total_pnl"] = pnl
-    result["pnl_pct"] = round(pnl / init * 100, 2)
-    return result
-
-
 @app.get("/api/admin/trading/account/{env}")
 def admin_trading_account(env: str, market: str = "hk"):
     """获取模拟/真实账户概览"""
     trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
-    return _query_trading_account(trd_env, market)
-
-
-def _query_trading_orders(trd_env, market: str) -> list:
-    """Query orders from a single market, or 'all' for combined HK+US."""
+    broker = FutuStockBroker(trd_env=trd_env, market=market)
+    async def _get():
+        acct = await broker.get_account()
+        positions = await broker.get_positions()
+        broker._get_ctx().close()
+        mkt_val = sum(p.market_value for p in positions)
+        pnl = sum(p.unrealized_pnl for p in positions)
+        init = max(acct.equity - pnl, 1)
+        return {
+            "cash": acct.cash, "equity": acct.equity,
+            "buying_power": acct.buying_power,
+            "market_value": mkt_val, "total_pnl": pnl,
+            "pnl_pct": round(pnl / init * 100, 2),
+            "positions": [{
+                "symbol": p.symbol, "qty": p.qty,
+                "avg_entry_price": p.avg_entry_price,
+                "market_value": p.market_value,
+                "unrealized_pnl": p.unrealized_pnl,
+            } for p in positions],
+        }
     import asyncio
-
-    async def _query_one(mkt: str) -> list:
-        broker = FutuStockBroker(trd_env=trd_env, market=mkt)
-        try:
-            orders = await broker.get_all_orders()
-            broker.close()
-            return [{
-                "broker_id": o.broker_id, "symbol": o.symbol,
-                "side": o.side, "qty": o.qty, "filled_qty": o.filled_qty,
-                "order_type": o.order_type, "status": o.status,
-                "limit_price": o.limit_price, "avg_price": o.avg_price,
-                "created_at": o.created_at.isoformat() if o.created_at else None,
-            } for o in orders]
-        except Exception:
-            broker.close()
-            return []
-
-    if market == "all":
-        hk = asyncio.run(_query_one("hk"))
-        us = asyncio.run(_query_one("us"))
-        return hk + us
-    return asyncio.run(_query_one(market))
+    return asyncio.run(_get())
 
 
 @app.get("/api/admin/trading/orders/{env}")
 def admin_trading_orders(env: str, market: str = "hk"):
     """获取全部历史订单"""
     trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
-    return _query_trading_orders(trd_env, market)
-
-
-def _query_trading_deals(trd_env, market: str) -> list:
-    """Query deals from a single market, or 'all' for combined HK+US."""
+    broker = FutuStockBroker(trd_env=trd_env, market=market)
+    async def _get():
+        orders = await broker.get_all_orders()
+        broker._get_ctx().close()
+        return [{
+            "broker_id": o.broker_id, "symbol": o.symbol,
+            "side": o.side, "qty": o.qty, "filled_qty": o.filled_qty,
+            "order_type": o.order_type, "status": o.status,
+            "limit_price": o.limit_price, "avg_price": o.avg_price,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+        } for o in orders]
     import asyncio
-
-    async def _query_one(mkt: str) -> list:
-        broker = FutuStockBroker(trd_env=trd_env, market=mkt)
-        try:
-            deals = await broker.get_deals()
-            broker.close()
-            return [{
-                "deal_id": d.deal_id, "order_id": d.order_id,
-                "symbol": d.symbol, "side": d.side,
-                "qty": d.qty, "price": d.price,
-                "created_at": d.created_at.isoformat() if d.created_at else None,
-            } for d in deals]
-        except Exception:
-            broker.close()
-            return []
-
-    if market == "all":
-        hk = asyncio.run(_query_one("hk"))
-        us = asyncio.run(_query_one("us"))
-        return hk + us
-    return asyncio.run(_query_one(market))
+    return asyncio.run(_get())
 
 
 @app.get("/api/admin/trading/deals/{env}")
 def admin_trading_deals(env: str, market: str = "hk"):
     """获取成交明细"""
     trd_env = TrdEnv.SIMULATE if env == "sim" else TrdEnv.REAL
-    return _query_trading_deals(trd_env, market)
+    broker = FutuStockBroker(trd_env=trd_env, market=market)
+    async def _get():
+        deals = await broker.get_deals()
+        broker._get_ctx().close()
+        return [{
+            "deal_id": d.deal_id, "order_id": d.order_id,
+            "symbol": d.symbol, "side": d.side,
+            "qty": d.qty, "price": d.price,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+        } for d in deals]
+    import asyncio
+    return asyncio.run(_get())
 
 
 @app.post("/api/admin/trading/order/{env}")

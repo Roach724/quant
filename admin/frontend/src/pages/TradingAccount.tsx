@@ -85,12 +85,8 @@ export default function TradingAccount() {
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         <span style={{ fontWeight: 600 }}>模拟账户</span>
-        <Select value={market} onChange={setMarket} style={{ width: 120 }}
-          options={[
-            { value: 'all', label: '🌐 All' },
-            { value: 'hk', label: '🇭🇰 HK' },
-            { value: 'us', label: '🇺🇸 US' },
-          ]} />
+        <Select value={market} onChange={setMarket} style={{ width: 100 }}
+          options={[{ value: 'hk', label: '🇭🇰 HK' }, { value: 'us', label: '🇺🇸 US' }]} />
         <Button size="small" icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
       </div>
 

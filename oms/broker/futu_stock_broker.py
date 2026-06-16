@@ -214,17 +214,13 @@ class FutuStockBroker:
             return []
         positions = []
         for _, row in data.iterrows():
-            # Futu sim 用 pl_val，real 用 unrealized_pl
-            pnl = _safe_float(row.get("pl_val", 0))
-            if pnl == 0.0:
-                pnl = _safe_float(row.get("unrealized_pl", 0))
             positions.append(
                 BrokerPosition(
                     symbol=str(row["code"]),
                     qty=float(row["qty"]),
                     avg_entry_price=float(row["cost_price"]),
                     market_value=float(row["market_val"]),
-                    unrealized_pnl=pnl,
+                    unrealized_pnl=_safe_float(row.get("unrealized_pl", 0)),
                 )
             )
         return positions
