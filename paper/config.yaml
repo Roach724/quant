@@ -36,6 +36,10 @@ data_source: simulated   # simulated | parquet | sdk
 # ── Output ──
 # output: ./output/my_run
 
+
+# ── K 线频率 & 调仓调度（可选）────────────
+freq: 5m                # K 线频率: 5m | 1m | 60m | 1d
+lookback_bars: 0         # 回放条数（0=不启用）
 # ── Realtime replay ──
 # realtime: false
 # realtime_interval: 0.5

@@ -21,6 +21,7 @@ from engine.strategy import StrategyContext
 from trading.adapter import StrategyAdapter
 from trading.capital import CapitalManager
 from trading.models import TradingStrategy as TSModel
+from trading.scheduler import Decision, RebalanceScheduler
 from trading.signal_bridge import SignalBridge
 from trading.state import TradingStateManager
 
@@ -43,6 +44,7 @@ class TradingRunner:
         market: str = "us",
         bar_interval: int = 60,
         reconcile_every: int = 10,
+        scheduler: RebalanceScheduler | None = None,
     ):
         self.broker = broker
         self.capital = capital
@@ -51,6 +53,7 @@ class TradingRunner:
         self.market = market
         self.bar_interval = bar_interval
         self.reconcile_every = reconcile_every
+        self.scheduler = scheduler
         self._strategies: dict[int, TSModel] = {s.id: s for s in strategies}
         self._adapters: dict[int, StrategyAdapter] = {}
         self._threads: dict[int, threading.Thread] = {}
@@ -238,6 +241,10 @@ class TradingRunner:
 
                 if adapter._strategy and _ctx["ctx"]:
                     _ctx["ctx"] = ctx
+                    # Scheduler gating
+                    dec = self.scheduler.on_bar() if self.scheduler else Decision.TRADE
+                    if dec in (Decision.WAITING, Decision.SKIP):
+                        return
                     signals = adapter.generate_signals(ctx, _bar_count - 1, strategy_id)
                     if signals:
                         logger.info(
@@ -247,6 +254,8 @@ class TradingRunner:
                             _bar_count,
                         )
                         self._execute_signals(signals, bar_data)
+                        if self.scheduler:
+                            self.scheduler.write()
                         # Update in-memory portfolio so the strategy knows what it holds
                         for sig in signals:
                             if sig.side in ("sell", "close"):
@@ -254,8 +263,6 @@ class TradingRunner:
                             elif sig.side == "buy":
                                 if sig.symbol not in _portfolio.positions:
                                     _portfolio.positions[sig.symbol] = Position(symbol=sig.symbol)
-
-                # reconcile disabled for now — Futu sim 无对应仓位时会误删虚拟持仓
 
             source.stop_check = lambda: stop.is_set()
             source.on_bar = _on_bar
@@ -396,6 +403,10 @@ class TradingRunner:
 
                 if adapter._strategy and _ctx["ctx"]:
                     _ctx["ctx"] = ctx
+                    # Scheduler gating
+                    dec = self.scheduler.on_bar() if self.scheduler else Decision.TRADE
+                    if dec in (Decision.WAITING, Decision.SKIP):
+                        return
                     signals = adapter.generate_signals(
                         ctx,
                         bar_count - 1,
@@ -410,6 +421,8 @@ class TradingRunner:
                             trading_day,
                         )
                         self._execute_signals(signals, bar_data)
+                        if self.scheduler:
+                            self.scheduler.write()
                         # Update in-memory portfolio so the strategy knows what it holds
                         for sig in signals:
                             if sig.side in ("sell", "close"):

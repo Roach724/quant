@@ -33,3 +33,8 @@ risk:
 schedule:
   bar_interval: 60            # 信号计算间隔（秒）
   trading_hours_only: true     # 仅交易时段运行
+# ── K 线频率 & 调仓调度（可选）─────────────────────────────────────────
+# live:
+#   freq: 5m                # K 线频率: 5m | 1m | 60m | 1d
+#   lookback_bars: 0         # 首次启动回放条数（0=不启用 RebalanceScheduler）
+#   rebalance_every: 5       # 调仓间隔（bar 数，覆盖 strategy.rebalance_every）
