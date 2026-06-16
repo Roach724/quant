@@ -248,8 +248,7 @@ class TradingRunner:
                         )
                         self._execute_signals(signals, bar_data)
 
-                if _bar_count > 0 and _bar_count % self.reconcile_every == 0:
-                    self.state.reconcile_and_continue(strategy_id)
+                # reconcile disabled for now — Futu sim 无对应仓位时会误删虚拟持仓
 
             source.stop_check = lambda: stop.is_set()
             source.on_bar = _on_bar
