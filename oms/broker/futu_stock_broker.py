@@ -67,6 +67,17 @@ class FutuStockBroker:
             )
         return self._ctx
 
+    @staticmethod
+    def _format_symbol(symbol: str, market: str) -> str:
+        """Add market prefix to symbol if required by Futu API.
+
+        HK stocks need HK. prefix (e.g. 06656 → HK.06656).
+        US stocks need no prefix.
+        """
+        if market == "hk" and not symbol.startswith("HK."):
+            return f"HK.{symbol}"
+        return symbol
+
     async def submit_order(
         self,
         symbol: str,
@@ -76,6 +87,7 @@ class FutuStockBroker:
         limit_price: Optional[float] = None,
     ) -> BrokerOrder:
         """Submit a market or limit order."""
+        symbol = self._format_symbol(symbol, self.market)
         ctx = self._get_ctx()
         futu_side = TrdSide.BUY if side == "buy" else TrdSide.SELL
         futu_order_type = (

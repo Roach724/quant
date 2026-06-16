@@ -29,6 +29,7 @@ class SignalBridge:
         execution_algo: str | None = None,  # "twap" | "vwap" | None
         execution_slices: int = 10,
         execution_window: int = 1800,
+        market: str = "us",
     ):
         self.broker = broker
         self.capital = capital
@@ -38,6 +39,7 @@ class SignalBridge:
         self.execution_algo = execution_algo
         self.execution_slices = execution_slices
         self.execution_window = execution_window
+        self.market = market
 
     def _get_executor(self):
         """根据配置创建执行算法实例"""
@@ -78,8 +80,8 @@ class SignalBridge:
         if self.broker is None:
             from oms.broker.futu_stock_broker import FutuStockBroker
 
-            self.broker = FutuStockBroker()
-            logger.info("Lazy-initialized FutuStockBroker")
+            self.broker = FutuStockBroker(market=self.market)
+            logger.info("Lazy-initialized FutuStockBroker (market=%s)", self.market)
 
         acct = self.capital.get_account(signal.strategy_id)
         if not acct:
