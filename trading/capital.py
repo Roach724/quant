@@ -87,12 +87,18 @@ class CapitalManager:
                     avg_entry_price=price,
                 )
                 self.session.add(pos)
+            # 更新市值和浮动盈亏
+            if pos:
+                pos.market_value = pos.qty * price
+                pos.unrealized_pnl = pos.market_value - pos.qty * pos.avg_entry_price
         else:  # SELL
             if not pos or pos.qty < qty:
                 raise ValueError(
                     f"Cannot sell {qty} {symbol}: only {pos.qty if pos else 0} held"
                 )
             pos.qty -= qty
+            pos.market_value = pos.qty * price if pos.qty > 0 else 0.0
+            pos.unrealized_pnl = pos.market_value - pos.qty * pos.avg_entry_price if pos.qty > 0 else 0.0
             if pos.qty == 0:
                 self.session.delete(pos)
                 pos = None

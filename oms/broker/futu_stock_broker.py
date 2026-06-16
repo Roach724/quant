@@ -134,14 +134,16 @@ class FutuStockBroker:
         qty: float,
         order_type: str = "market",
         limit_price: Optional[float] = None,
-    ) -> BrokerOrder:
-        """Submit a market or limit order."""
+    ) -> BrokerOrder | None:
+        """Submit a market or limit order. Returns None if qty too small for one lot."""
         symbol = self._format_symbol(symbol, self.market)
         qty = self._ensure_lot(symbol, int(qty))
         if qty <= 0:
-            raise RuntimeError(
-                f"Quantity too small after lot rounding for {symbol}: {qty}"
+            logger.warning(
+                "Insufficient cash for one lot of %s (lot_size needed)",
+                symbol,
             )
+            return None
         ctx = self._get_ctx()
         futu_side = TrdSide.BUY if side == "buy" else TrdSide.SELL
         futu_order_type = (
