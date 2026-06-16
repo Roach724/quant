@@ -388,7 +388,7 @@ class TradingRunner:
                 if state_mgr and bar_count > 0 and bar_count % checkpoint_interval == 0:
                     try:
                         state_mgr.save_checkpoint(
-                            None,
+                            Portfolio(initial_capital=0),
                             {
                                 "trading_day": trading_day,
                                 "bar_count": bar_count,
@@ -519,7 +519,7 @@ class TradingRunner:
                 if state_mgr:
                     try:
                         state_mgr.save(
-                            None,
+                            Portfolio(initial_capital=0),
                             None,
                             {
                                 "trading_day": trading_day,
