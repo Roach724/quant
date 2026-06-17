@@ -348,6 +348,12 @@ class TradingRunner:
                 market=market,
                 poll_interval_sec=bar_interval,
             )
+            # Override BQ seed: start from current market time, not yesterday.
+            # Scheduler remembers previous bar_count (from from_file), no need
+            # to replay historical bars for warmup.
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo("Asia/Hong_Kong") if market == "hk" else ZoneInfo("America/New_York")
+            source.last_ts = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
             _ctx = {"ctx": None}
             _live_bars: list[dict] = []
