@@ -132,12 +132,25 @@ def run_strategy(strategy_id: int, env: str) -> None:
     if lookback_bars > 0:
         state_dir = Path(f"/var/data/trading/{env}/state")
         scheduler_path = state_dir / f"strategy_{strategy_id}_scheduler.json"
-        # Fresh start: clear old scheduler state from previous deployments.
-        # Scheduler state is per-run; multi-day resume is handled by
-        # TradingStateManager, not by the scheduler's own file.
-        if scheduler_path.exists():
-            scheduler_path.unlink()
-            log.info("Cleared old scheduler state for fresh start")
+        # Fresh start: clear old state from previous deployments.
+        # Per-run state (scheduler + multi-day) should not carry across
+        # deployments; TradingStateManager handles DB-level persistence.
+        import shutil as _shutil
+        state_root = Path("/var/data/trading/state")
+        strategy_state_dir = state_root / f"strategy_{strategy_id}"
+        cleared = []
+        for p in [scheduler_path, strategy_state_dir]:
+            try:
+                if p.is_file():
+                    p.unlink()
+                    cleared.append(p.name)
+                elif p.is_dir():
+                    _shutil.rmtree(p)
+                    cleared.append(f"{p.name}/")
+            except Exception:
+                pass
+        if cleared:
+            log.info("Cleared old state for fresh start: %s", ", ".join(cleared))
         scheduler = RebalanceScheduler(
             freq_minutes=freq_minutes,
             lookback_bars=lookback_bars,
