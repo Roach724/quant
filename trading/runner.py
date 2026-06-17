@@ -92,16 +92,27 @@ class TradingRunner:
         self._start_one(strat)
 
     def stop_strategy(self, strategy_id: int):
-        """停止单个策略"""
+        """停止单个策略并等待线程退出"""
         if strategy_id in self._stop_events:
             self._stop_events[strategy_id].set()
+        if strategy_id in self._threads:
+            self._threads[strategy_id].join(timeout=30)
+            del self._threads[strategy_id]
+        if strategy_id in self._stop_events:
+            del self._stop_events[strategy_id]
 
     # ── Internal ──
 
     def _start_one(self, strat: TSModel):
         """启动单个策略的轮询线程"""
-        if strat.id in self._threads:
+        if strat.id in self._threads and self._threads[strat.id].is_alive():
+            logger.warning("Strategy %d already running, skipping start", strat.id)
             return
+        # Clean up stale entries from previous runs
+        if strat.id in self._threads:
+            del self._threads[strat.id]
+        if strat.id in self._stop_events:
+            del self._stop_events[strat.id]
 
         cfg = yaml.safe_load(strat.config_yaml) or {}
         strat_kwargs = cfg.get("strategy", {})
