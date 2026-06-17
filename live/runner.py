@@ -398,6 +398,9 @@ class LiveRunner:
         logger.info("Strategy initialised, entering bar loop (%d bars)", len(src))
 
         # 7. Bar loop
+        lookback_bars = int(self.config.get("live", {}).get("lookback_bars", 0))
+        if lookback_bars > 0:
+            logger.info("Paper warmup: skipping trading for first %d bars", lookback_bars)
         last_progress_pct = -1
         total_bars = len(src)
         for bar_idx in range(total_bars):
@@ -446,6 +449,26 @@ class LiveRunner:
                     bar_idx, len(buys), len(sells),
                     ", ".join(f"{s.symbol}({s.side})" for s in signals[:10])
                 )
+
+            # 7c2. Warmup: skip trading but record equity
+            if bar_idx < lookback_bars:
+                self.observer.record_bar(
+                    timestamp,
+                    equity=portfolio._mark_to_market(bar_data),
+                    cash=portfolio.cash,
+                    return_pct=0.0,
+                )
+                if hasattr(self, '_dash_observer'):
+                    self._dash_observer.record_equity(
+                        bar=bar_idx,
+                        equity=portfolio._mark_to_market(bar_data),
+                        cash=portfolio.cash,
+                        portfolio_value=portfolio._mark_to_market(bar_data),
+                        daily_pnl=getattr(portfolio, 'daily_pnl', 0),
+                        drawdown=getattr(portfolio, 'drawdown', 0),
+                        run_id=self.config.get("_run_id", ""),
+                    )
+                continue
 
             # 7d. No signals → record equity and continue
             if not signals:
@@ -1024,9 +1047,13 @@ class LiveRunner:
         max_daily_loss = float(risk_cfg.get("max_daily_loss", 0.05))
         max_bq_failures = int(risk_cfg.get("max_consecutive_failures", 10))
         checkpoint_interval = int(self.config.get("state", {}).get("checkpoint_interval", 300))
+        lookback_bars = int(self.config.get("live", {}).get("lookback_bars", 0))
 
         day_stop_reason: str | None = None
         day_start_time = datetime.now(timezone.utc)
+        day_warmup_remaining = lookback_bars
+        if lookback_bars > 0:
+            logger.info("Live warmup: skipping trading for first %d bars", lookback_bars)
 
         # Create or reuse BQDataSource
         if not hasattr(self, '_bq_source') or self._bq_source is None:
@@ -1120,7 +1147,7 @@ class LiveRunner:
 
         def on_live_bar(bar_data: dict):
             """Callback: BQDataSource feeds pre-batched bar_data."""
-            nonlocal day_stop_reason, last_checkpoint_time
+            nonlocal day_stop_reason, last_checkpoint_time, day_warmup_remaining
             try:
                 ts = bar_data.get("timestamp", "")
                 n_syms = len(bar_data.get("close", {}))
@@ -1161,6 +1188,22 @@ class LiveRunner:
                 live_ctx = _rebuild_ctx()
                 bar_idx = len(self._live_bars) - 1
                 signals = self.strategy.on_bar(live_ctx, bar_idx)
+
+                # ── Warmup: skip trading but record equity ──
+                if day_warmup_remaining > 0:
+                    day_warmup_remaining -= 1
+                    self.observer.record_bar(ts, eq, portfolio.cash, 0.0)
+                    if hasattr(self, '_dash_observer'):
+                        self._dash_observer.record_equity(
+                            bar=self._live_bar_count,
+                            equity=eq,
+                            cash=portfolio.cash,
+                            portfolio_value=eq,
+                            daily_pnl=eq - self._live_daily_start_equity if self._live_daily_start_equity > 0 else 0,
+                            drawdown=current_dd,
+                            run_id=self.config.get("_run_id", ""),
+                        )
+                    return
 
                 if signals:
                     n_buy = sum(1 for s in signals if s.side in ("buy", "target"))
