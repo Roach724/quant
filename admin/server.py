@@ -1447,8 +1447,8 @@ def admin_data_overview(start: str = Query(""), end: str = Query("")):
     """Daily data coverage overview for bar tables and factor_values.
 
     Returns per-day symbol counts, row counts, and coverage vs SSOT totals
-    for 6 tables: us_bars_5m, us_bars_1d, hk_bars_5m, hk_bars_1d,
-    us_factor_values, hk_factor_values.
+    for 6 views: us_bars_5m, us_bars_1d, hk_bars_5m, hk_bars_1d,
+    factor_values (split by symbol prefix into us/hk).
 
     Params:
         start: YYYY-MM-DD (default: 7 days ago)
@@ -1475,26 +1475,22 @@ def admin_data_overview(start: str = Query(""), end: str = Query("")):
     # SSOT symbol totals
     SSOT = {"us": 234, "hk": 270}
 
-    # Tables to monitor: (table_name, date_column, market)
-    TABLES = [
+    # Bar tables: (table_name, date_column, market)
+    BAR_TABLES = [
         ("us_bars_5m", "timestamp", "us"),
         ("us_bars_1d", "timestamp", "us"),
         ("hk_bars_5m", "timestamp", "hk"),
         ("hk_bars_1d", "timestamp", "hk"),
-        ("us_factor_values", "date", "us"),
-        ("hk_factor_values", "date", "hk"),
     ]
 
     client = bigquery.Client(project="deductive-notch-495015-c2")
+    project = "deductive-notch-495015-c2"
 
-    # Build UNION ALL query for all 6 tables
+    # Build UNION ALL query
     parts = []
-    for table, date_col, market in TABLES:
-        where_clause = (
-            f"WHERE DATE({date_col}) BETWEEN @start AND @end"
-            if date_col == "timestamp"
-            else f"WHERE {date_col} BETWEEN @start AND @end"
-        )
+
+    # Bar tables
+    for table, date_col, market in BAR_TABLES:
         parts.append(f"""
             SELECT
                 DATE({date_col}) AS d,
@@ -1502,10 +1498,23 @@ def admin_data_overview(start: str = Query(""), end: str = Query("")):
                 '{market}' AS market,
                 COUNT(DISTINCT symbol) AS symbol_count,
                 COUNT(*) AS row_count
-            FROM `deductive-notch-495015-c2.quant.{table}`
-            {where_clause}
+            FROM `{project}.quant.{table}`
+            WHERE DATE({date_col}) BETWEEN @start AND @end
             GROUP BY d
         """)
+
+    # factor_values: single table, split by symbol prefix
+    parts.append(f"""
+        SELECT
+            date AS d,
+            CASE WHEN symbol LIKE 'US.%' THEN 'us_factor_values' ELSE 'hk_factor_values' END AS table_name,
+            CASE WHEN symbol LIKE 'US.%' THEN 'us' ELSE 'hk' END AS market,
+            COUNT(DISTINCT symbol) AS symbol_count,
+            COUNT(*) AS row_count
+        FROM `{project}.quant.factor_values`
+        WHERE date BETWEEN @start AND @end
+        GROUP BY d, table_name, market
+    """)
 
     query = "\nUNION ALL\n".join(parts) + "\nORDER BY d DESC, table_name"
 
