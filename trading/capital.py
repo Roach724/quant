@@ -30,10 +30,12 @@ class CapitalManager:
             strategy_id=strategy_id
         ).first()
         if existing:
-            existing.cash = initial_capital
-            existing.initial_capital = initial_capital
-            existing.peak_equity = initial_capital
-            self.session.commit()
+            # Multi-day resume: keep existing state, don't reset capital
+            logger.info(
+                "Strategy %d already allocated (cash=%.2f) — skipping reset",
+                strategy_id,
+                existing.cash,
+            )
             return existing
 
         acct = VirtualAccount(
