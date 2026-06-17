@@ -1822,7 +1822,21 @@ def _scan_cron_logs_and_sync():
         except Exception:
             continue
         if not text.strip():
-            continue
+            # Logrotated: .log file is empty, try rotated copies (*.log-*)
+            rotated = sorted(
+                log_path.parent.glob(f"{log_path.name}-*"),
+                key=lambda p: p.stat().st_mtime, reverse=True,
+            )
+            for rp in rotated:
+                try:
+                    text = rp.read_text(errors="replace")
+                    if text.strip():
+                        log_path = rp  # use rotated file as source
+                        break
+                except Exception:
+                    continue
+            if not text.strip():
+                continue
 
         # Parse structured lines
         lines = text.splitlines()
@@ -2244,12 +2258,13 @@ LOG_MODULES = ["collector", "live", "paper_run", "factor", "cron", "train", "loa
 
 
 def _module_log_files(module: str) -> list[str]:
-    """Collect all *.log files for a module across all LOG_ROOTS."""
+    """Collect all *.log files (including rotated *.log-*) for a module across all LOG_ROOTS."""
     files: list[str] = []
     for root in LOG_ROOTS:
         path = os.path.join(root, module)
         if os.path.isdir(path):
             files.extend(glob.glob(os.path.join(path, "*.log")))
+            files.extend(glob.glob(os.path.join(path, "*.log-*")))
     return sorted(files, reverse=True)
 
 
@@ -2285,6 +2300,19 @@ def admin_logs(
         log_file = match[0] if match else files[0]
     else:
         log_file = files[0]
+    # If the matched file is empty (logrotated), try rotated copies
+    try:
+        if os.path.getsize(log_file) == 0:
+            rotated = sorted(
+                glob.glob(f"{log_file}-*"),
+                key=lambda p: os.path.getmtime(p), reverse=True,
+            )
+            for rp in rotated:
+                if os.path.getsize(rp) > 0:
+                    log_file = rp
+                    break
+    except Exception:
+        pass
     # Parse optional time range filter
     ts_start = None
     ts_end = None
