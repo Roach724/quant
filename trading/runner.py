@@ -193,7 +193,7 @@ class TradingRunner:
                 if self.scheduler.bar_count > 0:
                     source.last_ts = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
                 else:
-                    bars_needed = self.scheduler.lookback_bars + self.scheduler.rebalance_every
+                    bars_needed = self.scheduler.lookback_bars
                     seed = datetime.now(tz) - timedelta(minutes=bars_needed * self.scheduler.freq_minutes)
                     source.last_ts = seed.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -356,7 +356,7 @@ class TradingRunner:
                 if self.scheduler.bar_count > 0:
                     source.last_ts = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
                 else:
-                    bars_needed = self.scheduler.lookback_bars + self.scheduler.rebalance_every
+                    bars_needed = self.scheduler.lookback_bars
                     seed = datetime.now(tz) - timedelta(minutes=bars_needed * self.scheduler.freq_minutes)
                     source.last_ts = seed.strftime("%Y-%m-%d %H:%M:%S")
 
