@@ -59,25 +59,4 @@ class FutuValuationAdapter(FutuBaseAdapter):
                             }
                         )
 
-            # Scalar statistics — single row
-            scalar_keys = {
-                "current_value",
-                "average_value",
-                "avg_minus_1_stddev",
-                "avg_plus_1_stddev",
-                "avg_minus_2_stddev",
-                "avg_plus_2_stddev",
-                "median_value",
-            }
-            for sk in scalar_keys:
-                if sk in trend and isinstance(trend[sk], (int, float)):
-                    rows.append(
-                        {
-                            "valuation_type": vt,
-                            "interval": interval,
-                            "date": sk,
-                            "value": trend[sk],
-                        }
-                    )
-
         return pd.DataFrame(rows) if rows else pd.DataFrame()
