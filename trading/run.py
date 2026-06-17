@@ -131,13 +131,21 @@ def run_strategy(strategy_id: int, env: str) -> None:
     scheduler = None
     if lookback_bars > 0:
         state_dir = Path(f"/var/data/trading/{env}/state")
-        scheduler = RebalanceScheduler.from_file(
-            file_path=str(state_dir / f"strategy_{strategy_id}_scheduler.json"),
+        scheduler_path = state_dir / f"strategy_{strategy_id}_scheduler.json"
+        # Fresh start: clear old scheduler state from previous deployments.
+        # Scheduler state is per-run; multi-day resume is handled by
+        # TradingStateManager, not by the scheduler's own file.
+        if scheduler_path.exists():
+            scheduler_path.unlink()
+            log.info("Cleared old scheduler state for fresh start")
+        scheduler = RebalanceScheduler(
             freq_minutes=freq_minutes,
             lookback_bars=lookback_bars,
             rebalance_every=int(live_cfg.get("rebalance_every", 1)),
+            state_path=str(scheduler_path),
         )
-        log.info("Scheduler state path: %s", scheduler.state_path)
+        log.info("Scheduler config: freq=%dm lookback=%d bars rebalance_every=%d",
+                 freq_minutes, lookback_bars, int(live_cfg.get("rebalance_every", 1)))
 
     runner = TradingRunner(
         broker=broker,
