@@ -70,7 +70,7 @@ HEARTBEAT_INTERVAL_SEC = int(os.environ.get("HEARTBEAT_INTERVAL_SEC", "1800"))
 
 _SYMBOL_CONFIG: dict[str, list[str]] = {}
 _CALENDARS: dict[str, MarketCalendar] = {}
-_INDEX_HK_SYMBOLS: list[str] = []  # HK indices — always-on subscription, routed to hk_bars_index_5m
+_INDEX_HK_SYMBOLS: list[str] = []  # HK indices — subscribed alongside HK stocks (routed to hk_bars_index_5m)
 PREHEAT_MINUTES = 5
 
 
@@ -86,7 +86,7 @@ def _load_symbols_config():
         _SYMBOL_CONFIG[market] = cfg["markets"][market]["symbols"]
         _CALENDARS[market] = MarketCalendar(market)
 
-    # Load HK index symbols for always-on subscription (routed to hk_bars_index_5m)
+    # Load HK index symbols (subscribed alongside HK stocks, routed to hk_bars_index_5m)
     _INDEX_HK_SYMBOLS = cfg.get("indices", {}).get("hk", {}).get("symbols", [])
 
     logger.info(
@@ -99,13 +99,19 @@ def _load_symbols_config():
 
 
 def _desired_symbols() -> set[str]:
-    """Return symbols for currently-open markets using calendar + preheat."""
+    """Return symbols for currently-open markets using calendar + preheat.
+
+    HK indices are included when HK market is open (same schedule as stocks).
+    """
     desired: set[str] = set()
     for market in ("hk", "us"):
         cal = _CALENDARS.get(market)
         syms = _SYMBOL_CONFIG.get(market, [])
         if cal is not None and cal.is_open_now(preheat_minutes=PREHEAT_MINUTES):
             desired.update(syms)
+            # Include HK indices when HK market is open
+            if market == "hk" and _INDEX_HK_SYMBOLS:
+                desired.update(_INDEX_HK_SYMBOLS)
     return desired
 
 
@@ -234,29 +240,6 @@ def main():
                 logger.info("Connected to OpenD %s:%d", OPEND_HOST, OPEND_PORT)
                 reconnect_backoff = 1
                 current_subscriptions.clear()
-
-                # Always-on HK index subscription (never rotated out)
-                if _INDEX_HK_SYMBOLS:
-                    try:
-                        ret, msg = ctx.subscribe(
-                            _INDEX_HK_SYMBOLS,
-                            [SubType.K_5M],
-                            subscribe_push=True,
-                        )
-                        if ret == RET_OK:
-                            logger.info("Index subscription active: %s", _INDEX_HK_SYMBOLS)
-                            current_subscriptions.update(_INDEX_HK_SYMBOLS)
-                        else:
-                            logger.warning("Index subscribe failed: %s", msg)
-                    except Exception as e:
-                        logger.error("Index subscribe error: %s — reconnecting", e)
-                        try:
-                            ctx.close()
-                        except Exception:
-                            pass
-                        ctx = None
-                        current_subscriptions.clear()
-                        continue
             except Exception as e:
                 logger.error("OpenD connection failed: %s (retry in %ds)", e, reconnect_backoff)
                 time.sleep(reconnect_backoff)
@@ -269,8 +252,7 @@ def main():
             desired = _desired_symbols()
 
             to_sub = desired - current_subscriptions
-            # Never unsubscribe HK index symbols (always-on)
-            to_unsub = current_subscriptions - desired - set(_INDEX_HK_SYMBOLS)
+            to_unsub = current_subscriptions - desired
 
             if to_sub:
                 try:
@@ -377,7 +359,7 @@ def _flush_buffer(buffer: list, label: str):
     )
     df["frequency"] = "5m"
 
-    # ── Route HK index bars to separate BQ table (always-on subscription) ──
+    # ── Route HK index bars to separate BQ table ──
     if _INDEX_HK_SYMBOLS and "symbol" in df.columns:
         idx_mask = df["symbol"].isin(_INDEX_HK_SYMBOLS)
         if idx_mask.any():
