@@ -1442,6 +1442,107 @@ def admin_data_f10():
     return collectors
 
 
+@app.get("/api/admin/data/overview")
+def admin_data_overview(start: str = Query(""), end: str = Query("")):
+    """Daily data coverage overview for bar tables and factor_values.
+
+    Returns per-day symbol counts, row counts, and coverage vs SSOT totals
+    for 6 tables: us_bars_5m, us_bars_1d, hk_bars_5m, hk_bars_1d,
+    us_factor_values, hk_factor_values.
+
+    Params:
+        start: YYYY-MM-DD (default: 7 days ago)
+        end:   YYYY-MM-DD (default: today)
+    """
+    from datetime import date as _date, timedelta as _td
+
+    today = _date.today()
+    if end:
+        try:
+            end_date = _date.fromisoformat(end)
+        except ValueError:
+            end_date = today
+    else:
+        end_date = today
+    if start:
+        try:
+            start_date = _date.fromisoformat(start)
+        except ValueError:
+            start_date = end_date - _td(days=7)
+    else:
+        start_date = end_date - _td(days=7)
+
+    # SSOT symbol totals
+    SSOT = {"us": 234, "hk": 270}
+
+    # Tables to monitor: (table_name, date_column, market)
+    TABLES = [
+        ("us_bars_5m", "timestamp", "us"),
+        ("us_bars_1d", "timestamp", "us"),
+        ("hk_bars_5m", "timestamp", "hk"),
+        ("hk_bars_1d", "timestamp", "hk"),
+        ("us_factor_values", "date", "us"),
+        ("hk_factor_values", "date", "hk"),
+    ]
+
+    client = bigquery.Client(project="deductive-notch-495015-c2")
+
+    # Build UNION ALL query for all 6 tables
+    parts = []
+    for table, date_col, market in TABLES:
+        where_clause = (
+            f"WHERE DATE({date_col}) BETWEEN @start AND @end"
+            if date_col == "timestamp"
+            else f"WHERE {date_col} BETWEEN @start AND @end"
+        )
+        parts.append(f"""
+            SELECT
+                DATE({date_col}) AS d,
+                '{table}' AS table_name,
+                '{market}' AS market,
+                COUNT(DISTINCT symbol) AS symbol_count,
+                COUNT(*) AS row_count
+            FROM `deductive-notch-495015-c2.quant.{table}`
+            {where_clause}
+            GROUP BY d
+        """)
+
+    query = "\nUNION ALL\n".join(parts) + "\nORDER BY d DESC, table_name"
+
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("start", "STRING", start_date.isoformat()),
+            bigquery.ScalarQueryParameter("end", "STRING", end_date.isoformat()),
+        ]
+    )
+
+    try:
+        df = client.query(query, job_config=job_config).to_dataframe()
+    except Exception as e:
+        return {"error": str(e), "rows": []}
+
+    results = []
+    for _, row in df.iterrows():
+        d = row["d"]
+        mkt = row["market"]
+        sc = int(row["symbol_count"])
+        total = SSOT.get(mkt, 0)
+        results.append({
+            "date": str(d) if hasattr(d, "strftime") else str(d)[:10],
+            "table": row["table_name"],
+            "symbols": sc,
+            "total": total,
+            "coverage": f"{sc}/{total}",
+            "rows": int(row["row_count"]),
+        })
+
+    return {
+        "start": start_date.isoformat(),
+        "end": end_date.isoformat(),
+        "rows": results,
+    }
+
+
 @app.get("/api/admin/data/tables")
 def admin_data_tables():
     """Return all BQ tables with row counts, schemas, last write times."""
