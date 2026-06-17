@@ -1442,6 +1442,116 @@ def admin_data_f10():
     return collectors
 
 
+@app.get("/api/admin/data/overview")
+def admin_data_overview(start: str = Query(""), end: str = Query("")):
+    """Daily data coverage overview for bar tables and factor_values.
+
+    Returns per-day symbol counts, row counts, and coverage vs SSOT totals
+    for 6 views: us_bars_5m, us_bars_1d, hk_bars_5m, hk_bars_1d,
+    factor_values (split by symbol prefix into us/hk).
+
+    Params:
+        start: YYYY-MM-DD (default: 7 days ago)
+        end:   YYYY-MM-DD (default: today)
+    """
+    from datetime import date as _date, timedelta as _td
+
+    today = _date.today()
+    if end:
+        try:
+            end_date = _date.fromisoformat(end)
+        except ValueError:
+            end_date = today
+    else:
+        end_date = today
+    if start:
+        try:
+            start_date = _date.fromisoformat(start)
+        except ValueError:
+            start_date = end_date - _td(days=7)
+    else:
+        start_date = end_date - _td(days=7)
+
+    # SSOT symbol totals
+    SSOT = {"us": 234, "hk": 270}
+
+    # Bar tables: (table_name, date_column, market)
+    BAR_TABLES = [
+        ("us_bars_5m", "timestamp", "us"),
+        ("us_bars_1d", "timestamp", "us"),
+        ("hk_bars_5m", "timestamp", "hk"),
+        ("hk_bars_1d", "timestamp", "hk"),
+    ]
+
+    client = bigquery.Client(project="deductive-notch-495015-c2")
+    project = "deductive-notch-495015-c2"
+
+    # Build UNION ALL query
+    parts = []
+
+    # Bar tables
+    for table, date_col, market in BAR_TABLES:
+        parts.append(f"""
+            SELECT
+                DATE({date_col}) AS d,
+                '{table}' AS table_name,
+                '{market}' AS market,
+                COUNT(DISTINCT symbol) AS symbol_count,
+                COUNT(*) AS row_count
+            FROM `{project}.quant.{table}`
+            WHERE DATE({date_col}) BETWEEN @start AND @end
+            GROUP BY d
+        """)
+
+    # factor_values: single table, split by symbol prefix
+    parts.append(f"""
+        SELECT
+            date AS d,
+            CASE WHEN symbol LIKE 'US.%' THEN 'us_factor_values' ELSE 'hk_factor_values' END AS table_name,
+            CASE WHEN symbol LIKE 'US.%' THEN 'us' ELSE 'hk' END AS market,
+            COUNT(DISTINCT symbol) AS symbol_count,
+            COUNT(*) AS row_count
+        FROM `{project}.quant.factor_values`
+        WHERE date BETWEEN @start AND @end
+        GROUP BY d, table_name, market
+    """)
+
+    query = "\nUNION ALL\n".join(parts) + "\nORDER BY d DESC, table_name"
+
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("start", "STRING", start_date.isoformat()),
+            bigquery.ScalarQueryParameter("end", "STRING", end_date.isoformat()),
+        ]
+    )
+
+    try:
+        df = client.query(query, job_config=job_config).to_dataframe()
+    except Exception as e:
+        return {"error": str(e), "rows": []}
+
+    results = []
+    for _, row in df.iterrows():
+        d = row["d"]
+        mkt = row["market"]
+        sc = int(row["symbol_count"])
+        total = SSOT.get(mkt, 0)
+        results.append({
+            "date": str(d) if hasattr(d, "strftime") else str(d)[:10],
+            "table": row["table_name"],
+            "symbols": sc,
+            "total": total,
+            "coverage": f"{sc}/{total}",
+            "rows": int(row["row_count"]),
+        })
+
+    return {
+        "start": start_date.isoformat(),
+        "end": end_date.isoformat(),
+        "rows": results,
+    }
+
+
 @app.get("/api/admin/data/tables")
 def admin_data_tables():
     """Return all BQ tables with row counts, schemas, last write times."""
@@ -1822,7 +1932,21 @@ def _scan_cron_logs_and_sync():
         except Exception:
             continue
         if not text.strip():
-            continue
+            # Logrotated: .log file is empty, try rotated copies (*.log-*)
+            rotated = sorted(
+                log_path.parent.glob(f"{log_path.name}-*"),
+                key=lambda p: p.stat().st_mtime, reverse=True,
+            )
+            for rp in rotated:
+                try:
+                    text = rp.read_text(errors="replace")
+                    if text.strip():
+                        log_path = rp  # use rotated file as source
+                        break
+                except Exception:
+                    continue
+            if not text.strip():
+                continue
 
         # Parse structured lines
         lines = text.splitlines()
@@ -2244,12 +2368,13 @@ LOG_MODULES = ["collector", "live", "paper_run", "factor", "cron", "train", "loa
 
 
 def _module_log_files(module: str) -> list[str]:
-    """Collect all *.log files for a module across all LOG_ROOTS."""
+    """Collect all *.log files (including rotated *.log-*) for a module across all LOG_ROOTS."""
     files: list[str] = []
     for root in LOG_ROOTS:
         path = os.path.join(root, module)
         if os.path.isdir(path):
             files.extend(glob.glob(os.path.join(path, "*.log")))
+            files.extend(glob.glob(os.path.join(path, "*.log-*")))
     return sorted(files, reverse=True)
 
 
@@ -2285,6 +2410,19 @@ def admin_logs(
         log_file = match[0] if match else files[0]
     else:
         log_file = files[0]
+    # If the matched file is empty (logrotated), try rotated copies
+    try:
+        if os.path.getsize(log_file) == 0:
+            rotated = sorted(
+                glob.glob(f"{log_file}-*"),
+                key=lambda p: os.path.getmtime(p), reverse=True,
+            )
+            for rp in rotated:
+                if os.path.getsize(rp) > 0:
+                    log_file = rp
+                    break
+    except Exception:
+        pass
     # Parse optional time range filter
     ts_start = None
     ts_end = None

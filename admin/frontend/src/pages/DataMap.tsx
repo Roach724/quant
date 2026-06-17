@@ -7,7 +7,7 @@ import {
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
-import { Tag, Button, Space, message, Tooltip, Card, Drawer, Table, Typography, Select, DatePicker, Popconfirm, Checkbox, Progress, Tabs } from 'antd';
+import { Tag, Button, Space, message, Tooltip, Card, Typography, Select, DatePicker, Popconfirm, Checkbox, Progress, Tabs } from 'antd';
 import DashboardPipeline from './DashboardPipeline';
 import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
@@ -22,16 +22,9 @@ interface CollectorStatus {
   last_heartbeat: string | null;
 }
 
-interface TableSchema {
-  name: string;
-  type: string;
-}
-
-interface DataTableItem {
-  table_name: string;
-  row_count: number;
-  last_write: string | null;
-  schema: TableSchema[];
+interface CollectorStatus {
+  ws_collector: string;
+  last_heartbeat: string | null;
 }
 
 interface BackfillCategory {
@@ -44,6 +37,15 @@ interface BackfillTable {
   key: string;
   label: string;
   market: string;
+}
+
+interface OverviewRow {
+  date: string;
+  table: string;
+  symbols: number;
+  total: number;
+  coverage: string;
+  rows: number;
 }
 
 // ── Poll helper ──────────────────────────────────────────────────────────────
@@ -76,11 +78,6 @@ const DataMap: React.FC = () => {
   const [subStats, setSubStats] = useState({ subscriptions: 0, buffer: 0, bars_received: 0 });
   const [rtQuota, setRtQuota] = useState<{ used: number; remain: number } | null>(null);
   const [histQuota, setHistQuota] = useState<{ remain: number; today_used: number } | null>(null);
-  const [schemaDrawer, setSchemaDrawer] = useState<{
-    open: boolean;
-    tableName: string;
-    columns: TableSchema[];
-  }>({ open: false, tableName: '', columns: [] });
 
   // ── Backfill state ──
   const [backfillCategories, setBackfillCategories] = useState<BackfillCategory[]>([]);
@@ -238,49 +235,90 @@ const DataMap: React.FC = () => {
     }
   };
 
-  const columns: ProColumns<DataTableItem>[] = [
-    {
-      title: 'Table',
-      dataIndex: 'table_name',
-      width: 220,
-      key: 'table_name',
-      ellipsis: true,
-    },
-    {
-      title: 'Rows',
-      dataIndex: 'row_count',
-      width: 120,
-      key: 'row_count',
-      render: (_, r) => r.row_count.toLocaleString(),
-    },
-    {
-      title: 'Last Write',
-      dataIndex: 'last_write',
-      width: 180,
-      key: 'last_write',
-      render: (_, r) =>
-        r.last_write ? dayjs(r.last_write).format('YYYY-MM-DD HH:mm:ss') : '-',
-    },
-    {
-      title: 'Schema',
-      key: 'schema',
-      width: 100,
-      render: (_, r) => (
-        <Button
-          size="small"
-          onClick={() =>
-            setSchemaDrawer({
-              open: true,
-              tableName: r.table_name,
-              columns: r.schema,
-            })
-          }
-        >
-          {r.schema.length} cols
-        </Button>
-      ),
-    },
-  ];
+  // ── Data Overview (daily coverage) ─────────────────────────────────────────
+
+  const DataOverview = () => {
+    const [data, setData] = useState<OverviewRow[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [dates, setDates] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([
+      dayjs().subtract(7, 'day'),
+      dayjs(),
+    ]);
+
+    const fetch = async () => {
+      if (!dates[0] || !dates[1]) return;
+      setLoading(true);
+      try {
+        const res = await api.get(
+          `/api/admin/data/overview?start=${dates[0].format('YYYY-MM-DD')}&end=${dates[1].format('YYYY-MM-DD')}`
+        );
+        setData(res.rows || []);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    useEffect(() => { fetch(); }, [dates]);
+
+    // Group by date for a compact view, or show flat table
+    const overviewColumns: ProColumns<OverviewRow>[] = [
+      {
+        title: '日期',
+        dataIndex: 'date',
+        width: 110,
+        sorter: (a, b) => a.date.localeCompare(b.date),
+      },
+      {
+        title: '表名',
+        dataIndex: 'table',
+        width: 160,
+        render: (_, r) => <Tag>{r.table}</Tag>,
+      },
+      {
+        title: '覆盖',
+        dataIndex: 'coverage',
+        width: 120,
+        align: 'right',
+        render: (_, r) => {
+          const pct = r.total > 0 ? (r.symbols / r.total) * 100 : 0;
+          const color = pct >= 99 ? 'green' : pct >= 80 ? 'orange' : 'red';
+          return <Tag color={color}>{r.coverage}</Tag>;
+        },
+      },
+      {
+        title: '行数',
+        dataIndex: 'rows',
+        width: 120,
+        align: 'right',
+        render: (_, r) => r.rows.toLocaleString(),
+      },
+    ];
+
+    return (
+      <>
+        <Card size="small" style={{ marginBottom: 12 }}>
+          <Space>
+            <Text strong>日期范围：</Text>
+            <DatePicker.RangePicker
+              value={dates}
+              onChange={(v) => { if (v?.[0] && v?.[1]) setDates([v[0], v[1]]); }}
+              allowClear={false}
+            />
+            <Button icon={<ReloadOutlined />} onClick={fetch} loading={loading}>刷新</Button>
+          </Space>
+        </Card>
+        <ProTable<OverviewRow>
+          headerTitle={`数据概览 (${dates[0]?.format('MM-DD')} ~ ${dates[1]?.format('MM-DD')})`}
+          rowKey={(r) => `${r.date}_${r.table}`}
+          search={false}
+          loading={loading}
+          columns={overviewColumns}
+          dataSource={data}
+          pagination={{ pageSize: 50 }}
+        />
+      </>
+    );
+  };
 
   const tabItems = [
     {
@@ -472,44 +510,7 @@ const DataMap: React.FC = () => {
     {
       key: 'overview',
       label: '数据概览',
-      children: (
-        <>
-          <ProTable<DataTableItem>
-            headerTitle="BQ Tables"
-            actionRef={actionRef}
-            rowKey="table_name"
-            search={false}
-            columns={columns}
-            request={async () => {
-              const data = await api.get('/api/admin/data/tables');
-              return { data, success: true, total: data.length };
-            }}
-            pagination={{ pageSize: 20 }}
-          />
-          <Drawer
-            title={`Schema: ${schemaDrawer.tableName}`}
-            open={schemaDrawer.open}
-            onClose={() => setSchemaDrawer({ open: false, tableName: '', columns: [] })}
-            width={400}
-          >
-            <Table
-              dataSource={schemaDrawer.columns}
-              rowKey="name"
-              pagination={false}
-              size="small"
-              columns={[
-                { title: 'Column', dataIndex: 'name', key: 'name' },
-                {
-                  title: 'Type',
-                  dataIndex: 'type',
-                  key: 'type',
-                  render: (t: string) => <Tag>{t}</Tag>,
-                },
-              ]}
-            />
-          </Drawer>
-        </>
-      ),
+      children: <DataOverview />,
     },
   ];
 
