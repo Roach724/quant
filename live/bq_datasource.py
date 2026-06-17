@@ -44,6 +44,16 @@ def _get_market_tz(market: str) -> ZoneInfo:
     return _MARKET_TZ[market]
 
 
+def _sleep_chunks(total_sec: float, calendar, poll_interval: int) -> None:
+    """Sleep in chunks, checking periodically if market reopened early."""
+    remaining = total_sec
+    chunk = min(30, poll_interval)  # check every 30s max
+    while remaining > 0 and not calendar.is_open_now():
+        dur = min(chunk, remaining)
+        time.sleep(dur)
+        remaining -= dur
+
+
 class BQDataSource:
     """Polls BigQuery us_bars_5m on a timer for real-time bar data.
 
@@ -112,6 +122,9 @@ class BQDataSource:
         Can be called multiple times for multi-day runs:
         - First call: seeds last_ts from ~1 hour ago, creates BQ client.
         - Subsequent calls: reuses last_ts and creates fresh BQ client.
+
+        Handles lunch breaks transparently (HK): pauses during mid-day
+        closure and resumes without the caller seeing a market-close event.
         """
         self._running = True
 
@@ -120,28 +133,52 @@ class BQDataSource:
             self._client = bigquery.Client(project=self.project)
 
         # Seed last_ts on first run only; preserve across multi-day runs.
-        # BQ bars are stored as UTC TIMESTAMP — seed in UTC, not market tz.
+        # BQ bars are stored with market-local timestamps (ET/HKT) labeled
+        # as UTC.  Seed must use the same convention for correct comparison.
         if self._last_ts is None:
             self._last_ts = self._compute_seed(self.market)
 
         logger.info(
-            "BQDataSource: polling every %ds — %d symbols, last_ts=%s",
+            "BQDataSource: polling every %ds — %d symbols, last_ts=%s (market-local)",
             self.poll_interval,
             len(self.symbols),
             self._last_ts,
         )
         try:
-            while self._running and self._calendar.is_open_now():
-                if self.stop_check and self.stop_check():
-                    logger.info("BQDataSource: stop_check returned True — stopping")
+            while self._running:
+                # ── Poll while market is open ──
+                while self._running and self._calendar.is_open_now():
+                    if self.stop_check and self.stop_check():
+                        logger.info("BQDataSource: stop_check returned True — stopping")
+                        self._running = False
+                        break
+                    try:
+                        self._poll()
+                        self.failure_count = 0  # reset on success
+                    except Exception:
+                        self.failure_count += 1
+                        logger.exception("BQDataSource: poll failed (#%d)", self.failure_count)
+                    time.sleep(self.poll_interval)
+
+                if not self._running:
                     break
-                try:
-                    self._poll()
-                    self.failure_count = 0  # reset on success
-                except Exception:
-                    self.failure_count += 1
-                    logger.exception("BQDataSource: poll failed (#%d)", self.failure_count)
-                time.sleep(self.poll_interval)
+                if self.stop_check and self.stop_check():
+                    break
+
+                # ── Market closed — lunch break or real close? ──
+                if self._calendar.is_trading_day():
+                    secs = self._calendar.time_until_open()
+                    if 0 < secs < 7200:  # lunch break (HK: ~1h)
+                        logger.info(
+                            "BQDataSource: lunch break — pausing %.0f min "
+                            "(market reopens at %s)",
+                            secs / 60,
+                            self._calendar.next_open_datetime().strftime("%H:%M UTC"),
+                        )
+                        _sleep_chunks(secs, self._calendar, self.poll_interval)
+                        continue  # resume polling
+
+                break  # real market close for the day
         except KeyboardInterrupt:
             logger.info("BQDataSource: interrupted")
         finally:
@@ -211,14 +248,16 @@ class BQDataSource:
             logger.exception("BQDataSource: query failed")
             return
 
-        logger.info("BQDataSource: _poll returned %d rows", len(df))
-        if df.empty:
+        n_rows = len(df)
+        if n_rows == 0:
             return
 
         # Update last_ts to latest timestamp
         latest = str(df["timestamp"].max())
         if latest > (self._last_ts or ""):
             self._last_ts = latest
+
+        logger.debug("BQDataSource: _poll returned %d rows, last_ts=%s (market-local)", n_rows, latest)
 
         # Feed each unique timestamp's bars as a batch
         df["timestamp"] = pd.to_datetime(df["timestamp"])
