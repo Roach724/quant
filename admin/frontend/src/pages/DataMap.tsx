@@ -46,6 +46,15 @@ interface BackfillTable {
   market: string;
 }
 
+interface OverviewRow {
+  date: string;
+  table: string;
+  symbols: number;
+  total: number;
+  coverage: string;
+  rows: number;
+}
+
 // ── Poll helper ──────────────────────────────────────────────────────────────
 
 const pollTask = (taskId: number): Promise<{ status: string; result: string | null }> => {
@@ -282,6 +291,91 @@ const DataMap: React.FC = () => {
     },
   ];
 
+  // ── Data Overview (daily coverage) ─────────────────────────────────────────
+
+  const DataOverview = () => {
+    const [data, setData] = useState<OverviewRow[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [dates, setDates] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([
+      dayjs().subtract(7, 'day'),
+      dayjs(),
+    ]);
+
+    const fetch = async () => {
+      if (!dates[0] || !dates[1]) return;
+      setLoading(true);
+      try {
+        const res = await api.get(
+          `/api/admin/data/overview?start=${dates[0].format('YYYY-MM-DD')}&end=${dates[1].format('YYYY-MM-DD')}`
+        );
+        setData(res.rows || []);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    useEffect(() => { fetch(); }, [dates]);
+
+    // Group by date for a compact view, or show flat table
+    const overviewColumns: ProColumns<OverviewRow>[] = [
+      {
+        title: '日期',
+        dataIndex: 'date',
+        width: 110,
+        sorter: (a, b) => a.date.localeCompare(b.date),
+      },
+      {
+        title: '表名',
+        dataIndex: 'table',
+        width: 160,
+        render: (_, r) => <Tag>{r.table}</Tag>,
+      },
+      {
+        title: '覆盖',
+        dataIndex: 'coverage',
+        width: 120,
+        align: 'right',
+        render: (_, r) => {
+          const pct = r.total > 0 ? (r.symbols / r.total) * 100 : 0;
+          const color = pct >= 99 ? 'green' : pct >= 80 ? 'orange' : 'red';
+          return <Tag color={color}>{r.coverage}</Tag>;
+        },
+      },
+      {
+        title: '行数',
+        dataIndex: 'rows',
+        width: 120,
+        align: 'right',
+        render: (_, r) => r.rows.toLocaleString(),
+      },
+    ];
+
+    return (
+      <>
+        <Card size="small" style={{ marginBottom: 12 }}>
+          <Space>
+            <Text strong>日期范围：</Text>
+            <DatePicker.RangePicker
+              value={dates}
+              onChange={(v) => { if (v?.[0] && v?.[1]) setDates([v[0], v[1]]); }}
+              allowClear={false}
+            />
+            <Button icon={<ReloadOutlined />} onClick={fetch} loading={loading}>刷新</Button>
+          </Space>
+        </Card>
+        <ProTable<OverviewRow>
+          headerTitle={`数据概览 (${dates[0]?.format('MM-DD')} ~ ${dates[1]?.format('MM-DD')})`}
+          rowKey={(r) => `${r.date}_${r.table}`}
+          search={false}
+          loading={loading}
+          columns={overviewColumns}
+          dataSource={data}
+          pagination={{ pageSize: 50 }}
+        />
+      </>
+    );
+  };
+
   const tabItems = [
     {
       key: 'collector',
@@ -472,44 +566,7 @@ const DataMap: React.FC = () => {
     {
       key: 'overview',
       label: '数据概览',
-      children: (
-        <>
-          <ProTable<DataTableItem>
-            headerTitle="BQ Tables"
-            actionRef={actionRef}
-            rowKey="table_name"
-            search={false}
-            columns={columns}
-            request={async () => {
-              const data = await api.get('/api/admin/data/tables');
-              return { data, success: true, total: data.length };
-            }}
-            pagination={{ pageSize: 20 }}
-          />
-          <Drawer
-            title={`Schema: ${schemaDrawer.tableName}`}
-            open={schemaDrawer.open}
-            onClose={() => setSchemaDrawer({ open: false, tableName: '', columns: [] })}
-            width={400}
-          >
-            <Table
-              dataSource={schemaDrawer.columns}
-              rowKey="name"
-              pagination={false}
-              size="small"
-              columns={[
-                { title: 'Column', dataIndex: 'name', key: 'name' },
-                {
-                  title: 'Type',
-                  dataIndex: 'type',
-                  key: 'type',
-                  render: (t: string) => <Tag>{t}</Tag>,
-                },
-              ]}
-            />
-          </Drawer>
-        </>
-      ),
+      children: <DataOverview />,
     },
   ];
 
