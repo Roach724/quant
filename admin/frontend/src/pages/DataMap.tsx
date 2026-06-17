@@ -7,7 +7,7 @@ import {
 } from '@ant-design/icons';
 import ProTable from '@ant-design/pro-table';
 import type { ProColumns, ActionType } from '@ant-design/pro-table';
-import { Tag, Button, Space, message, Tooltip, Card, Drawer, Table, Typography, Select, DatePicker, Popconfirm, Checkbox, Progress, Tabs } from 'antd';
+import { Tag, Button, Space, message, Tooltip, Card, Typography, Select, DatePicker, Popconfirm, Checkbox, Progress, Tabs } from 'antd';
 import DashboardPipeline from './DashboardPipeline';
 import { useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
@@ -22,16 +22,9 @@ interface CollectorStatus {
   last_heartbeat: string | null;
 }
 
-interface TableSchema {
-  name: string;
-  type: string;
-}
-
-interface DataTableItem {
-  table_name: string;
-  row_count: number;
-  last_write: string | null;
-  schema: TableSchema[];
+interface CollectorStatus {
+  ws_collector: string;
+  last_heartbeat: string | null;
 }
 
 interface BackfillCategory {
@@ -85,11 +78,6 @@ const DataMap: React.FC = () => {
   const [subStats, setSubStats] = useState({ subscriptions: 0, buffer: 0, bars_received: 0 });
   const [rtQuota, setRtQuota] = useState<{ used: number; remain: number } | null>(null);
   const [histQuota, setHistQuota] = useState<{ remain: number; today_used: number } | null>(null);
-  const [schemaDrawer, setSchemaDrawer] = useState<{
-    open: boolean;
-    tableName: string;
-    columns: TableSchema[];
-  }>({ open: false, tableName: '', columns: [] });
 
   // ── Backfill state ──
   const [backfillCategories, setBackfillCategories] = useState<BackfillCategory[]>([]);
@@ -246,50 +234,6 @@ const DataMap: React.FC = () => {
         return <Tag color="default">{status}</Tag>;
     }
   };
-
-  const columns: ProColumns<DataTableItem>[] = [
-    {
-      title: 'Table',
-      dataIndex: 'table_name',
-      width: 220,
-      key: 'table_name',
-      ellipsis: true,
-    },
-    {
-      title: 'Rows',
-      dataIndex: 'row_count',
-      width: 120,
-      key: 'row_count',
-      render: (_, r) => r.row_count.toLocaleString(),
-    },
-    {
-      title: 'Last Write',
-      dataIndex: 'last_write',
-      width: 180,
-      key: 'last_write',
-      render: (_, r) =>
-        r.last_write ? dayjs(r.last_write).format('YYYY-MM-DD HH:mm:ss') : '-',
-    },
-    {
-      title: 'Schema',
-      key: 'schema',
-      width: 100,
-      render: (_, r) => (
-        <Button
-          size="small"
-          onClick={() =>
-            setSchemaDrawer({
-              open: true,
-              tableName: r.table_name,
-              columns: r.schema,
-            })
-          }
-        >
-          {r.schema.length} cols
-        </Button>
-      ),
-    },
-  ];
 
   // ── Data Overview (daily coverage) ─────────────────────────────────────────
 
