@@ -81,7 +81,7 @@ US_MAX_RETRIES = 2
 US_PROGRESS_INTERVAL = 50  # log every N symbols
 
 
-def _replace_existing_bars(market: str, frequency: str, start: str, end: str, table_id: str = None):
+def _replace_existing_bars(market: str, frequency: str, start: str, end: str, table_id: str | None = None):
     """Delete existing bars in date range for idempotent backfill."""
     from google.cloud import bigquery as _bq
 
@@ -186,7 +186,7 @@ def _backfill_hk(
     gcs_bucket: str | None,
     local_dir: str | None,
     chunk_days: int = 365,
-    table_id: str = None,
+    table_id: str | None = None,
 ):
     """Backfill HK stocks: per-symbol serial processing with yfinance→akshare fallback.
 
@@ -271,10 +271,10 @@ def backfill(
     sleep_seconds: float = 3.0,
     frequency: str = "1m",
     source: str = "yfinance",
-    market: str = None,
+    market: str | None = None,
     replace: bool = False,
     skip_existing: bool = True,
-    table_id: str = None,
+    table_id: str | None = None,
 ):
     """Fetch historical bars in chunks and write to GCS or local storage.
 

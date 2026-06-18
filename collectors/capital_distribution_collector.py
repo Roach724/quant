@@ -10,4 +10,4 @@ class CapitalDistributionCollector(FutuCollector):
         data = self.call_api("get_capital_distribution", symbol)
         if data is None:
             return None
-        return data  # type: ignore[no-any-return]
+        return data

@@ -24,7 +24,7 @@ class EarningsPriceMoveCollector(FutuCollector):
             return None
         if hasattr(data, "empty") and data.empty:
             return None
-        return data  # type: ignore[no-any-return]
+        return data
 
 
 class EarningsPriceHistoryCollector(FutuCollector):
@@ -46,4 +46,4 @@ class EarningsPriceHistoryCollector(FutuCollector):
             return None
         if hasattr(data, "empty") and data.empty:
             return None
-        return data  # type: ignore[no-any-return]
+        return data

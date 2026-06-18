@@ -48,7 +48,7 @@ class FutuCollector:
             self._window_start = time.time()
             self._request_count = 0
 
-    def call_api(self, method_name: str, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+    def call_api(self, method_name: str, *args: object, **kwargs: object):
         self._rate_limit()
         ctx = self._get_ctx()
         method = getattr(ctx, method_name)
