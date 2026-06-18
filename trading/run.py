@@ -131,34 +131,22 @@ def run_strategy(strategy_id: int, env: str) -> None:
     scheduler = None
     if lookback_bars > 0:
         state_dir = Path(f"/var/data/trading/{env}/state")
+        state_dir.mkdir(parents=True, exist_ok=True)
         scheduler_path = state_dir / f"strategy_{strategy_id}_scheduler.json"
-        # Fresh start: clear old state from previous deployments.
-        # Per-run state (scheduler + multi-day) should not carry across
-        # deployments; TradingStateManager handles DB-level persistence.
-        import shutil as _shutil
-        state_root = Path("/var/data/trading/state")
-        strategy_state_dir = state_root / f"strategy_{strategy_id}"
-        cleared = []
-        for p in [scheduler_path, strategy_state_dir]:
-            try:
-                if p.is_file():
-                    p.unlink()
-                    cleared.append(p.name)
-                elif p.is_dir():
-                    _shutil.rmtree(p)
-                    cleared.append(f"{p.name}/")
-            except Exception:
-                pass
-        if cleared:
-            log.info("Cleared old state for fresh start: %s", ", ".join(cleared))
-        scheduler = RebalanceScheduler(
+        # Restore scheduler state from file if available (persists across restarts).
+        # If no state file exists, starts fresh with bar_count=0 (triggers lookback warmup).
+        scheduler = RebalanceScheduler.from_file(
+            file_path=str(scheduler_path),
             freq_minutes=freq_minutes,
             lookback_bars=lookback_bars,
             rebalance_every=int(live_cfg.get("rebalance_every", 1)),
-            state_path=str(scheduler_path),
         )
-        log.info("Scheduler config: freq=%dm lookback=%d bars rebalance_every=%d",
-                 freq_minutes, lookback_bars, int(live_cfg.get("rebalance_every", 1)))
+        if scheduler.bar_count > 0:
+            log.info("Scheduler resumed: bar_count=%d last_rebalance=%s",
+                     scheduler.bar_count, scheduler.last_rebalance_bar)
+        else:
+            log.info("Scheduler fresh start: freq=%dm lookback=%d bars rebalance_every=%d",
+                     freq_minutes, lookback_bars, int(live_cfg.get("rebalance_every", 1)))
 
     runner = TradingRunner(
         broker=broker,

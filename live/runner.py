@@ -821,15 +821,17 @@ class LiveRunner:
             return
 
         # ── 1. Load or create state ──
-        portfolio, live_state = self._load_or_create_portfolio()
+        portfolio, live_state, is_mid_day_resume = self._load_or_create_portfolio()
         state_mgr = self._state_manager
 
         trading_day = live_state.get("trading_day", 0)
         peak_equity = live_state.get("peak_equity", 0.0)
 
         logger.info(
-            "Multi-day live loop: starting day %d, cash=%.2f, %d positions, %d symbols",
-            trading_day + 1, portfolio.cash, len(portfolio.positions), len(symbols),
+            "Multi-day live loop: starting day %d%s, cash=%.2f, %d positions, %d symbols",
+            trading_day if is_mid_day_resume else trading_day + 1,
+            " (resuming mid-day)" if is_mid_day_resume else "",
+            portfolio.cash, len(portfolio.positions), len(symbols),
         )
 
         # ── 2. Strategy init (once) ──
@@ -843,8 +845,15 @@ class LiveRunner:
         self._live_peak_equity = peak_equity
         self._live_daily_start_equity = 0.0
 
+        # If resuming from mid-day checkpoint, don't increment on first iteration
+        _skip_first_increment = is_mid_day_resume
+
         while True:
-            trading_day += 1
+            if _skip_first_increment:
+                _skip_first_increment = False
+                # trading_day stays as-is (resume current day)
+            else:
+                trading_day += 1
             live_state["trading_day"] = trading_day
 
             # Check max days
@@ -898,7 +907,8 @@ class LiveRunner:
     def _load_or_create_portfolio(self):
         """Load portfolio from saved state or create fresh.
 
-        Returns (portfolio, live_state_dict).
+        Returns (portfolio, live_state_dict, is_mid_day_resume).
+        is_mid_day_resume=True means recovered from checkpoint (day incomplete).
         """
         broker_cfg = self.config.get("broker", {})
         live_cfg = broker_cfg.get("live", broker_cfg.get("paper", {}))
@@ -915,9 +925,9 @@ class LiveRunner:
                 live_state["trading_day"] = cp.get("trading_day", 0)
                 logger.info("Recovered from checkpoint: day %d, cash=%.2f",
                             live_state["trading_day"], portfolio.cash)
-                return portfolio, live_state
+                return portfolio, live_state, True  # mid-day resume
 
-        # Try full state
+        # Try full state (end-of-day save = day completed)
         if self._state_manager and self._state_manager.exists():
             state = self._state_manager.load()
             portfolio = StateManager.restore_portfolio(
@@ -933,13 +943,13 @@ class LiveRunner:
             logger.info("Loaded state: day %d, cash=%.2f, %d positions",
                         live_state["trading_day"], portfolio.cash,
                         len(portfolio.positions))
-            return portfolio, live_state
+            return portfolio, live_state, False  # day was completed
 
         # Fresh start
         portfolio = Portfolio(initial_capital=initial_capital)
         live_state = self._fresh_live_state()
         logger.info("Fresh portfolio: capital=%.0f", initial_capital)
-        return portfolio, live_state
+        return portfolio, live_state, False
 
     @staticmethod
     def _fresh_live_state() -> dict:
@@ -1081,14 +1091,22 @@ class LiveRunner:
                 else ZoneInfo("America/New_York")
             )
             if live_state.get("trading_day", 1) > 1:
-                # Resume: start from now, no replay
-                self._bq_source.last_ts = datetime.now(tz).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-                logger.info(
-                    "Resume day %d — skipping backfill, starting from %s",
-                    live_state["trading_day"], self._bq_source.last_ts,
-                )
+                # Resume: prefer saved last_bq_ts, fallback to now
+                saved_ts = live_state.get("last_bq_ts", "")
+                if saved_ts:
+                    self._bq_source.last_ts = saved_ts
+                    logger.info(
+                        "Resume day %d — continuing from saved ts %s",
+                        live_state["trading_day"], saved_ts,
+                    )
+                else:
+                    self._bq_source.last_ts = datetime.now(tz).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    )
+                    logger.info(
+                        "Resume day %d — no saved ts, starting from now %s",
+                        live_state["trading_day"], self._bq_source.last_ts,
+                    )
             elif lookback_bars > 0:
                 # Fresh start: replay exactly lookback_bars timestamps
                 from common.normalize import queryize_symbol
