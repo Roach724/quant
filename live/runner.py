@@ -321,7 +321,9 @@ class LiveRunner:
                 if hasattr(self.strategy, k):
                     setattr(self.strategy, k, v)
 
-        logger.info("Strategy initialised: %s", strat_name)
+        # Live mode: disable strategy warmup (model is pre-trained, no bar history needed)
+        if self._mode != "paper" and hasattr(self.strategy, "warmup_bars"):
+            self.strategy.warmup_bars = 0
 
         logger.info("Strategy initialised: %s", strat_name)
 
@@ -1242,8 +1244,12 @@ class LiveRunner:
                 last_reb = getattr(self.strategy, '_last_rebalance', None)
                 reb_every = getattr(self.strategy, 'rebalance_every', None)
                 if last_reb is not None and reb_every is not None:
-                    gap = reb_every - (bar_idx - last_reb)
-                    logger.info("Bar %d (累计 %d) — 距下次调仓 %d bars", bar_idx, self._live_bar_count, max(gap, 0))
+                    if last_reb < 0:
+                        # Strategy hasn't rebalanced yet (warmup phase)
+                        logger.info("Bar %d (累计 %d) — warmup", bar_idx, self._live_bar_count)
+                    else:
+                        gap = reb_every - (bar_idx - last_reb)
+                        logger.info("Bar %d (累计 %d) — 距下次调仓 %d bars", bar_idx, self._live_bar_count, max(gap, 0))
                 elif bar_idx % 50 == 0:
                     logger.info("Bar %d (累计 %d)", bar_idx, self._live_bar_count)
 
