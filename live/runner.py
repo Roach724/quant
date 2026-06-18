@@ -436,6 +436,12 @@ class LiveRunner:
             # 7c. Strategy signals
             try:
                 signals = self.strategy.on_bar(ctx, bar_idx)
+                # ── Bar progress log ──
+                last_reb = getattr(self.strategy, '_last_rebalance', None)
+                reb_every = getattr(self.strategy, 'rebalance_every', None)
+                if last_reb is not None and reb_every is not None:
+                    gap = reb_every - (bar_idx - last_reb)
+                    logger.info("Bar %d/%d — 距下次调仓 %d bars", bar_idx + 1, total_bars, max(gap, 0))
             except Exception:
                 logger.exception("Strategy.on_bar failed at bar %d", bar_idx)
                 signals = []
@@ -444,10 +450,12 @@ class LiveRunner:
             if signals:
                 buys = [s for s in signals if s.side in ("buy", "target")]
                 sells = [s for s in signals if s.side in ("sell", "close")]
+                details = ", ".join(f"{s.symbol}({s.side})" for s in signals[:20])
+                if len(signals) > 20:
+                    details += f" ... +{len(signals)-20} more"
                 logger.info(
-                    "Signals @ bar=%d: %d buy, %d sell — %s",
-                    bar_idx, len(buys), len(sells),
-                    ", ".join(f"{s.symbol}({s.side})" for s in signals[:10])
+                    "Bar %d: %d buy, %d sell — %s",
+                    bar_idx, len(buys), len(sells), details,
                 )
 
             # 7c2. Warmup: skip trading but record equity
@@ -1212,6 +1220,15 @@ class LiveRunner:
                 bar_idx = len(self._live_bars) - 1
                 signals = self.strategy.on_bar(live_ctx, bar_idx)
 
+                # ── Bar progress log ──
+                last_reb = getattr(self.strategy, '_last_rebalance', None)
+                reb_every = getattr(self.strategy, 'rebalance_every', None)
+                if last_reb is not None and reb_every is not None:
+                    gap = reb_every - (bar_idx - last_reb)
+                    logger.info("Bar %d (累计 %d) — 距下次调仓 %d bars", bar_idx, self._live_bar_count, max(gap, 0))
+                elif bar_idx % 50 == 0:
+                    logger.info("Bar %d (累计 %d)", bar_idx, self._live_bar_count)
+
                 # ── Warmup: skip trading but record equity ──
                 if day_warmup_remaining > 0:
                     day_warmup_remaining -= 1
@@ -1230,6 +1247,16 @@ class LiveRunner:
 
                 if signals:
                     n_buy = sum(1 for s in signals if s.side in ("buy", "target"))
+                    n_sell = len(signals) - n_buy
+                    details = ", ".join(
+                        f"{s.symbol}({s.side})" for s in signals[:20]
+                    )
+                    if len(signals) > 20:
+                        details += f" ... +{len(signals)-20} more"
+                    logger.info(
+                        "Bar %d 信号: %d buy, %d sell — %s",
+                        bar_idx, n_buy, n_sell, details,
+                    )
                     if n_buy > 0:
                         for s in signals:
                             if s.side in ("buy", "target") and s.weight is None:
