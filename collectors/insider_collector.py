@@ -14,7 +14,7 @@ class InsiderTradeCollector(FutuCollector):
             return None
         if hasattr(data, "empty") and data.empty:
             return None
-        return data  # type: ignore[no-any-return]
+        return data
 
 
 class InsiderHolderCollector(FutuCollector):
@@ -26,4 +26,4 @@ class InsiderHolderCollector(FutuCollector):
             return None
         if hasattr(data, "empty") and data.empty:
             return None
-        return data  # type: ignore[no-any-return]
+        return data

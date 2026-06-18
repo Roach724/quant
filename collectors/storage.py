@@ -52,7 +52,7 @@ def write_bars_to_gcs(
 
     Returns list of final GCS paths.
     """
-    from google.cloud import storage
+    from google.cloud import storage  # type: ignore[attr-defined]
 
     df = df.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"])
@@ -65,7 +65,7 @@ def write_bars_to_gcs(
     groups = df.groupby(["symbol", df["timestamp"].dt.date])
     for (symbol, _date), group in groups:
         ts = group["timestamp"].iloc[0]
-        final_path = build_gcs_path(market, "bars", frequency, symbol, ts)
+        final_path = build_gcs_path(market, "bars", frequency, str(symbol), ts)
 
         parquet_bytes = dataframe_to_parquet_bytes(group)
 

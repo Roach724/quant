@@ -68,7 +68,7 @@ class AkshareUSAdapter:
         if ak is None:
             raise ImportError("akshare is not installed. Run: pip install akshare")
 
-        all_records = []
+        all_records: list[dict[str, object]] = []
         if isinstance(start, str):
             start = pd.Timestamp(start).to_pydatetime()
         if isinstance(end, str):

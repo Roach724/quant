@@ -65,7 +65,7 @@ def get_adapter(source: str, frequency: str = "1m"):
     return YFinanceUSAdapter()
 
 
-def get_symbols(source: str, frequency: str, market: str = None) -> list[str]:
+def get_symbols(source: str, frequency: str, market: str | None = None) -> list[str]:
     """Determine symbol list from env var or auto-discovery.
 
     When SYMBOLS is "AUTO" (or not set) for HK 1d, the full HK stock pool is

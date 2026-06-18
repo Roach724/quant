@@ -44,7 +44,7 @@ COLLECTOR_MAP = {
 }
 
 
-def collect_table(table_name: str):  # type: ignore[no-untyped-def]
+def collect_table(table_name: str):
     """Collect data for a single table and save to GCS."""
     if table_name not in COLLECTOR_MAP:
         raise ValueError(f"Unknown table: {table_name}. Valid: {list(COLLECTOR_MAP.keys())}")
