@@ -230,6 +230,21 @@ class TradingRunner:
             _live_bars: list[dict] = []
             _bar_count = 0
 
+            # Prefetch historical bars for strategy lookback on resume
+            if self.scheduler and self.scheduler.bar_count > 0:
+                strat_lookback = int(adapter.strategy_kwargs.get("lookback", 0))
+                if strat_lookback > 0:
+                    from live.prefetch import prefetch_bars
+                    prefetched = prefetch_bars(symbols, market, strat_lookback)
+                    if prefetched:
+                        _live_bars.extend(prefetched)
+                        _bar_count = len(prefetched)
+                        source.last_ts = str(prefetched[-1]["timestamp"])
+                        logger.info(
+                            "Prefetched %d bars for strategy lookback (need %d)",
+                            len(prefetched), strat_lookback,
+                        )
+
             def _rebuild_ctx():
                 n = len(_live_bars)
                 if n == 0:
@@ -428,6 +443,20 @@ class TradingRunner:
             day_stop_reason = None
             stop_reason = None
             _portfolio = Portfolio(initial_capital=0)
+
+            # Prefetch historical bars for strategy lookback on resume
+            if self.scheduler and self.scheduler.bar_count > 0:
+                strat_lookback = int(cfg.get("strategy", {}).get("lookback", 0))
+                if strat_lookback > 0:
+                    from live.prefetch import prefetch_bars
+                    prefetched = prefetch_bars(symbols, market, strat_lookback)
+                    if prefetched:
+                        _live_bars.extend(prefetched)
+                        source.last_ts = str(prefetched[-1]["timestamp"])
+                        logger.info(
+                            "Prefetched %d bars for strategy lookback (need %d)",
+                            len(prefetched), strat_lookback,
+                        )
 
             def _rebuild_ctx():
                 """Rebuild StrategyContext from accumulated live bars (wide format)."""

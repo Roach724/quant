@@ -1145,6 +1145,22 @@ class LiveRunner:
         # Rolling bar buffer per day
         self._live_bars: list[dict] = getattr(self, "_live_bars", [])
 
+        # ── Prefetch historical bars for strategy lookback ──
+        strat_lookback = getattr(self.strategy, "lookback", 0)
+        prefetch_n = max(lookback_bars, strat_lookback)
+        if prefetch_n > 0 and len(self._live_bars) < prefetch_n:
+            from live.prefetch import prefetch_bars
+            prefetched = prefetch_bars(symbols, self._market, prefetch_n)
+            if prefetched:
+                self._live_bars = prefetched + self._live_bars
+                self._live_bar_count += len(prefetched)
+                # Update source.last_ts so real-time polling continues from here
+                source.last_ts = str(prefetched[-1]["timestamp"])
+                logger.info(
+                    "Prefetched %d bars for strategy lookback (need %d)",
+                    len(prefetched), prefetch_n,
+                )
+
         # Ensure strategy context is set up with proper symbol columns
         close = pd.DataFrame({sym: [float("nan")] for sym in symbols})
         src_init = DataFrameSource(close=close)
