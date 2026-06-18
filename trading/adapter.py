@@ -58,6 +58,11 @@ class StrategyAdapter:
             except TypeError:
                 self._strategy.on_init(ctx)
 
+        # Trading runner: scheduler handles lookback warmup,
+        # disable strategy-level warmup to avoid blocking early bars.
+        if hasattr(self._strategy, 'warmup_bars'):
+            self._strategy.warmup_bars = 0
+
         logger.info(
             "Loaded %s with %d symbols", self.strategy_name, len(symbols)
         )
