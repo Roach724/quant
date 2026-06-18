@@ -10,7 +10,7 @@ import asyncio
 import logging
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pandas as pd
 import yaml
@@ -196,17 +196,35 @@ class TradingRunner:
                 market=market,
                 poll_interval_sec=self.bar_interval,
             )
-            # Override BQ seed: resume from now if scheduler has state,
-            # otherwise replay just enough bars for warmup.
+            # Override BQ seed: replay exactly lookback_bars timestamps.
+            # Query BQ for the Nth most recent bar, use its timestamp as seed.
+            # For resume (bar_count > 0): start from now, no replay needed.
             if self.scheduler:
                 from zoneinfo import ZoneInfo
                 tz = ZoneInfo("Asia/Hong_Kong") if market == "hk" else ZoneInfo("America/New_York")
                 if self.scheduler.bar_count > 0:
                     source.last_ts = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
                 else:
-                    bars_needed = self.scheduler.lookback_bars
-                    seed = datetime.now(tz) - timedelta(minutes=bars_needed * self.scheduler.freq_minutes)
-                    source.last_ts = seed.strftime("%Y-%m-%d %H:%M:%S")
+                    from common.normalize import queryize_symbol
+                    from google.cloud import bigquery as _bq
+                    try:
+                        first_sym = queryize_symbol(symbols[0], market)
+                        client = _bq.Client(project="deductive-notch-495015-c2")
+                        # Use the table name from source or derive from market
+                        row = client.query(
+                            f"SELECT timestamp FROM quant.{market}_bars_5m "
+                            f"WHERE symbol = @sym ORDER BY timestamp DESC "
+                            f"LIMIT 1 OFFSET {self.scheduler.lookback_bars - 1}",
+                            job_config=_bq.QueryJobConfig(
+                                query_parameters=[_bq.ScalarQueryParameter("sym", "STRING", first_sym)]
+                            ),
+                        ).result()
+                        rows = list(row)
+                        if rows:
+                            source.last_ts = str(rows[0][0])
+                            logger.info("BQ seed: %s (exactly %d bars)", source.last_ts, self.scheduler.lookback_bars)
+                    except Exception:
+                        pass  # fall through to default seed
 
             _ctx = {"ctx": None}
             _live_bars: list[dict] = []
@@ -359,17 +377,35 @@ class TradingRunner:
                 market=market,
                 poll_interval_sec=bar_interval,
             )
-            # Override BQ seed: resume from now if scheduler has state,
-            # otherwise replay just enough bars for warmup.
+            # Override BQ seed: replay exactly lookback_bars timestamps.
+            # Query BQ for the Nth most recent bar, use its timestamp as seed.
+            # For resume (bar_count > 0): start from now, no replay needed.
             if self.scheduler:
                 from zoneinfo import ZoneInfo
                 tz = ZoneInfo("Asia/Hong_Kong") if market == "hk" else ZoneInfo("America/New_York")
                 if self.scheduler.bar_count > 0:
                     source.last_ts = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
                 else:
-                    bars_needed = self.scheduler.lookback_bars
-                    seed = datetime.now(tz) - timedelta(minutes=bars_needed * self.scheduler.freq_minutes)
-                    source.last_ts = seed.strftime("%Y-%m-%d %H:%M:%S")
+                    from common.normalize import queryize_symbol
+                    from google.cloud import bigquery as _bq
+                    try:
+                        first_sym = queryize_symbol(symbols[0], market)
+                        client = _bq.Client(project="deductive-notch-495015-c2")
+                        # Use the table name from source or derive from market
+                        row = client.query(
+                            f"SELECT timestamp FROM quant.{market}_bars_5m "
+                            f"WHERE symbol = @sym ORDER BY timestamp DESC "
+                            f"LIMIT 1 OFFSET {self.scheduler.lookback_bars - 1}",
+                            job_config=_bq.QueryJobConfig(
+                                query_parameters=[_bq.ScalarQueryParameter("sym", "STRING", first_sym)]
+                            ),
+                        ).result()
+                        rows = list(row)
+                        if rows:
+                            source.last_ts = str(rows[0][0])
+                            logger.info("BQ seed: %s (exactly %d bars)", source.last_ts, self.scheduler.lookback_bars)
+                    except Exception:
+                        pass  # fall through to default seed
 
             _ctx = {"ctx": None}
             _live_bars: list[dict] = []
