@@ -48,8 +48,8 @@ class _ContextFilter(logging.Filter):
         self.module = module
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.env = self.env  # type: ignore[attr-defined]
-        record.module = self.module  # type: ignore[attr-defined]
+        record.env = self.env
+        record.module = self.module
         return True
 
 

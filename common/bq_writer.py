@@ -30,18 +30,18 @@ RETRY_BASE_S = 1.0
 
 def _df_to_rows(df: pd.DataFrame) -> list[dict[str, Any]]:
     """Convert DataFrame to list of dict rows, handling Timestamps and NaN."""
-    rows = []
+    rows: list[dict[str, Any]] = []
     for _, row in df.iterrows():
-        d = {}
+        d: dict[str, Any] = {}
         for k, v in row.items():
             if isinstance(v, pd.Timestamp):
-                d[k] = v.isoformat()
+                d[str(k)] = v.isoformat()
             elif isinstance(v, float) and pd.isna(v):
-                d[k] = None
+                d[str(k)] = None
             elif isinstance(v, pd.Period):
-                d[k] = str(v)
+                d[str(k)] = str(v)
             else:
-                d[k] = v
+                d[str(k)] = v
         rows.append(d)
     return rows
 

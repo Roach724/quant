@@ -37,7 +37,7 @@ class AlpacaUSAdapter:
         response = self._client.get_stock_bars(request)
 
         records = []
-        for symbol, bars in response.data.items():
+        for symbol, bars in response.data.items():  # type: ignore[union-attr]
             for bar in bars:
                 records.append(
                     {
@@ -59,7 +59,7 @@ class AlpacaUSAdapter:
         from alpaca.data.requests import StockLatestBarRequest
 
         response = self._client.get_stock_latest_bar(StockLatestBarRequest(symbol_or_symbols=[]))
-        return sorted(response.data.keys())
+        return sorted(response.data.keys())  # type: ignore[union-attr]
 
     def market_hours(self, d: date) -> tuple[time, time]:
         return time(9, 30), time(16, 0)

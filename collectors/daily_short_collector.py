@@ -15,4 +15,4 @@ class DailyShortCollector(FutuCollector):
             return None
         if data is None or (hasattr(data, "empty") and data.empty):
             return None
-        return data  # type: ignore[no-any-return]
+        return data

@@ -14,7 +14,7 @@ class OwnerPlateCollector(FutuCollector):
             return None
         if hasattr(data, "empty") and data.empty:
             return None
-        return data  # type: ignore[no-any-return]
+        return data
 
 
 class RehabCollector(FutuCollector):
@@ -35,7 +35,7 @@ class RehabCollector(FutuCollector):
             return None
         if hasattr(data, "empty") and data.empty:
             return None
-        return data  # type: ignore[no-any-return]
+        return data
 
 
 class TopTenBrokersCollector(FutuCollector):
@@ -50,4 +50,4 @@ class TopTenBrokersCollector(FutuCollector):
             return None
         if hasattr(data, "empty") and data.empty:
             return None
-        return data  # type: ignore[no-any-return]
+        return data

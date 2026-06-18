@@ -26,4 +26,4 @@ class MorningstarCollector(FutuCollector):
                 row[k] = str(v.get("label") or v.get("context", "") or "")[:500]
             else:
                 row[k] = str(v)[:500]
-        return pd.DataFrame([row])  # type: ignore[no-any-return]
+        return pd.DataFrame([row])
