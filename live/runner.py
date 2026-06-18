@@ -1052,6 +1052,9 @@ class LiveRunner:
         day_stop_reason: str | None = None
         day_start_time = datetime.now(timezone.utc)
         day_warmup_remaining = lookback_bars
+        # Resume: skip warmup if we already have enough bars from previous runs
+        if self._live_bar_count >= lookback_bars:
+            day_warmup_remaining = 0
         if lookback_bars > 0:
             logger.info("Live warmup: skipping trading for first %d bars", lookback_bars)
 
@@ -1062,19 +1065,15 @@ class LiveRunner:
                 market=self._market,
                 poll_interval_sec=poll_interval,
             )
-            # Day N resume (N > 1) after restart: don't backfill, start from now.
-            # Otherwise BQDataSource replays historical bars → strategy.on_bar
-            # re-generates signals → positions double → equity inflates.
+            # ── Override BQ seed ──
+            from zoneinfo import ZoneInfo
+            tz = (
+                ZoneInfo("Asia/Hong_Kong")
+                if self._market == "hk"
+                else ZoneInfo("America/New_York")
+            )
             if live_state.get("trading_day", 1) > 1:
-                # BQ timestamps are in market-local time (ET/HKT) labeled as UTC.
-                # Must seed last_ts in market-local time, not real UTC.
-                from zoneinfo import ZoneInfo
-
-                tz = (
-                    ZoneInfo("Asia/Hong_Kong")
-                    if self._market == "hk"
-                    else ZoneInfo("America/New_York")
-                )
+                # Resume: start from now, no replay
                 self._bq_source.last_ts = datetime.now(tz).strftime(
                     "%Y-%m-%d %H:%M:%S"
                 )
@@ -1082,6 +1081,30 @@ class LiveRunner:
                     "Resume day %d — skipping backfill, starting from %s",
                     live_state["trading_day"], self._bq_source.last_ts,
                 )
+            elif lookback_bars > 0:
+                # Fresh start: replay exactly lookback_bars timestamps
+                from common.normalize import queryize_symbol
+                from google.cloud import bigquery as _bq
+                try:
+                    first_sym = queryize_symbol(symbols[0], self._market)
+                    client = _bq.Client(project="deductive-notch-495015-c2")
+                    row = client.query(
+                        f"SELECT timestamp FROM quant.{self._market}_bars_5m "
+                        f"WHERE symbol = @sym ORDER BY timestamp DESC "
+                        f"LIMIT 1 OFFSET {lookback_bars - 1}",
+                        job_config=_bq.QueryJobConfig(
+                            query_parameters=[_bq.ScalarQueryParameter("sym", "STRING", first_sym)]
+                        ),
+                    ).result()
+                    rows = list(row)
+                    if rows:
+                        self._bq_source.last_ts = str(rows[0][0])
+                        logger.info(
+                            "BQ seed: %s (exactly %d bars for lookback)",
+                            self._bq_source.last_ts, lookback_bars,
+                        )
+                except Exception:
+                    logger.debug("BQ seed query failed, using default seed")
         else:
             # Resume from previous day — restore last_ts
             if live_state.get("last_bq_ts"):
