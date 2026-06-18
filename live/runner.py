@@ -1052,6 +1052,9 @@ class LiveRunner:
         day_stop_reason: str | None = None
         day_start_time = datetime.now(timezone.utc)
         day_warmup_remaining = lookback_bars
+        # Resume: skip warmup if we already have enough bars from previous runs
+        if self._live_bar_count >= lookback_bars:
+            day_warmup_remaining = 0
         if lookback_bars > 0:
             logger.info("Live warmup: skipping trading for first %d bars", lookback_bars)
 
