@@ -257,7 +257,7 @@ class BQDataSource:
         if latest > (self._last_ts or ""):
             self._last_ts = latest
 
-        logger.debug("BQDataSource: _poll returned %d rows, last_ts=%s (market-local)", n_rows, latest)
+        logger.info("BQDataSource: _poll returned %d rows, last_ts=%s (market-local)", n_rows, latest)
 
         # Feed each unique timestamp's bars as a batch
         df["timestamp"] = pd.to_datetime(df["timestamp"])
