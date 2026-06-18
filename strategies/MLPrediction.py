@@ -47,6 +47,7 @@ class MLPrediction(Strategy):
     factor_top_n: int = 15
     model_name: str = "momentum_lgbm"
     model_version: int | str = "latest"
+    warmup_bars: int = 20  # skip trading for first N bars (paper warmup); set 0 for live
     _SENTINEL: float = -999.0  # default score for failed/invalid predictions
 
     def __init__(self, **kwargs):
@@ -110,7 +111,7 @@ class MLPrediction(Strategy):
             return []
         if bar - self._last_rebalance < self.rebalance_every:
             return []
-        if bar < 20:
+        if bar < self.warmup_bars:
             return []
 
         self._last_rebalance = bar
