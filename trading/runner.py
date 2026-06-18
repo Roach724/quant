@@ -283,15 +283,29 @@ class TradingRunner:
                     _ctx["ctx"] = ctx
                     # Scheduler gating
                     dec = self.scheduler.on_bar() if self.scheduler else Decision.TRADE
+                    # ── Bar progress log ──
+                    if self.scheduler:
+                        s = self.scheduler
+                        if s.last_rebalance_bar is not None:
+                            gap = s.rebalance_every - (s.bar_count - s.last_rebalance_bar)
+                        else:
+                            gap = s.lookback_bars - s.bar_count
+                        logger.info("Bar %d — %s, 距下次 %d bars", _bar_count, dec.value, max(gap, 0))
                     if dec in (Decision.WAITING, Decision.SKIP):
                         return
                     signals = adapter.generate_signals(ctx, _bar_count - 1, strategy_id)
                     if signals:
+                        details = ", ".join(
+                            f"{s.symbol}({s.side})" for s in signals[:20]
+                        )
+                        if len(signals) > 20:
+                            details += f" ... +{len(signals)-20} more"
                         logger.info(
-                            "Strategy %d: %d signals at bar %d",
+                            "Strategy %d: %d signals at bar %d — %s",
                             strategy_id,
                             len(signals),
                             _bar_count,
+                            details,
                         )
                         self._execute_signals(signals, bar_data)
                         if self.scheduler:
@@ -474,6 +488,15 @@ class TradingRunner:
                     _ctx["ctx"] = ctx
                     # Scheduler gating
                     dec = self.scheduler.on_bar() if self.scheduler else Decision.TRADE
+                    # ── Bar progress log ──
+                    if self.scheduler:
+                        s = self.scheduler
+                        if s.last_rebalance_bar is not None:
+                            gap = s.rebalance_every - (s.bar_count - s.last_rebalance_bar)
+                        else:
+                            gap = s.lookback_bars - s.bar_count
+                        logger.info("Bar %d (累计 %d) — %s, 距下次 %d bars",
+                                    bar_count, day_bars, dec.value, max(gap, 0))
                     if dec in (Decision.WAITING, Decision.SKIP):
                         return
                     signals = adapter.generate_signals(
@@ -482,12 +505,18 @@ class TradingRunner:
                         strategy_id,
                     )
                     if signals:
+                        details = ", ".join(
+                            f"{s.symbol}({s.side})" for s in signals[:20]
+                        )
+                        if len(signals) > 20:
+                            details += f" ... +{len(signals)-20} more"
                         logger.info(
-                            "Strategy %d: %d signals at bar %d (day %d)",
+                            "Strategy %d: %d signals at bar %d (day %d) — %s",
                             strategy_id,
                             len(signals),
                             bar_count,
                             trading_day,
+                            details,
                         )
                         self._execute_signals(signals, bar_data)
                         if self.scheduler:
