@@ -1232,7 +1232,7 @@ class LiveRunner:
                 # C2: 陈旧/回放 bar 只补缓冲，不交易
                 bar_ts = pd.to_datetime(bar_data.get("timestamp"), utc=True)
                 age = (datetime.now(timezone.utc) - bar_ts).total_seconds()
-                if is_stale_bar(bar_ts, bar_period_sec=300):
+                if is_stale_bar(bar_ts, bar_period_sec=300, market=self._market):
                     logger.info("Bar %d — stale(age=%.0fs) buffer-only, skip trade", self._live_bar_count, age)
                     return
 
