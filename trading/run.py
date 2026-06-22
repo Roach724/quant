@@ -124,7 +124,9 @@ def run_strategy(strategy_id: int, env: str) -> None:
     broker = None  # Will be lazily created in TradingRunner
     capital = CapitalManager(session)
     state_mgr = TradingStateManager(session)
-    bridge = SignalBridge(broker, capital, market=market)
+    risk_cfg = cfg.get("risk", {})
+    position_size_pct = float(risk_cfg.get("position_size_pct", 0.2))
+    bridge = SignalBridge(broker, capital, market=market, position_size_pct=position_size_pct)
 
     # Create scheduler if lookback configured
     from trading.scheduler import RebalanceScheduler

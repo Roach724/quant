@@ -443,6 +443,13 @@ class TradingRunner:
             day_stop_reason = None
             stop_reason = None
             _portfolio = Portfolio(initial_capital=0)
+            # 从 CapitalManager 恢复真实持仓，否则 restart 后 strategy 看到空仓
+            # → 不平旧仓(不 close)、只买新仓 → 旧仓占着现金不变现 → 买不起
+            for vp in self.capital.get_positions(strategy_id):
+                if vp.qty and vp.qty > 0:
+                    p = Position(vp.symbol, entry_price=vp.avg_entry_price)
+                    p.add(int(vp.qty), vp.avg_entry_price)
+                    _portfolio.positions[vp.symbol] = p
 
             # Prefetch historical bars for strategy lookback on resume
             if self.scheduler and self.scheduler.bar_count > 0:
