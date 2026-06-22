@@ -15,9 +15,11 @@ from datetime import UTC, datetime
 import pandas as pd
 import yaml
 
+from common.bar_utils import is_stale_bar
 from engine.data import DataFrameSource
 from engine.portfolio import Portfolio, Position
 from engine.strategy import StrategyContext
+
 from trading.adapter import StrategyAdapter
 from trading.capital import CapitalManager
 from trading.models import TradingStrategy as TSModel
@@ -232,7 +234,7 @@ class TradingRunner:
 
             # Prefetch historical bars for strategy lookback on resume
             if self.scheduler and self.scheduler.bar_count > 0:
-                strat_lookback = int(adapter.strategy_kwargs.get("lookback", 0))
+                strat_lookback = int(self.scheduler.lookback_bars or 0)
                 if strat_lookback > 0:
                     from live.prefetch import prefetch_bars
                     prefetched = prefetch_bars(symbols, market, strat_lookback)
@@ -284,6 +286,14 @@ class TradingRunner:
                 nonlocal _bar_count
                 _live_bars.append(bar_data)
                 _bar_count += 1
+
+                # C2: 陈旧/回放 bar 只补缓冲，不推进 scheduler/不交易
+                if self.scheduler:
+                    bar_ts = pd.to_datetime(bar_data.get("timestamp"), utc=True)
+                    age = (datetime.now(UTC) - bar_ts).total_seconds()
+                    if is_stale_bar(bar_ts, bar_period_sec=self.scheduler.freq_minutes * 60):
+                        logger.info("Bar %d — stale(age=%.0fs) buffer-only, skip trade", _bar_count, age)
+                        return
 
                 ctx = _rebuild_ctx()
                 if ctx is None:
@@ -453,12 +463,13 @@ class TradingRunner:
 
             # Prefetch historical bars for strategy lookback on resume
             if self.scheduler and self.scheduler.bar_count > 0:
-                strat_lookback = int(cfg.get("strategy", {}).get("lookback", 0))
+                strat_lookback = int(self.scheduler.lookback_bars or 0)
                 if strat_lookback > 0:
                     from live.prefetch import prefetch_bars
                     prefetched = prefetch_bars(symbols, market, strat_lookback)
                     if prefetched:
                         _live_bars.extend(prefetched)
+                        bar_count = len(prefetched)
                         source.last_ts = str(prefetched[-1]["timestamp"])
                         logger.info(
                             "Prefetched %d bars for strategy lookback (need %d)",
@@ -508,6 +519,14 @@ class TradingRunner:
                 _live_bars.append(bar_data)
                 bar_count += 1
                 day_bars += 1
+
+                # C2: 陈旧/回放 bar 只补缓冲，不推进 scheduler/不交易
+                if self.scheduler:
+                    bar_ts = pd.to_datetime(bar_data.get("timestamp"), utc=True)
+                    age = (datetime.now(UTC) - bar_ts).total_seconds()
+                    if is_stale_bar(bar_ts, bar_period_sec=self.scheduler.freq_minutes * 60):
+                        logger.info("Bar %d — stale(age=%.0fs) buffer-only, skip trade", bar_count, age)
+                        return
 
                 ctx = _rebuild_ctx()
                 if ctx is None:

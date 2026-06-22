@@ -42,6 +42,8 @@ from engine.cost_model import TransactionCost
 from engine.data import DataFrameSource
 from engine.portfolio import Portfolio, Position
 from engine.strategy import StrategyContext
+
+from common.bar_utils import is_stale_bar
 from live.market_calendar import MarketCalendar
 from live.config import load_config
 from live.observer import Observer
@@ -1226,6 +1228,13 @@ class LiveRunner:
                 if len(self._live_bars) > 500:
                     self._live_bars = self._live_bars[-500:]
                 self._live_bar_count += 1
+
+                # C2: 陈旧/回放 bar 只补缓冲，不交易
+                bar_ts = pd.to_datetime(bar_data.get("timestamp"), utc=True)
+                age = (datetime.now(timezone.utc) - bar_ts).total_seconds()
+                if is_stale_bar(bar_ts, bar_period_sec=300):
+                    logger.info("Bar %d — stale(age=%.0fs) buffer-only, skip trade", self._live_bar_count, age)
+                    return
 
                 portfolio.mark_and_record(ts, bar_data)
                 eq = portfolio._mark_to_market(bar_data)
