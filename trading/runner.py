@@ -706,7 +706,12 @@ class TradingRunner:
                             Portfolio(initial_capital=0),
                             None,
                             {
-                                "trading_day": trading_day,
+                                # Only a full market_close confirms the day completed.
+                                # A mid-day stop rolls back so restart's +=1 returns to
+                                # the same day (avoids false MAX_TRADING_DAYS on stop/start).
+                                "trading_day": trading_day
+                                if day_stop_reason == "market_close"
+                                else trading_day - 1,
                                 "bar_count": bar_count,
                                 "peak_equity": peak_equity,
                                 "stop_reason": day_stop_reason,
