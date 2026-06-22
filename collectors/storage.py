@@ -52,7 +52,7 @@ def write_bars_to_gcs(
 
     Returns list of final GCS paths.
     """
-    from google.cloud import storage  # type: ignore[attr-defined]
+    from google.cloud import storage
 
     df = df.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"])
