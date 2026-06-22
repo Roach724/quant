@@ -169,7 +169,9 @@ class BarHandler(CurKlineHandlerBase):
 
         # Find latest timestamp per symbol
         latest_ts: dict[str, str] = {}
-        for sym, ts in self._latest:
+        # Snapshot keys first: onRecvRSP() writes self._latest from the OpenD push
+        # thread concurrently; iterating the live dict can raise RuntimeError.
+        for sym, ts in list(self._latest):
             if sym not in latest_ts or ts > latest_ts[sym]:
                 latest_ts[sym] = ts
 
