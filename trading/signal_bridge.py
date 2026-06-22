@@ -30,6 +30,7 @@ class SignalBridge:
         execution_slices: int = 10,
         execution_window: int = 1800,
         market: str = "us",
+        position_size_pct: float = 0.2,
     ):
         self.broker = broker
         self.capital = capital
@@ -40,6 +41,7 @@ class SignalBridge:
         self.execution_slices = execution_slices
         self.execution_window = execution_window
         self.market = market
+        self.position_size_pct = position_size_pct
 
     def _get_executor(self):
         """根据配置创建执行算法实例"""
@@ -99,9 +101,12 @@ class SignalBridge:
                 return None
             qty = int(pos.qty)
         elif signal.qty is None:
-            weight = signal.weight or 1.0
-            cash_avail = acct.cash * weight
-            qty = max(1, int(cash_avail / exec_price))
+            # 贪心 sizing: 单只预算 = min(剩余现金, 总权益 × position_size_pct)
+            # MLPrediction 已按分数排序，高分先买；大 lot 买不起就跳过，小 lot 用剩余现金
+            positions = self.capital.get_positions(signal.strategy_id)
+            equity = acct.cash + sum(p.market_value for p in positions)
+            budget = min(acct.cash, equity * self.position_size_pct)
+            qty = max(1, int(budget / exec_price))
         else:
             qty = signal.qty
 
@@ -116,7 +121,10 @@ class SignalBridge:
             if required > acct.cash:
                 qty = max(1, int((acct.cash - commission) / exec_price))
                 if qty <= 0:
-                    logger.debug("Insufficient cash for %s buy", signal.symbol)
+                    logger.info(
+                        "Insufficient cash for %s buy (need %.0f, have %.0f)",
+                        signal.symbol, required, acct.cash,
+                    )
                     return None
                 commission = self._commission(qty, exec_price)
 
