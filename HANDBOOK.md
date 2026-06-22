@@ -350,6 +350,36 @@ python scripts/backfill_index.py --market us --freq 1d --start 2020-01-01
 
 ---
 
+### 5.7 BQ 时间戳时区规范 ⚠️
+
+**核心问题**：Futu OpenD 推送各市场**本地时间**的 K 线（US=ET, HK=HKT），
+ws_collector **裸写 BQ**（不做时区转换），BQ 存储时带 UTC offset（`09:35+00:00`）。
+**BQ 里的 timestamp 实际是 market-local 时间，不是 UTC。**
+
+| 市场 | Futu 返回 | BQ 存储 | 实际 UTC | 偏移 |
+|------|----------|---------|----------|------|
+| US | `09:35` ET | `09:35+00:00` | `13:35 UTC`（EDT） | -4h/-5h |
+| HK | `15:55` HKT | `15:55+00:00` | `07:55 UTC` | -8h |
+| Crypto | `09:35` UTC | `09:35+00:00` | `09:35 UTC` | 0h |
+
+**策略**：不动数据源（改 BQ 会影响所有下游查询），在**消费端统一纠正**。
+
+**纠正函数**：`common/bar_utils.is_stale_bar(bar_ts, market=...)`
+- 剥离 BQ 的假 UTC offset（`replace(tzinfo=None)`）
+- 用市场真实时区重新解释（`ZoneInfo(\"America/New_York\")`）
+- 转到真正 UTC（`astimezone(UTC)`）
+- `ZoneInfo` 自动处理夏令时（EDT/EST）
+
+**受影响的下游**（需要绝对 UTC 判断的）：
+- `trading/runner.py` / `live/runner.py`: C2 陈旧 bar 防护
+- 未来任何用 `bar_ts` 和 `datetime.now(UTC)` 比较的逻辑
+
+**不需要纠正的场景**（在 market-local 语义空间内运行）：
+- `BQDataSource._poll`: `WHERE timestamp > @last_ts`（last_ts 也是 market-local）
+- 因子计算、策略 on_bar 等（使用相对 bar_idx，不依赖绝对时间）
+
+---
+
 ## 6. 因子注册与计算规范
 
 ### 6.1 FactorRegistry
