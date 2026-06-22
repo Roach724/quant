@@ -291,7 +291,7 @@ class TradingRunner:
                 if self.scheduler:
                     bar_ts = pd.to_datetime(bar_data.get("timestamp"), utc=True)
                     age = (datetime.now(UTC) - bar_ts).total_seconds()
-                    if is_stale_bar(bar_ts, bar_period_sec=self.scheduler.freq_minutes * 60):
+                    if is_stale_bar(bar_ts, bar_period_sec=self.scheduler.freq_minutes * 60, market=market):
                         logger.info("Bar %d — stale(age=%.0fs) buffer-only, skip trade", _bar_count, age)
                         return
 
@@ -524,7 +524,7 @@ class TradingRunner:
                 if self.scheduler:
                     bar_ts = pd.to_datetime(bar_data.get("timestamp"), utc=True)
                     age = (datetime.now(UTC) - bar_ts).total_seconds()
-                    if is_stale_bar(bar_ts, bar_period_sec=self.scheduler.freq_minutes * 60):
+                    if is_stale_bar(bar_ts, bar_period_sec=self.scheduler.freq_minutes * 60, market=market):
                         logger.info("Bar %d — stale(age=%.0fs) buffer-only, skip trade", bar_count, age)
                         return
 
