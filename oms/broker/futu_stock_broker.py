@@ -204,6 +204,9 @@ class FutuStockBroker:
             avg_price=float(row.get("dealt_avg_price", 0))
             if row.get("dealt_avg_price")
             else None,
+            created_at=pd.to_datetime(row["create_time"]).to_pydatetime()
+            if "create_time" in row and pd.notna(row["create_time"])
+            else None,
         )
 
     async def get_positions(self) -> list[BrokerPosition]:
@@ -268,6 +271,9 @@ class FutuStockBroker:
                     avg_price=_safe_float(row.get("dealt_avg_price", 0))
                     if row.get("dealt_avg_price")
                     else None,
+                    created_at=pd.to_datetime(row["create_time"]).to_pydatetime()
+                    if "create_time" in row and pd.notna(row["create_time"])
+                    else None,
                 )
             )
         return orders
@@ -290,6 +296,9 @@ class FutuStockBroker:
                     status=str(row.get("order_status", "unknown")).lower(),
                     avg_price=_safe_float(row.get("dealt_avg_price", 0))
                     if row.get("dealt_avg_price")
+                    else None,
+                    created_at=pd.to_datetime(row["create_time"]).to_pydatetime()
+                    if "create_time" in row and pd.notna(row["create_time"])
                     else None,
                 )
             )
