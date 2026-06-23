@@ -181,20 +181,28 @@ def run_strategy(strategy_id: int, env: str) -> None:
     try:
         runner.start_strategy(strat)
 
-        # Keep alive — TradingRunner manages threads internally
-        # This process lives until SIGTERM (from stop API)
+        # Keep alive — TradingRunner manages threads internally.
+        # Status check uses raw sqlite3 to avoid SQLAlchemy session conflict:
+        # the trading thread calls capital.commit() on the same DB, and a
+        # concurrent session.get() can trigger IllegalStateChangeError.
+        import sqlite3
+
+        db_path = f"/var/data/trading/{env}/trading.db"
         while True:
             time.sleep(10)
-            # Check if the strategy is still supposed to be running
-            session = get_trading_session(env)
             try:
-                s = session.get(TSModel, strategy_id)
-                if s and s.status != "running":
-                    log.info("Strategy status changed to '%s', stopping...", s.status)
+                conn = sqlite3.connect(db_path)
+                row = conn.execute(
+                    "SELECT status FROM trading_strategies WHERE id = ?",
+                    (strategy_id,),
+                ).fetchone()
+                conn.close()
+                if row and row[0] != "running":
+                    log.info("Strategy status changed to '%s', stopping...", row[0])
                     runner.stop()
                     break
-            finally:
-                session.close()
+            except Exception as e:
+                log.warning("Status check failed: %s", e)
 
     except KeyboardInterrupt:
         log.info("Keyboard interrupt — stopping")
