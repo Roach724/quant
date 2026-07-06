@@ -24,6 +24,7 @@ from trading.adapter import StrategyAdapter
 from trading.capital import CapitalManager
 from trading.models import TradingStrategy as TSModel
 from trading.scheduler import Decision, RebalanceScheduler
+from engine.risk.monitor import RiskMonitor
 from trading.signal_bridge import SignalBridge
 from trading.state import TradingStateManager
 
@@ -61,6 +62,8 @@ class TradingRunner:
         self._threads: dict[int, threading.Thread] = {}
         self._stop_events: dict[int, threading.Event] = {}
         self._running = False
+        self._risk_monitor = RiskMonitor()
+        self._risk_monitor_started = False
 
     # ── Lifecycle ──
 
@@ -77,9 +80,42 @@ class TradingRunner:
             len(self._threads),
         )
 
+        # ── Post-trade risk monitor (cross-strategy) ──
+        if not self._risk_monitor_started:
+            self._risk_monitor_started = True
+            capital = self.capital  # capture reference
+
+            def _risk_state():
+                total_equity = 0.0
+                total_cash = 0.0
+                positions_detail = {}
+                for sid in self._strategies:
+                    acct = capital.get_account(sid)
+                    if not acct:
+                        continue
+                    total_cash += acct.cash
+                    pos_val = 0.0
+                    for vp in capital.get_positions(sid):
+                        val = getattr(vp, 'market_value', 0) or (getattr(vp, 'qty', 0) * getattr(vp, 'avg_price', 0))
+                        pos_val += val
+                        key = f"s{sid}:{vp.symbol}"
+                        positions_detail[key] = val
+                    total_equity += acct.cash + pos_val
+                return {
+                    "equity": total_equity,
+                    "cash": total_cash,
+                    "positions_value": total_equity - total_cash,
+                    "positions": positions_detail,
+                }
+
+            self._risk_monitor = RiskMonitor()
+            self._risk_monitor.add_check("trading", _risk_state)
+            self._risk_monitor.start()
+
     def stop(self):
         """停止所有策略"""
         self._running = False
+        self._risk_monitor.stop()
         for sid, stop in self._stop_events.items():
             stop.set()
         for sid, thread in self._threads.items():
@@ -186,7 +222,19 @@ class TradingRunner:
         try:
             from live.bq_datasource import BQDataSource
 
-            market = self._strategies[strategy_id].market
+            strat_model = self._strategies[strategy_id]
+            market = strat_model.market
+
+            # Risk config
+            risk_cfg = {}
+            if strat_model.config_yaml:
+                try:
+                    cfg = yaml.safe_load(strat_model.config_yaml) or {}
+                    risk_cfg = cfg.get("risk", {})
+                except Exception:
+                    pass
+            _max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))
+            _max_daily_loss = float(risk_cfg.get("max_daily_loss", 0.05))
             symbols = self._resolve_bq_symbols(market)
             logger.info(
                 "Strategy %d: resolved %d symbols from BQ",
@@ -282,8 +330,11 @@ class TradingRunner:
                     config={"symbols": symbols_list},
                 )
 
+            peak_equity = 0.0
+            day_start_equity = 0.0
+
             def _on_bar(bar_data: dict):
-                nonlocal _bar_count
+                nonlocal _bar_count, peak_equity, day_start_equity
                 _live_bars.append(bar_data)
                 _bar_count += 1
 
@@ -293,6 +344,36 @@ class TradingRunner:
                     age = (datetime.now(UTC) - bar_ts).total_seconds()
                     if is_stale_bar(bar_ts, bar_period_sec=self.scheduler.freq_minutes * 60, market=market):
                         logger.info("Bar %d — stale(age=%.0fs) buffer-only, skip trade", _bar_count, age)
+                        return
+
+                # ── Risk: drawdown + daily loss check ──
+                acct = self.capital.get_account(strategy_id)
+                if acct:
+                    closes = bar_data.get("close", {})
+                    positions = self.capital.get_positions(strategy_id)
+                    pos_value = sum(
+                        vp.qty * closes.get(vp.symbol, 0)
+                        for vp in positions
+                        if getattr(vp, "qty", 0) and vp.qty > 0
+                    )
+                    eq = acct.cash + pos_value
+                    if eq > peak_equity:
+                        peak_equity = eq
+                    current_dd = (peak_equity - eq) / max(peak_equity, 1) if peak_equity > 0 else 0.0
+                    if day_start_equity == 0:
+                        day_start_equity = eq
+                    daily_loss = (
+                        (day_start_equity - eq) / max(day_start_equity, 1)
+                        if day_start_equity > 0
+                        else 0.0
+                    )
+                    if current_dd >= _max_drawdown:
+                        logger.warning("Risk stop: MAX_DRAWDOWN (%.1f%%)", current_dd * 100)
+                        self.stop.set()
+                        return
+                    if daily_loss >= _max_daily_loss:
+                        logger.warning("Risk stop: DAILY_LOSS (%.1f%%)", daily_loss * 100)
+                        self.stop.set()
                         return
 
                 ctx = _rebuild_ctx()
@@ -365,7 +446,8 @@ class TradingRunner:
         risk_cfg = cfg.get("risk", {})
         max_trading_days = int(schedule.get("max_trading_days", 0))
         max_duration_per_day = int(schedule.get("max_duration_per_day", 390))
-        _max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))  # TODO: implement drawdown check
+        _max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))
+        _max_daily_loss = float(risk_cfg.get("max_daily_loss", 0.05))
         bar_interval = int(schedule.get("bar_interval", self.bar_interval))
 
         try:
@@ -450,6 +532,7 @@ class TradingRunner:
             _live_bars: list[dict] = []
             day_bars = 0
             day_start_ts = None
+            day_start_equity = 0.0
             day_stop_reason = None
             stop_reason = None
             _portfolio = Portfolio(initial_capital=0)
@@ -514,7 +597,7 @@ class TradingRunner:
 
             def _on_bar(bar_data: dict):
                 """Per-bar callback — called by BQDataSource._poll()"""
-                nonlocal bar_count, day_bars, peak_equity, day_start_ts
+                nonlocal bar_count, day_bars, peak_equity, day_start_ts, day_start_equity
 
                 _live_bars.append(bar_data)
                 bar_count += 1
@@ -526,6 +609,38 @@ class TradingRunner:
                     age = (datetime.now(UTC) - bar_ts).total_seconds()
                     if is_stale_bar(bar_ts, bar_period_sec=self.scheduler.freq_minutes * 60, market=market):
                         logger.info("Bar %d — stale(age=%.0fs) buffer-only, skip trade", bar_count, age)
+                        return
+
+                # ── Risk: drawdown + daily loss check ──
+                acct = self.capital.get_account(strategy_id)
+                if acct:
+                    closes = bar_data.get("close", {})
+                    positions = self.capital.get_positions(strategy_id)
+                    pos_value = sum(
+                        vp.qty * closes.get(vp.symbol, 0)
+                        for vp in positions
+                        if getattr(vp, "qty", 0) and vp.qty > 0
+                    )
+                    eq = acct.cash + pos_value
+                    if eq > peak_equity:
+                        peak_equity = eq
+                    current_dd = (peak_equity - eq) / max(peak_equity, 1) if peak_equity > 0 else 0.0
+                    # Track intra-day start equity per trading day
+                    if day_start_ts is None:
+                        # First bar of the day: record day-start equity
+                        day_start_equity = eq
+                    daily_loss = (
+                        (day_start_equity - eq) / max(day_start_equity, 1)
+                        if day_start_equity > 0
+                        else 0.0
+                    )
+                    if current_dd >= _max_drawdown:
+                        logger.warning("Risk stop: MAX_DRAWDOWN (%.1f%%)", current_dd * 100)
+                        self.stop.set()
+                        return
+                    if daily_loss >= _max_daily_loss:
+                        logger.warning("Risk stop: DAILY_LOSS (%.1f%%)", daily_loss * 100)
+                        self.stop.set()
                         return
 
                 ctx = _rebuild_ctx()

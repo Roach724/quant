@@ -17,7 +17,7 @@ DEFAULT_VALUES = {
         "max_trading_days": 0,
         "max_duration_per_day": 390,
     },
-    "risk": {"max_drawdown": 0.15, "max_daily_loss": 0.05, "position_size_pct": 0.2},
+    "risk": {"max_drawdown": 0.15, "max_daily_loss": 0.05, "max_leverage": 1.0, "max_concentration": 0.25, "min_cash_buffer": 0.02, "position_size_pct": 0.2},
     "observer": {"log_dir": "output/live/", "snapshot_interval": 60, "trade_log": True, "equity_curve": True},
     "dashboard": {"port": 8090, "websocket": True},
     "state": {"enabled": True, "dir": "output/live/state/", "checkpoint_interval": 300},
