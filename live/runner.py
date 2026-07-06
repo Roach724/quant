@@ -39,6 +39,7 @@ import yaml
 from google.cloud import bigquery
 
 from engine.cost_model import TransactionCost
+from engine.risk.monitor import RiskMonitor
 from engine.data import DataFrameSource
 from engine.portfolio import Portfolio, Position
 from engine.strategy import StrategyContext
@@ -95,6 +96,7 @@ class LiveRunner:
         self._live_start_time: datetime | None = None
         self._live_stop_reason: str | None = None
         self._live_daily_start_equity: float = 0.0
+        self._risk_monitor = RiskMonitor(self.config.get("risk", {}))
 
     # ── Main entry point ──────────────────────────────────────────────
 
@@ -556,6 +558,79 @@ class LiveRunner:
         logger.info("Paper loop complete — equity=%.2f PnL=%.2f (%.2f%%) positions=%d total_bars=%d",
                     final_equity, pnl, pnl_pct, len(portfolio.positions), total_bars)
 
+    def _check_pre_trade_risk(
+        self, portfolio, bar_data, symbol: str, side: str, qty: int, price: float
+    ) -> bool:
+        """Pre-trade risk checks: leverage, concentration, cash buffer.
+
+        Returns True if trade is allowed, False if blocked.
+        """
+        risk_cfg = self.config.get("risk", {})
+        max_leverage = float(risk_cfg.get("max_leverage", 1.0))
+        max_concentration = float(risk_cfg.get("max_concentration", 0.25))
+        min_cash_buffer = float(risk_cfg.get("min_cash_buffer", 0.02))
+
+        closes = bar_data.get("close", {})
+        equity = portfolio._mark_to_market(bar_data) if hasattr(portfolio, "_mark_to_market") else portfolio.cash
+
+        # ── Current exposure ──
+        pos_value = 0.0
+        for sym, pos in portfolio.positions.items():
+            if hasattr(pos, "size") and pos.size > 0:
+                px = closes.get(sym, 0)
+                pos_value += pos.size * px
+        current_leverage = pos_value / max(equity, 1)
+
+        # ── Post-trade exposure (worst-case: this trade fully executes) ──
+        trade_value = qty * price
+        if side == "buy":
+            new_pos_value = pos_value + trade_value
+            new_cash = portfolio.cash - trade_value - self._cost_model.calculate_fee(qty, price, "buy")
+        else:
+            # Sell: reduce position
+            if symbol in portfolio.positions and hasattr(portfolio.positions[symbol], "size"):
+                sell_size = min(qty, portfolio.positions[symbol].size)
+            else:
+                sell_size = qty
+            new_pos_value = max(0, pos_value - sell_size * price)
+            new_cash = portfolio.cash + trade_value - self._cost_model.calculate_fee(qty, price, "sell")
+        new_equity = new_cash + new_pos_value
+
+        # ── Leverage: total position value / equity ──
+        new_leverage = new_pos_value / max(new_equity, 1)
+        if new_leverage > max_leverage:
+            logger.info(
+                "Pre-trade risk BLOCKED: leverage %.1f%% > %.1f%% for %s %s",
+                new_leverage * 100, max_leverage * 100, side, symbol,
+            )
+            return False
+
+        # ── Concentration: single position / equity ──
+        if side == "buy":
+            current_sym_value = (
+                portfolio.positions[symbol].size * closes.get(symbol, 0)
+                if symbol in portfolio.positions and hasattr(portfolio.positions[symbol], "size")
+                else 0
+            )
+            new_sym_value = current_sym_value + trade_value
+            sym_concentration = new_sym_value / max(new_equity, 1)
+            if sym_concentration > max_concentration:
+                logger.info(
+                    "Pre-trade risk BLOCKED: %s concentration %.1f%% > %.1f%%",
+                    symbol, sym_concentration * 100, max_concentration * 100,
+                )
+                return False
+
+        # ── Cash buffer: remaining cash must be ≥ min_cash_buffer × equity ──
+        if new_equity > 0 and new_cash < min_cash_buffer * new_equity:
+            logger.info(
+                "Pre-trade risk BLOCKED: cash buffer %.1f%% < %.1f%% (cash=%.0f equity=%.0f)",
+                (new_cash / max(new_equity, 1)) * 100, min_cash_buffer * 100, new_cash, new_equity,
+            )
+            return False
+
+        return True
+
     def _process_signal(self, sig, portfolio, bar_data, timestamp, weight: float):
         """Process a single strategy signal: convert → execute → record.
 
@@ -597,14 +672,20 @@ class LiveRunner:
         # Pre-trade cash constraint (estimate using exec_price with slippage)
         if side == "buy":
             est_notional = qty * exec_price
-            est_commission = max(est_notional * self._cost_model.commission_bps / 10000.0, self._cost_model.min_commission)
+            est_commission = self._cost_model.calculate_fee(qty, exec_price, "buy")
             est_cost = est_notional + est_commission
             if est_cost > portfolio.cash:
-                qty = int(portfolio.cash / (exec_price + self._cost_model.min_commission))
+                # Scale down: estimate using fee for 1 share as floor
+                min_fee = self._cost_model.calculate_fee(1, exec_price, "buy")
+                qty = int(portfolio.cash / (exec_price + min_fee))
                 if qty <= 0:
                     logger.debug("Insufficient cash for %s buy (cash=%.2f)", symbol, portfolio.cash)
                     return
                 qty = max(1, int(qty))
+
+        # ── Pre-trade risk checks: leverage, concentration, cash buffer ──
+        if not self._check_pre_trade_risk(portfolio, bar_data, symbol, side, qty, exec_price):
+            return
 
         # Submit to broker via OrderManager (async → sync)
         logger.info("ORDER %s %s %d @ ~%.2f",
@@ -635,7 +716,7 @@ class LiveRunner:
             fill_price = float(tracked.avg_fill_price or exec_price)
             # Commission based on actual fill price (not pre-trade exec_price estimate)
             notional = fill_qty * fill_price
-            commission = max(notional * self._cost_model.commission_bps / 10000.0, self._cost_model.min_commission)
+            commission = self._cost_model.calculate_fee(fill_qty, fill_price, side)
             logger.info("FILLED %s %s qty=%d price=%.2f (notional=%.2f commission=%.2f)",
                         side.upper(), symbol, fill_qty, fill_price, notional, commission)
 
@@ -1060,6 +1141,28 @@ class LiveRunner:
 
         strat_cfg = self.config.get("strategy", {})
         risk_cfg = self.config.get("risk", {})
+
+        # ── Post-trade risk monitor (background) ──
+        def _risk_state():
+            cash = getattr(portfolio, 'cash', 0.0)
+            pos_val = 0.0
+            positions_detail = {}
+            if hasattr(portfolio, 'positions'):
+                for sym, p in portfolio.positions.items():
+                    if hasattr(p, 'size') and p.size > 0:
+                        # Use cost_basis as rough mark if no live price available
+                        px = getattr(p, 'cost_basis', 0) or getattr(p, 'avg_price', 0) or getattr(p, 'entry_price', 0)
+                        val = p.size * px
+                        pos_val += val
+                        positions_detail[sym] = val
+            return {
+                "equity": cash + pos_val,
+                "cash": cash,
+                "positions_value": pos_val,
+                "positions": positions_detail,
+            }
+        self._risk_monitor.add_check("live", _risk_state)
+        self._risk_monitor.start()
         schedule_cfg = self.config.get("schedule", {})
 
         poll_interval = int(schedule_cfg.get("bar_interval", 60))
@@ -1330,6 +1433,11 @@ class LiveRunner:
                             if sd["qty"] <= 0:
                                 continue
 
+                        # Pre-trade risk checks: leverage, concentration, cash buffer
+                        exec_est = price * (1.0 + self._cost_model.slippage_bps / 10000.0) if sd["side"] == "buy" else price * (1.0 - self._cost_model.slippage_bps / 10000.0)
+                        if not self._check_pre_trade_risk(portfolio, bar_data, sd["symbol"], sd["side"], sd["qty"], exec_est):
+                            continue
+
                         tracked = asyncio.run(
                             self.order_manager.submit(
                                 sd["symbol"], sd["side"], sd["qty"],
@@ -1346,10 +1454,9 @@ class LiveRunner:
                                 portfolio.positions[tracked.symbol] = pos
                             delta = tracked.filled_qty if tracked.side == "buy" else -tracked.filled_qty
                             pos.add(delta, price)
-                            # Commission (mirrors _process_signal)
+                            # Commission (mirrors _process_signal — use real fee model)
                             exec_price = price * (1.0 + self._cost_model.slippage_bps / 10000.0) if tracked.side == "buy" else price * (1.0 - self._cost_model.slippage_bps / 10000.0)
-                            notional = tracked.filled_qty * exec_price
-                            commission = max(notional * self._cost_model.commission_bps / 10000.0, self._cost_model.min_commission)
+                            commission = self._cost_model.calculate_fee(tracked.filled_qty, exec_price, tracked.side)
                             if tracked.side == "buy":
                                 portfolio.cash -= price * tracked.filled_qty + commission
                             else:
@@ -1440,6 +1547,7 @@ class LiveRunner:
             day_stop_reason = day_stop_reason or "exception"
 
         # Determine final stop reason
+        self._risk_monitor.stop()
         if day_stop_reason:
             return day_stop_reason
         if not self._calendar.is_open_now():

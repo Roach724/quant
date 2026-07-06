@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from engine.cost_model import TransactionCost
 from oms.broker import BrokerOrder
 from oms.broker.futu_stock_broker import FutuStockBroker
 from trading.adapter import TradingSignal
@@ -17,31 +18,30 @@ class SignalBridge:
 
     可选: 配置执行算法 (TWAP / VWAP) 拆分大单减少市场冲击。
     不配置则一次性全量下单。
+
+    费用模型: 使用 TransactionCost 统一管理滑点和佣金。
+    默认启用真实券商费率 (per-market auto-enable)。
     """
 
     def __init__(
         self,
-        broker: FutuStockBroker,
+        broker: FutuStockBroker | None,
         capital: CapitalManager,
-        slippage_bps: float = 5.0,
-        commission_bps: float = 1.0,
-        min_commission: float = 1.0,
+        market: str = "us",
+        position_size_pct: float = 0.2,
+        cost_model: TransactionCost | None = None,
         execution_algo: str | None = None,  # "twap" | "vwap" | None
         execution_slices: int = 10,
         execution_window: int = 1800,
-        market: str = "us",
-        position_size_pct: float = 0.2,
     ):
         self.broker = broker
         self.capital = capital
-        self.slippage_bps = slippage_bps
-        self.commission_bps = commission_bps
-        self.min_commission = min_commission
+        self.market = market
+        self.position_size_pct = position_size_pct
+        self.cost_model = cost_model or TransactionCost.for_market(market)
         self.execution_algo = execution_algo
         self.execution_slices = execution_slices
         self.execution_window = execution_window
-        self.market = market
-        self.position_size_pct = position_size_pct
 
     def _get_executor(self):
         """根据配置创建执行算法实例"""
@@ -63,15 +63,10 @@ class SignalBridge:
 
     def _exec_price(self, signal: TradingSignal, current_price: float) -> float:
         """计算含滑点的执行价格"""
-        slip = current_price * self.slippage_bps / 10000
+        slip = current_price * self.cost_model.slippage_bps / 10000
         if signal.side == "buy":
             return current_price + slip
         return current_price - slip
-
-    def _commission(self, qty: int, exec_price: float) -> float:
-        """计算佣金"""
-        notional = qty * exec_price
-        return max(self.min_commission, notional * self.commission_bps / 10000)
 
     async def execute(
         self,
@@ -113,7 +108,7 @@ class SignalBridge:
         if qty <= 0:
             return None
 
-        commission = self._commission(qty, exec_price)
+        commission = self.cost_model.calculate_fee(qty, exec_price, signal.side)
 
         # 买入资金检查
         if signal.side == "buy":
@@ -126,7 +121,7 @@ class SignalBridge:
                         signal.symbol, required, acct.cash,
                     )
                     return None
-                commission = self._commission(qty, exec_price)
+                commission = self.cost_model.calculate_fee(qty, exec_price, "buy")
 
         # 下单
         executor = self._get_executor()
@@ -162,7 +157,7 @@ class SignalBridge:
 
         if total_filled > 0:
             avg_price = total_cost / total_filled if total_filled > 0 else exec_price
-            actual_comm = self._commission(total_filled, avg_price)
+            actual_comm = self.cost_model.calculate_fee(total_filled, avg_price, signal.side)
             try:
                 self.capital.update_position(
                     strategy_id=signal.strategy_id,
