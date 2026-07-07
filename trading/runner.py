@@ -253,7 +253,7 @@ class TradingRunner:
             _live_bars: list[dict] = []
             _bar_count = 0
             peak_equity = 0.0
-            daily_start_equity = 0.0
+            day_start_equity = 0.0
 
             # Prefetch historical bars for strategy lookback on resume
             if self.scheduler and self.scheduler.bar_count > 0:
@@ -308,7 +308,7 @@ class TradingRunner:
                 )
 
             def _on_bar(bar_data: dict):
-                nonlocal _bar_count, peak_equity, daily_start_equity
+                nonlocal _bar_count, peak_equity, day_start_equity
                 _live_bars.append(bar_data)
                 _bar_count += 1
 
@@ -391,11 +391,11 @@ class TradingRunner:
                     # Persist peak equity to DB
                     if acct:
                         acct.peak_equity = peak_equity
-                if daily_start_equity == 0:
-                    daily_start_equity = eq
+                if day_start_equity == 0:
+                    day_start_equity = eq
 
                 current_dd = (peak_equity - eq) / max(peak_equity, 1) if peak_equity > 0 else 0.0
-                daily_loss = (daily_start_equity - eq) / max(daily_start_equity, 1) if daily_start_equity > 0 else 0.0
+                daily_loss = (day_start_equity - eq) / max(day_start_equity, 1) if day_start_equity > 0 else 0.0
 
                 if current_dd >= _max_drawdown:
                     logger.warning(
@@ -454,14 +454,14 @@ class TradingRunner:
             trading_day = 0
             bar_count = 0
             peak_equity = 0.0
-            daily_start_equity = 0.0
+            day_start_equity = 0.0
             if state_mgr and state_mgr.exists():
                 try:
                     saved = state_mgr.load()
                     trading_day = saved.get("trading_day", 0)
                     bar_count = saved.get("live_state", {}).get("bar_count", 0)
                     peak_equity = saved.get("live_state", {}).get("peak_equity", 0.0)
-                    daily_start_equity = saved.get("live_state", {}).get("daily_start_equity", 0.0)
+                    day_start_equity = saved.get("live_state", {}).get("day_start_equity", 0.0)
                     logger.info(
                         "Strategy %d: restored multi-day state (day=%d, bars=%d)",
                         strategy_id,
@@ -591,7 +591,7 @@ class TradingRunner:
 
             def _on_bar(bar_data: dict):
                 """Per-bar callback — called by BQDataSource._poll()"""
-                nonlocal bar_count, day_bars, peak_equity, daily_start_equity, day_stop_reason, day_start_ts
+                nonlocal bar_count, day_bars, peak_equity, day_start_equity, day_stop_reason, day_start_ts
 
                 _live_bars.append(bar_data)
                 bar_count += 1
@@ -685,11 +685,11 @@ class TradingRunner:
                     # Persist peak equity to DB
                     if acct:
                         acct.peak_equity = peak_equity
-                if daily_start_equity == 0:
-                    daily_start_equity = eq
+                if day_start_equity == 0:
+                    day_start_equity = eq
 
                 current_dd = (peak_equity - eq) / max(peak_equity, 1) if peak_equity > 0 else 0.0
-                daily_loss = (daily_start_equity - eq) / max(daily_start_equity, 1) if daily_start_equity > 0 else 0.0
+                daily_loss = (day_start_equity - eq) / max(day_start_equity, 1) if day_start_equity > 0 else 0.0
 
                 if current_dd >= _max_drawdown:
                     day_stop_reason = f"MAX_DRAWDOWN ({current_dd * 100:.1f}%)"
@@ -719,7 +719,7 @@ class TradingRunner:
                                 "trading_day": trading_day,
                                 "bar_count": bar_count,
                                 "peak_equity": peak_equity,
-                                "daily_start_equity": daily_start_equity,
+                                "day_start_equity": day_start_equity,
                             },
                         )
                     except Exception:
@@ -804,7 +804,7 @@ class TradingRunner:
                         if cp:
                             bar_count = cp.get("bar_count", bar_count)
                             peak_equity = cp.get("peak_equity", peak_equity)
-                            daily_start_equity = cp.get("daily_start_equity", daily_start_equity)
+                            day_start_equity = cp.get("day_start_equity", day_start_equity)
                             logger.info(
                                 "Strategy %d: recovered from checkpoint",
                                 strategy_id,
@@ -819,7 +819,7 @@ class TradingRunner:
                 day_bars = 0
                 day_start_ts = None
                 day_stop_reason = None
-                daily_start_equity = 0.0  # reset per day; set on first bar
+                day_start_equity = 0.0  # reset per day; set on first bar
                 max_bars_per_day = max_duration_per_day * 60 // bar_interval if bar_interval > 0 else 390
 
                 # Get current account state
@@ -889,7 +889,7 @@ class TradingRunner:
                                 "trading_day": trading_day if day_stop_reason == "market_close" else trading_day - 1,
                                 "bar_count": bar_count,
                                 "peak_equity": peak_equity,
-                                "daily_start_equity": daily_start_equity,
+                                "day_start_equity": day_start_equity,
                                 "stop_reason": day_stop_reason,
                                 "last_bq_ts": str(datetime.now(UTC)),
                             },

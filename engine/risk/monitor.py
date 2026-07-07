@@ -1,7 +1,8 @@
-"""Post-trade risk monitor — background thread for periodic risk health checks.
+"""Post-trade risk monitor — background thread polling runner state per bar.
 
-Runs independently from the main trading loop as a daemon thread.
-Logs warnings on threshold breaches; advisory only (does not stop trading).
+Activated by both live and trading runners on startup.
+Checks: leverage, concentration, drawdown, cash buffer.
+Logs WARNING on threshold breaches.
 """
 
 from __future__ import annotations
@@ -9,122 +10,108 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
-from typing import Any
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
+CheckFn = Callable[[], dict]  # returns {metric_name: value, ...}
+
 
 class RiskMonitor:
-    """Periodic sync risk monitor.
+    """Sync background monitor polling runner state at fixed intervals.
 
-    Takes a *state_provider* callable that returns a dict:
-        {"equity": float, "cash": float, "positions": list[dict]}
-    where each position has {"symbol", "qty", "market_value"}.
+    Takes callables that report current state (equity, cash, positions) and
+    compares against configured thresholds.
     """
 
-    def __init__(
-        self,
-        state_provider: Callable[[], dict[str, Any] | None],
-        config: dict[str, Any] | None = None,
-    ):
-        self._provider = state_provider
+    def __init__(self, config: dict | None = None):
         self._config = config or {}
-        self._running = False
+        self._checks: list[tuple[str, CheckFn]] = []
         self._thread: threading.Thread | None = None
-        self._peak_equity = 0.0
+        self._stop = threading.Event()
+        self._interval = int(self._config.get("monitor_interval_sec", 60))
 
-    # ── Lifecycle ──
+    def add_check(self, name: str, fn: CheckFn) -> None:
+        """Register a check function.
 
-    def start(self, interval_sec: int = 60):
-        """Start periodic monitoring in a daemon thread."""
-        if self._running:
+        fn() should return a dict like {"equity": 100000, "positions_value": 50000, "cash": 50000, ...}
+        """
+        self._checks.append((name, fn))
+
+    def start(self) -> None:
+        """Start background monitoring thread."""
+        if self._thread and self._thread.is_alive():
             return
-        self._running = True
-        self._thread = threading.Thread(target=self._loop, args=(interval_sec,), daemon=True)
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="risk-monitor")
         self._thread.start()
-        logger.info("RiskMonitor: started (interval=%ds)", interval_sec)
+        logger.info("RiskMonitor started (interval=%ds, %d checks)", self._interval, len(self._checks))
 
-    def stop(self):
-        """Signal the monitor to stop. Thread exits on next sleep cycle."""
-        self._running = False
+    def stop(self) -> None:
+        """Stop background monitoring."""
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+            self._thread = None
+        logger.info("RiskMonitor stopped")
 
-    # ── Internal ──
+    def _loop(self) -> None:
+        peak_equity = 0.0
+        max_drawdown = float(self._config.get("max_drawdown", 0.15))
+        max_leverage = float(self._config.get("max_leverage", 1.0))
+        max_concentration = float(self._config.get("max_concentration", 0.50))
+        min_cash_pct = float(self._config.get("min_cash_buffer", 0.01))
 
-    def _loop(self, interval: int):
-        while self._running:
+        while not self._stop.wait(self._interval):
             try:
-                self._check()
+                for name, fn in self._checks:
+                    state = fn()
+                    if not state:
+                        continue
+
+                    equity = state.get("equity", 0)
+                    cash = state.get("cash", 0)
+                    pos_value = state.get("positions_value", 0)
+                    positions = state.get("positions", {})  # {symbol: value}
+
+                    # ── Drawdown ──
+                    if equity > peak_equity:
+                        peak_equity = equity
+                    if peak_equity > 0:
+                        dd = (peak_equity - equity) / peak_equity
+                        if dd >= max_drawdown:
+                            logger.warning(
+                                "RiskMonitor [%s]: DRAWDOWN %.1f%% >= %.1f%% (peak=%.0f eq=%.0f)",
+                                name, dd * 100, max_drawdown * 100, peak_equity, equity,
+                            )
+
+                    # ── Leverage ──
+                    if equity > 0:
+                        lev = pos_value / equity
+                        if lev > max_leverage:
+                            logger.warning(
+                                "RiskMonitor [%s]: LEVERAGE %.1f%% > %.1f%% (pos=%.0f eq=%.0f)",
+                                name, lev * 100, max_leverage * 100, pos_value, equity,
+                            )
+
+                    # ── Concentration ──
+                    if equity > 0 and positions:
+                        for sym, val in positions.items():
+                            conc = val / equity
+                            if conc > max_concentration:
+                                logger.warning(
+                                    "RiskMonitor [%s]: CONCENTRATION %s=%.1f%% > %.1f%%",
+                                    name, sym, conc * 100, max_concentration * 100,
+                                )
+
+                    # ── Cash buffer ──
+                    if equity > 0:
+                        cash_pct = cash / equity
+                        if cash_pct < min_cash_pct:
+                            logger.warning(
+                                "RiskMonitor [%s]: CASH LOW %.1f%% < %.1f%% (cash=%.0f eq=%.0f)",
+                                name, cash_pct * 100, min_cash_pct * 100, cash, equity,
+                            )
+
             except Exception:
-                logger.exception("RiskMonitor: check failed")
-            time.sleep(interval)
-
-    def _check(self):
-        state = self._provider()
-        if state is None:
-            return
-
-        equity = float(state.get("equity", 0))
-        cash = float(state.get("cash", 0))
-        positions: list[dict] = state.get("positions", []) or []
-
-        # Track peak equity
-        if equity > self._peak_equity:
-            self._peak_equity = equity
-
-        # ── Drawdown ──
-        max_dd = float(self._config.get("max_drawdown", 0.15))
-        if self._peak_equity > 0:
-            dd = (equity - self._peak_equity) / self._peak_equity
-            if dd < -max_dd:
-                logger.warning(
-                    "RiskMonitor: drawdown %.1f%% exceeds limit %.1f%% (peak=%.0f eq=%.0f)",
-                    abs(dd) * 100,
-                    max_dd * 100,
-                    self._peak_equity,
-                    equity,
-                )
-
-        # ── Leverage ──
-        max_lev = float(self._config.get("max_leverage", 1.0))
-        gross = sum(abs(p.get("market_value", 0)) for p in positions)
-        if equity > 0 and gross / equity > max_lev:
-            logger.warning(
-                "RiskMonitor: leverage %.1fx > limit %.1fx (gross=%.0f eq=%.0f)",
-                gross / equity,
-                max_lev,
-                gross,
-                equity,
-            )
-
-        # ── Concentration ──
-        max_conc = float(self._config.get("max_concentration", 0.30))
-        for p in positions:
-            mv = abs(p.get("market_value", 0))
-            if equity > 0 and mv / equity > max_conc:
-                logger.warning(
-                    "RiskMonitor: %s concentration %.1f%% > limit %.1f%% (mv=%.0f eq=%.0f)",
-                    p.get("symbol", "?"),
-                    mv / equity * 100,
-                    max_conc * 100,
-                    mv,
-                    equity,
-                )
-
-        # ── Cash ratio ──
-        min_cash_ratio = float(self._config.get("min_cash_ratio", 0.05))
-        if equity > 0 and cash / equity < min_cash_ratio:
-            logger.warning(
-                "RiskMonitor: low cash %.0f (%.1f%% of equity %.0f)",
-                cash,
-                cash / equity * 100,
-                equity,
-            )
-
-        # Periodic heartbeat
-        logger.debug(
-            "RiskMonitor: eq=%.0f dd=%.1f%% pos=%d",
-            equity,
-            (equity - self._peak_equity) / max(self._peak_equity, 1) * 100,
-            len(positions),
-        )
+                logger.debug("RiskMonitor check error", exc_info=True)

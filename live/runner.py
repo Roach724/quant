@@ -39,6 +39,7 @@ import yaml
 from google.cloud import bigquery
 
 from engine.cost_model import TransactionCost
+from engine.risk.monitor import RiskMonitor
 from engine.data import DataFrameSource
 from engine.portfolio import Portfolio, Position
 from engine.strategy import StrategyContext
@@ -95,6 +96,7 @@ class LiveRunner:
         self._live_start_time: datetime | None = None
         self._live_stop_reason: str | None = None
         self._live_daily_start_equity: float = 0.0
+        self._risk_monitor = RiskMonitor(self.config.get("risk", {}))
 
     # ── Main entry point ──────────────────────────────────────────────
 
@@ -117,7 +119,6 @@ class LiveRunner:
             self.config["_run_id"] = run_id
         elif exp_id:
             from live.experiment_manager import ExperimentManager
-
             mgr = ExperimentManager()
             try:
                 exp = mgr.get(exp_id)
@@ -136,15 +137,17 @@ class LiveRunner:
                 market = exp_cfg.get("market", "us")
                 strategy = exp_cfg.get("strategy", "ml")
                 version = exp_cfg.get("version", 1)
-                config_path = getattr(self, "_config_path", "")
-                mgr.register(_type, market, strategy, version, config_path, name=exp_cfg.get("name", ""))
+                config_path = getattr(self, '_config_path', '')
+                mgr.register(_type, market, strategy, version, config_path,
+                             name=exp_cfg.get("name", ""))
                 run_id = mgr.start(exp_id)
                 logger.info("Auto-registered %s -> run %s", exp_id, run_id)
                 self.config["_run_id"] = run_id
 
         # ── Per‑run file logging header ──
         if exp_id and run_id:
-            logger.info("=== Run %s started (mode=%s market=%s) ===", run_id, mode_label, self._market)
+            logger.info("=== Run %s started (mode=%s market=%s) ===",
+                        run_id, mode_label, self._market)
             strat_name = self.config.get("strategy", {}).get("name", "unknown")
             logger.info("Config: strategy=%s experiment=%s", strat_name, exp_id)
 
@@ -153,7 +156,6 @@ class LiveRunner:
         # Record experiment metadata early (before main loop) so Dashboard sees it
         try:
             from live.config import record_experiment
-
             record_experiment(self.config, self._output_dir)
         except Exception:
             pass
@@ -173,7 +175,6 @@ class LiveRunner:
             logger.exception("Fatal error in run loop")
             if exp_id:
                 from live.experiment_manager import ExperimentManager as EM
-
                 try:
                     EM().fail(exp_id, notes=str(e))
                 except Exception:
@@ -183,7 +184,6 @@ class LiveRunner:
             # ── Experiment lifecycle cleanup ──
             if exp_id and run_id:
                 import logging as _log
-
                 try:
                     mgr = EM()
                     exp = mgr.get(exp_id)
@@ -205,7 +205,6 @@ class LiveRunner:
             initial_capital = float(paper_cfg.get("initial_capital", 100_000))
             self._cost_model = TransactionCost.from_config(paper_cfg, self._market)
             from oms.broker import PaperBroker
-
             self.broker = PaperBroker(initial_capital=initial_capital)
             logger.info("PaperBroker initialised — capital=%.0f", initial_capital)
         else:
@@ -214,14 +213,12 @@ class LiveRunner:
             self._cost_model = TransactionCost.from_config(live_cfg, self._market)
             if broker_type == "futu_stock":
                 from oms.broker.futu_stock_broker import FutuStockBroker
-
                 self.broker = FutuStockBroker(
                     host=live_cfg.get("host", "127.0.0.1"),
                     port=int(live_cfg.get("port", 11111)),
                 )
             elif broker_type == "paper":
                 from oms.broker import PaperBroker
-
                 capital = float(live_cfg.get("initial_capital", 100_000))
                 self.broker = PaperBroker(initial_capital=capital)
             else:
@@ -277,13 +274,13 @@ class LiveRunner:
             market = self.config.get("live", {}).get("market", "us")
             table = {"us": "us_bars_5m", "hk": "hk_bars_5m", "crypto": "crypto_bars_5m"}[market]
             from google.cloud import bigquery as bq
-
             client = bq.Client(project="deductive-notch-495015-c2")
-            df = client.query(f"SELECT DISTINCT symbol FROM quant.{table} ORDER BY symbol").result().to_dataframe()
+            df = client.query(
+                f"SELECT DISTINCT symbol FROM quant.{table} ORDER BY symbol"
+            ).result().to_dataframe()
             symbols = df["symbol"].tolist()
             # Normalize to canonical bare format (handles prefix + padding for both markets)
             from common.normalize import normalize_symbol
-
             symbols = [normalize_symbol(s, market) for s in symbols]
             symbols = list(dict.fromkeys(symbols))
             # Filter out indices (^IXIC, ^DJI, ^GSPC, ^RUT) — not tradeable
@@ -300,14 +297,12 @@ class LiveRunner:
         no-arg instantiation + setattr for strategies without **kwargs.
         """
         import importlib
-
         strat_cfg = self.config.get("strategy", {})
         strat_name = strat_cfg.get("name", "SimpleMomentum")
 
         # Resolve class
         try:
             from strategies import get_strategy
-
             cls = get_strategy(strat_name)
         except (ValueError, ImportError):
             # Also try direct import for strategies not yet in registry
@@ -318,7 +313,8 @@ class LiveRunner:
                 raise ValueError(f"Unknown strategy: {strat_name}") from e
 
         # Build kwargs from config (exclude 'name' and internal keys)
-        kwargs = {k: v for k, v in strat_cfg.items() if k != "name" and not k.startswith("_")}
+        kwargs = {k: v for k, v in strat_cfg.items()
+                  if k != "name" and not k.startswith("_")}
 
         # Try kwargs-first, fallback to setattr
         try:
@@ -356,10 +352,10 @@ class LiveRunner:
         """
         # 1. Date range (configurable, with fallback)
         today = datetime.now(timezone.utc)
-        start_str = self.config.get("live", {}).get("start_date") or datetime(
-            today.year, 1, 1, tzinfo=timezone.utc
-        ).strftime("%Y-%m-%d")
-        end_str = self.config.get("live", {}).get("end_date") or today.strftime("%Y-%m-%d")
+        start_str = self.config.get("live", {}).get("start_date") or \
+            datetime(today.year, 1, 1, tzinfo=timezone.utc).strftime("%Y-%m-%d")
+        end_str = self.config.get("live", {}).get("end_date") or \
+            today.strftime("%Y-%m-%d")
         logger.info("Paper loop date range: %s → %s", start_str, end_str)
 
         # 2. Load BQ data
@@ -422,7 +418,7 @@ class LiveRunner:
                 pct = (bar_idx * 10) // total_bars
                 if pct > last_progress_pct:
                     last_progress_pct = pct
-                    logger.info("Paper progress: %d%% (%d/%d bars)", pct * 10, bar_idx, total_bars)
+                    logger.info("Paper progress: %d%% (%d/%d bars)", pct*10, bar_idx, total_bars)
 
             # 7a. Mark & record
             equity = portfolio.mark_and_record(timestamp, bar_data)
@@ -447,8 +443,8 @@ class LiveRunner:
             try:
                 signals = self.strategy.on_bar(ctx, bar_idx)
                 # ── Bar progress log ──
-                last_reb = getattr(self.strategy, "_last_rebalance", None)
-                reb_every = getattr(self.strategy, "rebalance_every", None)
+                last_reb = getattr(self.strategy, '_last_rebalance', None)
+                reb_every = getattr(self.strategy, 'rebalance_every', None)
                 if last_reb is not None and reb_every is not None:
                     gap = reb_every - (bar_idx - last_reb)
                     logger.info("Bar %d/%d — 距下次调仓 %d bars", bar_idx + 1, total_bars, max(gap, 0))
@@ -462,13 +458,10 @@ class LiveRunner:
                 sells = [s for s in signals if s.side in ("sell", "close")]
                 details = ", ".join(f"{s.symbol}({s.side})" for s in signals[:20])
                 if len(signals) > 20:
-                    details += f" ... +{len(signals) - 20} more"
+                    details += f" ... +{len(signals)-20} more"
                 logger.info(
                     "Bar %d: %d buy, %d sell — %s",
-                    bar_idx,
-                    len(buys),
-                    len(sells),
-                    details,
+                    bar_idx, len(buys), len(sells), details,
                 )
 
             # 7c2. Warmup: skip trading but record equity
@@ -479,14 +472,14 @@ class LiveRunner:
                     cash=portfolio.cash,
                     return_pct=0.0,
                 )
-                if hasattr(self, "_dash_observer"):
+                if hasattr(self, '_dash_observer'):
                     self._dash_observer.record_equity(
                         bar=bar_idx,
                         equity=portfolio._mark_to_market(bar_data),
                         cash=portfolio.cash,
                         portfolio_value=portfolio._mark_to_market(bar_data),
-                        daily_pnl=getattr(portfolio, "daily_pnl", 0),
-                        drawdown=getattr(portfolio, "drawdown", 0),
+                        daily_pnl=getattr(portfolio, 'daily_pnl', 0),
+                        drawdown=getattr(portfolio, 'drawdown', 0),
                         run_id=self.config.get("_run_id", ""),
                     )
                 continue
@@ -499,14 +492,14 @@ class LiveRunner:
                     cash=portfolio.cash,
                     return_pct=0.0,
                 )
-                if hasattr(self, "_dash_observer"):
+                if hasattr(self, '_dash_observer'):
                     self._dash_observer.record_equity(
                         bar=bar_idx,
                         equity=portfolio._mark_to_market(bar_data),
                         cash=portfolio.cash,
                         portfolio_value=portfolio._mark_to_market(bar_data),
-                        daily_pnl=getattr(portfolio, "daily_pnl", 0),
-                        drawdown=getattr(portfolio, "drawdown", 0),
+                        daily_pnl=getattr(portfolio, 'daily_pnl', 0),
+                        drawdown=getattr(portfolio, 'drawdown', 0),
                         run_id=self.config.get("_run_id", ""),
                     )
                 continue
@@ -525,14 +518,17 @@ class LiveRunner:
             # Process sell/close signals first (free up cash)
             for sig in sell_close_signals:
                 try:
-                    self._process_signal(sig, portfolio, bar_data, timestamp, weight=1.0)
+                    self._process_signal(sig, portfolio, bar_data, timestamp,
+                                         weight=1.0)
                 except Exception:
-                    logger.exception("Failed to process sell/close signal: %s %s", sig.symbol, sig.side)
+                    logger.exception("Failed to process sell/close signal: %s %s",
+                                     sig.symbol, sig.side)
 
             # Process buy/target signals
             for sig in buy_signals:
                 try:
-                    self._process_signal(sig, portfolio, bar_data, timestamp, weight=buy_weight)
+                    self._process_signal(sig, portfolio, bar_data, timestamp,
+                                         weight=buy_weight)
                 except Exception:
                     logger.exception("Failed to process buy signal: %s", sig.symbol)
 
@@ -544,29 +540,96 @@ class LiveRunner:
                 cash=portfolio.cash,
                 return_pct=0.0,
             )
-            if hasattr(self, "_dash_observer"):
+            if hasattr(self, '_dash_observer'):
                 self._dash_observer.record_equity(
                     bar=bar_idx,
                     equity=final_equity,
                     cash=portfolio.cash,
                     portfolio_value=final_equity,
-                    daily_pnl=getattr(portfolio, "daily_pnl", 0),
-                    drawdown=getattr(portfolio, "drawdown", 0),
+                    daily_pnl=getattr(portfolio, 'daily_pnl', 0),
+                    drawdown=getattr(portfolio, 'drawdown', 0),
                     run_id=self.config.get("_run_id", ""),
                 )
 
         # 8. End
-        final_equity = portfolio._mark_to_market(bar_data if "bar_data" in dir() else {})
+        final_equity = portfolio._mark_to_market(bar_data if 'bar_data' in dir() else {})
         pnl = final_equity - initial_capital
         pnl_pct = (pnl / initial_capital * 100) if initial_capital else 0
-        logger.info(
-            "Paper loop complete — equity=%.2f PnL=%.2f (%.2f%%) positions=%d total_bars=%d",
-            final_equity,
-            pnl,
-            pnl_pct,
-            len(portfolio.positions),
-            total_bars,
-        )
+        logger.info("Paper loop complete — equity=%.2f PnL=%.2f (%.2f%%) positions=%d total_bars=%d",
+                    final_equity, pnl, pnl_pct, len(portfolio.positions), total_bars)
+
+    def _check_pre_trade_risk(
+        self, portfolio, bar_data, symbol: str, side: str, qty: int, price: float
+    ) -> bool:
+        """Pre-trade risk checks: leverage, concentration, cash buffer.
+
+        Returns True if trade is allowed, False if blocked.
+        """
+        risk_cfg = self.config.get("risk", {})
+        max_leverage = float(risk_cfg.get("max_leverage", 1.0))
+        max_concentration = float(risk_cfg.get("max_concentration", 0.25))
+        min_cash_buffer = float(risk_cfg.get("min_cash_buffer", 0.02))
+
+        closes = bar_data.get("close", {})
+        equity = portfolio._mark_to_market(bar_data) if hasattr(portfolio, "_mark_to_market") else portfolio.cash
+
+        # ── Current exposure ──
+        pos_value = 0.0
+        for sym, pos in portfolio.positions.items():
+            if hasattr(pos, "size") and pos.size > 0:
+                px = closes.get(sym, 0)
+                pos_value += pos.size * px
+        current_leverage = pos_value / max(equity, 1)
+
+        # ── Post-trade exposure (worst-case: this trade fully executes) ──
+        trade_value = qty * price
+        if side == "buy":
+            new_pos_value = pos_value + trade_value
+            new_cash = portfolio.cash - trade_value - self._cost_model.calculate_fee(qty, price, "buy")
+        else:
+            # Sell: reduce position
+            if symbol in portfolio.positions and hasattr(portfolio.positions[symbol], "size"):
+                sell_size = min(qty, portfolio.positions[symbol].size)
+            else:
+                sell_size = qty
+            new_pos_value = max(0, pos_value - sell_size * price)
+            new_cash = portfolio.cash + trade_value - self._cost_model.calculate_fee(qty, price, "sell")
+        new_equity = new_cash + new_pos_value
+
+        # ── Leverage: total position value / equity ──
+        new_leverage = new_pos_value / max(new_equity, 1)
+        if new_leverage > max_leverage:
+            logger.info(
+                "Pre-trade risk BLOCKED: leverage %.1f%% > %.1f%% for %s %s",
+                new_leverage * 100, max_leverage * 100, side, symbol,
+            )
+            return False
+
+        # ── Concentration: single position / equity ──
+        if side == "buy":
+            current_sym_value = (
+                portfolio.positions[symbol].size * closes.get(symbol, 0)
+                if symbol in portfolio.positions and hasattr(portfolio.positions[symbol], "size")
+                else 0
+            )
+            new_sym_value = current_sym_value + trade_value
+            sym_concentration = new_sym_value / max(new_equity, 1)
+            if sym_concentration > max_concentration:
+                logger.info(
+                    "Pre-trade risk BLOCKED: %s concentration %.1f%% > %.1f%%",
+                    symbol, sym_concentration * 100, max_concentration * 100,
+                )
+                return False
+
+        # ── Cash buffer: remaining cash must be ≥ min_cash_buffer × equity ──
+        if new_equity > 0 and new_cash < min_cash_buffer * new_equity:
+            logger.info(
+                "Pre-trade risk BLOCKED: cash buffer %.1f%% < %.1f%% (cash=%.0f equity=%.0f)",
+                (new_cash / max(new_equity, 1)) * 100, min_cash_buffer * 100, new_cash, new_equity,
+            )
+            return False
+
+        return True
 
     def _process_signal(self, sig, portfolio, bar_data, timestamp, weight: float):
         """Process a single strategy signal: convert → execute → record.
@@ -609,19 +672,24 @@ class LiveRunner:
         # Pre-trade cash constraint (estimate using exec_price with slippage)
         if side == "buy":
             est_notional = qty * exec_price
-            est_commission = max(
-                est_notional * self._cost_model.commission_bps / 10000.0, self._cost_model.min_commission
-            )
+            est_commission = self._cost_model.calculate_fee(qty, exec_price, "buy")
             est_cost = est_notional + est_commission
             if est_cost > portfolio.cash:
-                qty = int(portfolio.cash / (exec_price + self._cost_model.min_commission))
+                # Scale down: estimate using fee for 1 share as floor
+                min_fee = self._cost_model.calculate_fee(1, exec_price, "buy")
+                qty = int(portfolio.cash / (exec_price + min_fee))
                 if qty <= 0:
                     logger.debug("Insufficient cash for %s buy (cash=%.2f)", symbol, portfolio.cash)
                     return
                 qty = max(1, int(qty))
 
+        # ── Pre-trade risk checks: leverage, concentration, cash buffer ──
+        if not self._check_pre_trade_risk(portfolio, bar_data, symbol, side, qty, exec_price):
+            return
+
         # Submit to broker via OrderManager (async → sync)
-        logger.info("ORDER %s %s %d @ ~%.2f", side.upper(), symbol, qty, exec_price)
+        logger.info("ORDER %s %s %d @ ~%.2f",
+                    side.upper(), symbol, qty, exec_price)
         tracked = asyncio.run(
             self.order_manager.submit(
                 symbol=symbol,
@@ -648,16 +716,9 @@ class LiveRunner:
             fill_price = float(tracked.avg_fill_price or exec_price)
             # Commission based on actual fill price (not pre-trade exec_price estimate)
             notional = fill_qty * fill_price
-            commission = max(notional * self._cost_model.commission_bps / 10000.0, self._cost_model.min_commission)
-            logger.info(
-                "FILLED %s %s qty=%d price=%.2f (notional=%.2f commission=%.2f)",
-                side.upper(),
-                symbol,
-                fill_qty,
-                fill_price,
-                notional,
-                commission,
-            )
+            commission = self._cost_model.calculate_fee(fill_qty, fill_price, side)
+            logger.info("FILLED %s %s qty=%d price=%.2f (notional=%.2f commission=%.2f)",
+                        side.upper(), symbol, fill_qty, fill_price, notional, commission)
 
             if side == "buy":
                 # Deduct cash
@@ -665,7 +726,6 @@ class LiveRunner:
                 # Update position
                 if symbol not in portfolio.positions:
                     from engine.portfolio import Position
-
                     portfolio.positions[symbol] = Position(symbol=symbol, entry_price=fill_price)
                 portfolio.positions[symbol].add(fill_qty, fill_price)
             else:  # sell
@@ -687,9 +747,9 @@ class LiveRunner:
                 price=fill_price,
                 commission=commission,
             )
-            if hasattr(self, "_dash_observer"):
+            if hasattr(self, '_dash_observer'):
                 self._dash_observer.record_trade(
-                    bar=getattr(self, "_live_bar_count", 0),
+                    bar=getattr(self, '_live_bar_count', 0),
                     symbol=symbol,
                     side=side,
                     qty=fill_qty,
@@ -711,16 +771,14 @@ class LiveRunner:
             mkt_value = pos.size * close_price
             cost_basis = pos.avg_entry * pos.size
             pnl_pct = ((close_price / pos.avg_entry) - 1.0) * 100.0 if pos.avg_entry > 0 else 0.0
-            positions_list.append(
-                {
-                    "symbol": sym,
-                    "qty": pos.size,
-                    "price": close_price,
-                    "cost_basis": cost_basis,
-                    "mkt_value": mkt_value,
-                    "pnl_pct": pnl_pct,
-                }
-            )
+            positions_list.append({
+                "symbol": sym,
+                "qty": pos.size,
+                "price": close_price,
+                "cost_basis": cost_basis,
+                "mkt_value": mkt_value,
+                "pnl_pct": pnl_pct,
+            })
         self.observer.snapshot_portfolio(timestamp, positions_list)
 
     def _load_bq_data(self, start: str, end: str, symbols: list[str] | None = None):
@@ -784,7 +842,6 @@ class LiveRunner:
 
         # Normalize symbols to canonical bare format for engine compatibility
         from common.normalize import normalize_symbol_series
-
         df["symbol"] = normalize_symbol_series(df["symbol"], self._market)
 
         close = df.pivot_table(index="timestamp", columns="symbol", values="close").ffill()
@@ -859,9 +916,7 @@ class LiveRunner:
             "Multi-day live loop: starting day %d%s, cash=%.2f, %d positions, %d symbols",
             trading_day if is_mid_day_resume else trading_day + 1,
             " (resuming mid-day)" if is_mid_day_resume else "",
-            portfolio.cash,
-            len(portfolio.positions),
-            len(symbols),
+            portfolio.cash, len(portfolio.positions), len(symbols),
         )
 
         # ── 2. Strategy init (once) ──
@@ -877,34 +932,6 @@ class LiveRunner:
 
         # If resuming from mid-day checkpoint, don't increment on first iteration
         _skip_first_increment = is_mid_day_resume
-
-        # ── RiskMonitor: background health checks ──
-        _monitor = None
-        if risk_cfg.get("monitor_enabled", True):
-            from engine.risk.monitor import RiskMonitor
-
-            def _monitor_state():
-                try:
-                    last_close = self._live_bars[-1].get("close", {}) if self._live_bars else {}
-                    return {
-                        "equity": portfolio.total_equity,
-                        "cash": portfolio.cash,
-                        "positions": [
-                            {
-                                "symbol": sym,
-                                "qty": p.size,
-                                "market_value": abs(p.size)
-                                * last_close.get(sym, portfolio._last_prices.get(sym, p.entry_price)),
-                            }
-                            for sym, p in portfolio.positions.items()
-                            if p.size
-                        ],
-                    }
-                except Exception:
-                    return None
-
-            _monitor = RiskMonitor(_monitor_state, risk_cfg)
-            _monitor.start(interval_sec=int(risk_cfg.get("monitor_interval", 60)))
 
         while True:
             if _skip_first_increment:
@@ -927,26 +954,18 @@ class LiveRunner:
             self._live_daily_start_equity = 0.0
             self._live_bar_count = live_state.get("bar_count", self._live_bar_count)
 
-            logger.info(
-                "── Day %d starting ── cash=%.2f positions=%d", trading_day, portfolio.cash, len(portfolio.positions)
-            )
+            logger.info("── Day %d starting ── cash=%.2f positions=%d",
+                        trading_day, portfolio.cash, len(portfolio.positions))
 
             # Run one trading day
             day_stop_reason = self._run_one_live_day(portfolio, live_state, symbols)
-            logger.info(
-                "── Day %d ended: %s ── cash=%.2f positions=%d",
-                trading_day,
-                day_stop_reason,
-                portfolio.cash,
-                len(portfolio.positions),
-            )
+            logger.info("── Day %d ended: %s ── cash=%.2f positions=%d",
+                        trading_day, day_stop_reason, portfolio.cash, len(portfolio.positions))
 
             # Update live_state from runner state
             live_state["bar_count"] = self._live_bar_count
             live_state["peak_equity"] = self._live_peak_equity
-            live_state["last_bq_ts"] = (
-                getattr(self, "_bq_source", None) and self._bq_source.last_ts or live_state.get("last_bq_ts", "")
-            )
+            live_state["last_bq_ts"] = getattr(self, '_bq_source', None) and self._bq_source.last_ts or live_state.get("last_bq_ts", "")
 
             # Save end-of-day state
             if state_mgr:
@@ -959,15 +978,16 @@ class LiveRunner:
                 break
 
             # Check cumulative drawdown
-            current_dd = (self._live_peak_equity - portfolio._mark_to_market({})) / max(self._live_peak_equity, 1)
+            current_dd = (
+                (self._live_peak_equity - portfolio._mark_to_market({}))
+                / max(self._live_peak_equity, 1)
+            )
             if current_dd >= max_drawdown:
-                self._live_stop_reason = f"MAX_DRAWDOWN ({current_dd * 100:.1f}%)"
+                self._live_stop_reason = f"MAX_DRAWDOWN ({current_dd*100:.1f}%)"
                 logger.warning("Cumulative drawdown stop: %s", self._live_stop_reason)
                 break
 
         logger.info("Multi-day loop complete: %s", self._live_stop_reason or "normal")
-        if _monitor:
-            _monitor.stop()
 
     def _load_or_create_portfolio(self):
         """Load portfolio from saved state or create fresh.
@@ -983,16 +1003,21 @@ class LiveRunner:
         if self._state_manager and self._state_manager.checkpoint_exists():
             cp = self._state_manager.load_checkpoint()
             if cp:
-                portfolio = StateManager.restore_portfolio(cp["portfolio_data"], Portfolio, Position)
+                portfolio = StateManager.restore_portfolio(
+                    cp["portfolio_data"], Portfolio, Position
+                )
                 live_state = cp["live_state"]
                 live_state["trading_day"] = cp.get("trading_day", 0)
-                logger.info("Recovered from checkpoint: day %d, cash=%.2f", live_state["trading_day"], portfolio.cash)
+                logger.info("Recovered from checkpoint: day %d, cash=%.2f",
+                            live_state["trading_day"], portfolio.cash)
                 return portfolio, live_state, True  # mid-day resume
 
         # Try full state (end-of-day save = day completed)
         if self._state_manager and self._state_manager.exists():
             state = self._state_manager.load()
-            portfolio = StateManager.restore_portfolio(state["portfolio_data"], Portfolio, Position)
+            portfolio = StateManager.restore_portfolio(
+                state["portfolio_data"], Portfolio, Position
+            )
             live_state = state["live_state"]
             live_state["trading_day"] = state.get("trading_day", 0)
 
@@ -1000,12 +1025,9 @@ class LiveRunner:
             for sym, qty in state.get("tracker_data", {}).items():
                 self.position_tracker._positions[sym] = qty
 
-            logger.info(
-                "Loaded state: day %d, cash=%.2f, %d positions",
-                live_state["trading_day"],
-                portfolio.cash,
-                len(portfolio.positions),
-            )
+            logger.info("Loaded state: day %d, cash=%.2f, %d positions",
+                        live_state["trading_day"], portfolio.cash,
+                        len(portfolio.positions))
             return portfolio, live_state, False  # day was completed
 
         # Fresh start
@@ -1036,14 +1058,9 @@ class LiveRunner:
         # DataFrameSource expects: close=DataFrame(columns=symbols, index=timestamps)
         close = pd.DataFrame({sym: [float("nan")] for sym in symbols})
         src = DataFrameSource(close=close)
-        ctx = StrategyContext(
-            data=src,
-            portfolio=portfolio,
-            config={
-                "symbols": symbols,
-                **strat_cfg,
-            },
-        )
+        ctx = StrategyContext(data=src, portfolio=portfolio, config={
+            "symbols": symbols, **strat_cfg,
+        })
         try:
             self.strategy.on_init(ctx, symbols=symbols)
         except TypeError:
@@ -1070,9 +1087,7 @@ class LiveRunner:
 
         logger.info(
             "Day %d: market closed — sleeping %dh%dm until %s UTC",
-            trading_day,
-            hours,
-            mins,
+            trading_day, hours, mins,
             next_open.strftime("%Y-%m-%d %H:%M"),
         )
 
@@ -1126,15 +1141,35 @@ class LiveRunner:
 
         strat_cfg = self.config.get("strategy", {})
         risk_cfg = self.config.get("risk", {})
+
+        # ── Post-trade risk monitor (background) ──
+        def _risk_state():
+            cash = getattr(portfolio, 'cash', 0.0)
+            pos_val = 0.0
+            positions_detail = {}
+            if hasattr(portfolio, 'positions'):
+                for sym, p in portfolio.positions.items():
+                    if hasattr(p, 'size') and p.size > 0:
+                        # Use cost_basis as rough mark if no live price available
+                        px = getattr(p, 'cost_basis', 0) or getattr(p, 'avg_price', 0) or getattr(p, 'entry_price', 0)
+                        val = p.size * px
+                        pos_val += val
+                        positions_detail[sym] = val
+            return {
+                "equity": cash + pos_val,
+                "cash": cash,
+                "positions_value": pos_val,
+                "positions": positions_detail,
+            }
+        self._risk_monitor.add_check("live", _risk_state)
+        self._risk_monitor.start()
         schedule_cfg = self.config.get("schedule", {})
 
         poll_interval = int(schedule_cfg.get("bar_interval", 60))
-        max_duration_min = int(schedule_cfg.get("max_duration_per_day", schedule_cfg.get("max_duration_minutes", 390)))
+        max_duration_min = int(schedule_cfg.get("max_duration_per_day",
+                                schedule_cfg.get("max_duration_minutes", 390)))
         max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))
         max_daily_loss = float(risk_cfg.get("max_daily_loss", 0.05))
-        max_leverage = float(risk_cfg.get("max_leverage", 1.0))
-        max_concentration = float(risk_cfg.get("max_concentration", 0.3))
-        max_net_exposure = float(risk_cfg.get("max_net_exposure", 1.0))
         max_bq_failures = int(risk_cfg.get("max_consecutive_failures", 10))
         checkpoint_interval = int(self.config.get("state", {}).get("checkpoint_interval", 300))
         lookback_bars = int(self.config.get("live", {}).get("lookback_bars", 0))
@@ -1149,7 +1184,7 @@ class LiveRunner:
             logger.info("Live warmup: skipping trading for first %d bars", lookback_bars)
 
         # Create or reuse BQDataSource
-        if not hasattr(self, "_bq_source") or self._bq_source is None:
+        if not hasattr(self, '_bq_source') or self._bq_source is None:
             self._bq_source = BQDataSource(
                 symbols=symbols,
                 market=self._market,
@@ -1157,8 +1192,11 @@ class LiveRunner:
             )
             # ── Override BQ seed ──
             from zoneinfo import ZoneInfo
-
-            tz = ZoneInfo("Asia/Hong_Kong") if self._market == "hk" else ZoneInfo("America/New_York")
+            tz = (
+                ZoneInfo("Asia/Hong_Kong")
+                if self._market == "hk"
+                else ZoneInfo("America/New_York")
+            )
             if live_state.get("trading_day", 1) > 1:
                 # Resume: prefer saved last_bq_ts, fallback to now
                 saved_ts = live_state.get("last_bq_ts", "")
@@ -1166,21 +1204,20 @@ class LiveRunner:
                     self._bq_source.last_ts = saved_ts
                     logger.info(
                         "Resume day %d — continuing from saved ts %s",
-                        live_state["trading_day"],
-                        saved_ts,
+                        live_state["trading_day"], saved_ts,
                     )
                 else:
-                    self._bq_source.last_ts = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+                    self._bq_source.last_ts = datetime.now(tz).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    )
                     logger.info(
                         "Resume day %d — no saved ts, starting from now %s",
-                        live_state["trading_day"],
-                        self._bq_source.last_ts,
+                        live_state["trading_day"], self._bq_source.last_ts,
                     )
             elif lookback_bars > 0:
                 # Fresh start: replay exactly lookback_bars timestamps
                 from common.normalize import queryize_symbol
                 from google.cloud import bigquery as _bq
-
                 try:
                     first_sym = queryize_symbol(symbols[0], self._market)
                     client = _bq.Client(project="deductive-notch-495015-c2")
@@ -1197,8 +1234,7 @@ class LiveRunner:
                         self._bq_source.last_ts = str(rows[0][0])
                         logger.info(
                             "BQ seed: %s (exactly %d bars for lookback)",
-                            self._bq_source.last_ts,
-                            lookback_bars,
+                            self._bq_source.last_ts, lookback_bars,
                         )
                 except Exception:
                     logger.debug("BQ seed query failed, using default seed")
@@ -1219,7 +1255,6 @@ class LiveRunner:
         prefetch_n = max(lookback_bars, strat_lookback)
         if prefetch_n > 0 and len(self._live_bars) < prefetch_n:
             from live.prefetch import prefetch_bars
-
             prefetched = prefetch_bars(symbols, self._market, prefetch_n)
             if prefetched:
                 self._live_bars = prefetched + self._live_bars
@@ -1228,21 +1263,15 @@ class LiveRunner:
                 source.last_ts = str(prefetched[-1]["timestamp"])
                 logger.info(
                     "Prefetched %d bars for strategy lookback (need %d)",
-                    len(prefetched),
-                    prefetch_n,
+                    len(prefetched), prefetch_n,
                 )
 
         # Ensure strategy context is set up with proper symbol columns
         close = pd.DataFrame({sym: [float("nan")] for sym in symbols})
         src_init = DataFrameSource(close=close)
-        ctx_init = StrategyContext(
-            data=src_init,
-            portfolio=portfolio,
-            config={
-                "symbols": symbols,
-                **strat_cfg,
-            },
-        )
+        ctx_init = StrategyContext(data=src_init, portfolio=portfolio, config={
+            "symbols": symbols, **strat_cfg,
+        })
         # on_init is called once before the first day; subsequent days just need ctx rebuild
 
         def _rebuild_ctx() -> StrategyContext:
@@ -1278,21 +1307,13 @@ class LiveRunner:
             low_df = pd.DataFrame(low_cols)
             volume_df = pd.DataFrame(volume_cols)
             src2 = DataFrameSource(
-                close=close_df,
-                open=open_df,
-                high=high_df,
-                low=low_df,
-                volume=volume_df,
+                close=close_df, open=open_df, high=high_df,
+                low=low_df, volume=volume_df,
             )
             src2.timestamp = [self._live_bars[i].get("timestamp", "") for i in range(n)]
-            return StrategyContext(
-                data=src2,
-                portfolio=portfolio,
-                config={
-                    "symbols": symbols,
-                    **strat_cfg,
-                },
-            )
+            return StrategyContext(data=src2, portfolio=portfolio, config={
+                "symbols": symbols, **strat_cfg,
+            })
 
         last_checkpoint_time = day_start_time
 
@@ -1334,49 +1355,13 @@ class LiveRunner:
 
                 # ── Risk stop checks ──
                 if current_dd >= max_drawdown:
-                    day_stop_reason = f"MAX_DRAWDOWN ({current_dd * 100:.1f}%)"
+                    day_stop_reason = f"MAX_DRAWDOWN ({current_dd*100:.1f}%)"
                     logger.warning("Risk stop: %s", day_stop_reason)
                     source.stop()
                 elif daily_loss >= max_daily_loss:
-                    day_stop_reason = f"DAILY_LOSS ({daily_loss * 100:.1f}%)"
+                    day_stop_reason = f"DAILY_LOSS ({daily_loss*100:.1f}%)"
                     logger.warning("Risk stop: %s", day_stop_reason)
                     source.stop()
-
-                # ── Risk: leverage / exposure / concentration (advisory) ──
-                if eq > 0 and portfolio.positions:
-                    close_prices = bar_data.get("close", {})
-                    pos_values = {
-                        sym: abs(p.size) * close_prices.get(sym, portfolio._last_prices.get(sym, 0))
-                        for sym, p in portfolio.positions.items()
-                        if p.size
-                    }
-                    total_pos_value = sum(pos_values.values())
-
-                    _leverage = total_pos_value / eq
-                    if _leverage >= max_leverage:
-                        logger.warning(
-                            "Risk advisory: leverage %.1f%% >= limit %.1f%%",
-                            _leverage * 100,
-                            max_leverage * 100,
-                        )
-
-                    _max_conc = max(pos_values.values()) / eq if pos_values else 0
-                    if _max_conc >= max_concentration:
-                        logger.warning(
-                            "Risk advisory: max concentration %.1f%% >= limit %.1f%%",
-                            _max_conc * 100,
-                            max_concentration * 100,
-                        )
-
-                    long_val = sum(v for sym, v in pos_values.items() if portfolio.positions[sym].size > 0)
-                    short_val = sum(v for sym, v in pos_values.items() if portfolio.positions[sym].size < 0)
-                    _net_exp = abs(long_val - short_val) / eq
-                    if _net_exp >= max_net_exposure:
-                        logger.warning(
-                            "Risk advisory: net exposure %.1f%% >= limit %.1f%%",
-                            _net_exp * 100,
-                            max_net_exposure * 100,
-                        )
 
                 # ── Strategy ──
                 live_ctx = _rebuild_ctx()
@@ -1384,8 +1369,8 @@ class LiveRunner:
                 signals = self.strategy.on_bar(live_ctx, bar_idx)
 
                 # ── Bar progress log ──
-                last_reb = getattr(self.strategy, "_last_rebalance", None)
-                reb_every = getattr(self.strategy, "rebalance_every", None)
+                last_reb = getattr(self.strategy, '_last_rebalance', None)
+                reb_every = getattr(self.strategy, 'rebalance_every', None)
                 if last_reb is not None and reb_every is not None:
                     if last_reb < 0:
                         # Strategy hasn't rebalanced yet (warmup phase)
@@ -1400,7 +1385,7 @@ class LiveRunner:
                 if day_warmup_remaining > 0:
                     day_warmup_remaining -= 1
                     self.observer.record_bar(ts, eq, portfolio.cash, 0.0)
-                    if hasattr(self, "_dash_observer"):
+                    if hasattr(self, '_dash_observer'):
                         self._dash_observer.record_equity(
                             bar=self._live_bar_count,
                             equity=eq,
@@ -1415,15 +1400,14 @@ class LiveRunner:
                 if signals:
                     n_buy = sum(1 for s in signals if s.side in ("buy", "target"))
                     n_sell = len(signals) - n_buy
-                    details = ", ".join(f"{s.symbol}({s.side})" for s in signals[:20])
+                    details = ", ".join(
+                        f"{s.symbol}({s.side})" for s in signals[:20]
+                    )
                     if len(signals) > 20:
-                        details += f" ... +{len(signals) - 20} more"
+                        details += f" ... +{len(signals)-20} more"
                     logger.info(
                         "Bar %d 信号: %d buy, %d sell — %s",
-                        bar_idx,
-                        n_buy,
-                        n_sell,
-                        details,
+                        bar_idx, n_buy, n_sell, details,
                     )
                     if n_buy > 0:
                         for s in signals:
@@ -1431,7 +1415,7 @@ class LiveRunner:
                                 s.weight = 1.0 / n_buy
 
                     for sig in signals:
-                        last_prices = getattr(portfolio, "_last_prices", {})
+                        last_prices = getattr(portfolio, '_last_prices', {})
                         if sig.symbol not in bar_data.get("close", {}):
                             fallback = last_prices.get(sig.symbol)
                             if not fallback or fallback <= 0:
@@ -1449,11 +1433,14 @@ class LiveRunner:
                             if sd["qty"] <= 0:
                                 continue
 
+                        # Pre-trade risk checks: leverage, concentration, cash buffer
+                        exec_est = price * (1.0 + self._cost_model.slippage_bps / 10000.0) if sd["side"] == "buy" else price * (1.0 - self._cost_model.slippage_bps / 10000.0)
+                        if not self._check_pre_trade_risk(portfolio, bar_data, sd["symbol"], sd["side"], sd["qty"], exec_est):
+                            continue
+
                         tracked = asyncio.run(
                             self.order_manager.submit(
-                                sd["symbol"],
-                                sd["side"],
-                                sd["qty"],
+                                sd["symbol"], sd["side"], sd["qty"],
                                 strategy_name=type(self.strategy).__name__,
                                 signal_id=sd.get("signal_id"),
                             )
@@ -1467,29 +1454,18 @@ class LiveRunner:
                                 portfolio.positions[tracked.symbol] = pos
                             delta = tracked.filled_qty if tracked.side == "buy" else -tracked.filled_qty
                             pos.add(delta, price)
-                            # Commission (mirrors _process_signal)
-                            exec_price = (
-                                price * (1.0 + self._cost_model.slippage_bps / 10000.0)
-                                if tracked.side == "buy"
-                                else price * (1.0 - self._cost_model.slippage_bps / 10000.0)
-                            )
-                            notional = tracked.filled_qty * exec_price
-                            commission = max(
-                                notional * self._cost_model.commission_bps / 10000.0, self._cost_model.min_commission
-                            )
+                            # Commission (mirrors _process_signal — use real fee model)
+                            exec_price = price * (1.0 + self._cost_model.slippage_bps / 10000.0) if tracked.side == "buy" else price * (1.0 - self._cost_model.slippage_bps / 10000.0)
+                            commission = self._cost_model.calculate_fee(tracked.filled_qty, exec_price, tracked.side)
                             if tracked.side == "buy":
                                 portfolio.cash -= price * tracked.filled_qty + commission
                             else:
                                 portfolio.cash += price * tracked.filled_qty - commission
                             self.observer.record_trade(
-                                ts,
-                                tracked.symbol,
-                                tracked.side,
-                                int(tracked.filled_qty),
-                                price,
-                                commission,
+                                ts, tracked.symbol, tracked.side,
+                                int(tracked.filled_qty), price, commission,
                             )
-                            if hasattr(self, "_dash_observer"):
+                            if hasattr(self, '_dash_observer'):
                                 self._dash_observer.record_trade(
                                     bar=self._live_bar_count,
                                     symbol=tracked.symbol,
@@ -1507,21 +1483,17 @@ class LiveRunner:
                         if hasattr(pos, "size") and pos.size > 0:
                             px = bar_data["close"].get(sym, 0)
                             cb = getattr(pos, "cost_basis", 0) or getattr(pos, "avg_price", 0)
-                            pos_list.append(
-                                {
-                                    "symbol": sym,
-                                    "qty": pos.size,
-                                    "price": px,
-                                    "cost_basis": cb,
-                                    "mkt_value": pos.size * px,
-                                    "pnl_pct": (px / cb - 1) * 100 if cb > 0 else 0,
-                                }
-                            )
+                            pos_list.append({
+                                "symbol": sym, "qty": pos.size,
+                                "price": px, "cost_basis": cb,
+                                "mkt_value": pos.size * px,
+                                "pnl_pct": (px / cb - 1) * 100 if cb > 0 else 0,
+                            })
                     self.observer.snapshot_portfolio(ts, pos_list)
 
                 self.observer.record_bar(ts, eq, portfolio.cash, 0.0)
 
-                if hasattr(self, "_dash_observer"):
+                if hasattr(self, '_dash_observer'):
                     self._dash_observer.record_equity(
                         bar=self._live_bar_count,
                         equity=eq,
@@ -1575,6 +1547,7 @@ class LiveRunner:
             day_stop_reason = day_stop_reason or "exception"
 
         # Determine final stop reason
+        self._risk_monitor.stop()
         if day_stop_reason:
             return day_stop_reason
         if not self._calendar.is_open_now():
@@ -1596,7 +1569,7 @@ class LiveRunner:
 
         if self.reporter:
             try:
-                reason = getattr(self, "_live_stop_reason", None) or ""
+                reason = getattr(self, '_live_stop_reason', None) or ""
                 self.reporter.generate(stop_reason=reason)
                 logger.info("Report generated")
             except Exception:
@@ -1605,10 +1578,9 @@ class LiveRunner:
         # Register in ExperimentTracker if experiment.id is configured
         try:
             from live.config import record_experiment
-
             record_experiment(self.config, self._output_dir)
         except Exception:
             logger.exception("Failed to record experiment (non-fatal)")
 
-        reason = getattr(self, "_live_stop_reason", None) or "normal"
+        reason = getattr(self, '_live_stop_reason', None) or "normal"
         logger.info("LiveRunner shutdown complete — reason: %s", reason)

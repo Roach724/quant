@@ -4,6 +4,8 @@ import os
 import logging
 from typing import Optional
 
+import pandas as pd
+
 from futu import (
     OpenCryptoTradeContext, RET_OK,
     TrdEnv, TrdSide, OrderType, ModifyOrderOp,
@@ -135,6 +137,9 @@ class FutuCryptoBroker:
             filled_qty=float(row.get("dealt_qty", 0)),
             status=str(row.get("order_status", "unknown")).lower(),
             avg_price=float(row.get("dealt_avg_price", 0)) if row.get("dealt_avg_price") else None,
+            created_at=pd.to_datetime(row["create_time"]).to_pydatetime()
+            if "create_time" in row and pd.notna(row["create_time"])
+            else None,
         )
 
     async def get_positions(self) -> list[BrokerPosition]:
@@ -196,6 +201,9 @@ class FutuCryptoBroker:
                 filled_qty=float(row.get("dealt_qty", 0)),
                 status=str(row.get("order_status", "unknown")).lower(),
                 avg_price=float(row.get("dealt_avg_price", 0)) if row.get("dealt_avg_price") else None,
+                created_at=pd.to_datetime(row["create_time"]).to_pydatetime()
+                if "create_time" in row and pd.notna(row["create_time"])
+                else None,
             ))
         return orders
 
