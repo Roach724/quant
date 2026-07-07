@@ -753,24 +753,24 @@ class TradingRunner:
                         acct = _cap.get_account(_sid)
                         pos_list = _cap.get_positions(_sid)
                         cash_val = acct.cash if acct else 0.0
-                        positions = [
-                            {
-                                "symbol": p.symbol,
-                                "qty": p.qty,
-                                "market_value": p.qty * (p.avg_entry_price or 0),
-                            }
-                            for p in (pos_list or [])
-                        ]
+                        pos_dict = {}
+                        pos_value = 0.0
+                        for p in (pos_list or []):
+                            val = p.qty * (p.avg_entry_price or 0)
+                            pos_dict[p.symbol] = val
+                            pos_value += val
                         return {
-                            "equity": cash_val + sum(pp["market_value"] for pp in positions),
+                            "equity": cash_val + pos_value,
                             "cash": cash_val,
-                            "positions": positions,
+                            "positions_value": pos_value,
+                            "positions": pos_dict,
                         }
                     except Exception:
                         return None
 
-                _monitor = RiskMonitor(_monitor_state, risk_cfg)
-                _monitor.start(interval_sec=int(risk_cfg.get("monitor_interval", 60)))
+                _monitor = RiskMonitor(risk_cfg)
+                _monitor.add_check("trading", _monitor_state)
+                _monitor.start()
 
             while not stop.is_set():
                 trading_day += 1
