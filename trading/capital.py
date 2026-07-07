@@ -117,6 +117,7 @@ class CapitalManager:
                 acct.cash -= price * qty + commission
             else:
                 acct.cash += price * qty - commission
+            acct.total_commission = (acct.total_commission or 0) + commission
 
         # 记录交易
         record = TradeRecord(
