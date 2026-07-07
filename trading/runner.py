@@ -157,7 +157,7 @@ class TradingRunner:
         if multi_day:
             self._run_multi_day(strategy_id, adapter, stop, cfg)
         else:
-            self._run_single_day(strategy_id, adapter, stop)
+            self._run_single_day(strategy_id, adapter, stop, cfg)
 
     @staticmethod
     def _resolve_bq_symbols(market: str) -> list[str]:
@@ -176,13 +176,32 @@ class TradingRunner:
         symbols = [s for s in symbols if not s.startswith("^")]
         return symbols
 
+    def _build_portfolio_from_capital(self, strategy_id: int) -> Portfolio:
+        """Build an engine Portfolio snapshot from CapitalManager DB state."""
+        acct = self.capital.get_account(strategy_id)
+        portfolio = Portfolio(
+            initial_capital=acct.initial_capital if acct else 0,
+        )
+        portfolio.cash = acct.cash if acct else 0
+        for vp in self.capital.get_positions(strategy_id):
+            if vp.qty and vp.qty > 0:
+                p = Position(vp.symbol, entry_price=vp.avg_entry_price)
+                p.add(int(vp.qty), vp.avg_entry_price)
+                portfolio.positions[vp.symbol] = p
+        return portfolio
+
     def _run_single_day(
         self,
         strategy_id: int,
         adapter: StrategyAdapter,
         stop: threading.Event,
+        cfg: dict,
     ):
         """单日轮询循环 — 使用 BQDataSource on_bar 回调模式"""
+        schedule = cfg.get("schedule", {})
+        risk_cfg = cfg.get("risk", {})
+        _max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))
+        _max_daily_loss = float(risk_cfg.get("max_daily_loss", 0.05))
         try:
             from live.bq_datasource import BQDataSource
 
@@ -203,12 +222,14 @@ class TradingRunner:
             # For resume (bar_count > 0): start from now, no replay needed.
             if self.scheduler:
                 from zoneinfo import ZoneInfo
+
                 tz = ZoneInfo("Asia/Hong_Kong") if market == "hk" else ZoneInfo("America/New_York")
                 if self.scheduler.bar_count > 0:
                     source.last_ts = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
                 else:
                     from common.normalize import queryize_symbol
                     from google.cloud import bigquery as _bq
+
                     try:
                         first_sym = queryize_symbol(symbols[0], market)
                         client = _bq.Client(project="deductive-notch-495015-c2")
@@ -231,12 +252,15 @@ class TradingRunner:
             _ctx = {"ctx": None}
             _live_bars: list[dict] = []
             _bar_count = 0
+            peak_equity = 0.0
+            daily_start_equity = 0.0
 
             # Prefetch historical bars for strategy lookback on resume
             if self.scheduler and self.scheduler.bar_count > 0:
                 strat_lookback = int(self.scheduler.lookback_bars or 0)
                 if strat_lookback > 0:
                     from live.prefetch import prefetch_bars
+
                     prefetched = prefetch_bars(symbols, market, strat_lookback)
                     if prefetched:
                         _live_bars.extend(prefetched)
@@ -244,7 +268,8 @@ class TradingRunner:
                         source.last_ts = str(prefetched[-1]["timestamp"])
                         logger.info(
                             "Prefetched %d bars for strategy lookback (need %d)",
-                            len(prefetched), strat_lookback,
+                            len(prefetched),
+                            strat_lookback,
                         )
 
             def _rebuild_ctx():
@@ -283,7 +308,7 @@ class TradingRunner:
                 )
 
             def _on_bar(bar_data: dict):
-                nonlocal _bar_count
+                nonlocal _bar_count, peak_equity, daily_start_equity
                 _live_bars.append(bar_data)
                 _bar_count += 1
 
@@ -320,11 +345,9 @@ class TradingRunner:
                         return
                     signals = adapter.generate_signals(ctx, _bar_count - 1, strategy_id)
                     if signals:
-                        details = ", ".join(
-                            f"{s.symbol}({s.side})" for s in signals[:20]
-                        )
+                        details = ", ".join(f"{s.symbol}({s.side})" for s in signals[:20])
                         if len(signals) > 20:
-                            details += f" ... +{len(signals)-20} more"
+                            details += f" ... +{len(signals) - 20} more"
                         logger.info(
                             "Strategy %d: %d signals at bar %d — %s",
                             strategy_id,
@@ -342,6 +365,50 @@ class TradingRunner:
                             elif sig.side == "buy":
                                 if sig.symbol not in _portfolio.positions:
                                     _portfolio.positions[sig.symbol] = Position(symbol=sig.symbol)
+
+                # ── Risk: equity tracking & stop checks ──
+                close_prices = bar_data.get("close", {})
+                pos_list = self.capital.get_positions(strategy_id)
+                position_value = 0.0
+                for p in pos_list:
+                    mkt_price = close_prices.get(p.symbol, p.avg_entry_price or 0.0)
+                    mkt_val = p.qty * mkt_price
+                    position_value += mkt_val
+                    # Mark-to-market: update DB position values
+                    if abs(p.market_value - mkt_val) > 0.01:
+                        p.market_value = mkt_val
+                        p.unrealized_pnl = mkt_val - p.qty * (p.avg_entry_price or 0)
+                if pos_list:
+                    try:
+                        self.capital.session.commit()
+                    except Exception:
+                        self.capital.session.rollback()
+                acct = self.capital.get_account(strategy_id)
+                eq = (acct.cash if acct else 0.0) + position_value
+
+                if eq > peak_equity:
+                    peak_equity = eq
+                    # Persist peak equity to DB
+                    if acct:
+                        acct.peak_equity = peak_equity
+                if daily_start_equity == 0:
+                    daily_start_equity = eq
+
+                current_dd = (peak_equity - eq) / max(peak_equity, 1) if peak_equity > 0 else 0.0
+                daily_loss = (daily_start_equity - eq) / max(daily_start_equity, 1) if daily_start_equity > 0 else 0.0
+
+                if current_dd >= _max_drawdown:
+                    logger.warning(
+                        "Strategy %d: RISK STOP — MAX_DRAWDOWN (%.1f%%)",
+                        strategy_id, current_dd * 100,
+                    )
+                    source.stop()
+                elif daily_loss >= _max_daily_loss:
+                    logger.warning(
+                        "Strategy %d: RISK STOP — DAILY_LOSS (%.1f%%)",
+                        strategy_id, daily_loss * 100,
+                    )
+                    source.stop()
 
             source.stop_check = lambda: stop.is_set()
             source.on_bar = _on_bar
@@ -365,7 +432,8 @@ class TradingRunner:
         risk_cfg = cfg.get("risk", {})
         max_trading_days = int(schedule.get("max_trading_days", 0))
         max_duration_per_day = int(schedule.get("max_duration_per_day", 390))
-        _max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))  # TODO: implement drawdown check
+        _max_drawdown = float(risk_cfg.get("max_drawdown", 0.15))
+        _max_daily_loss = float(risk_cfg.get("max_daily_loss", 0.05))
         bar_interval = int(schedule.get("bar_interval", self.bar_interval))
 
         try:
@@ -386,12 +454,14 @@ class TradingRunner:
             trading_day = 0
             bar_count = 0
             peak_equity = 0.0
+            daily_start_equity = 0.0
             if state_mgr and state_mgr.exists():
                 try:
                     saved = state_mgr.load()
                     trading_day = saved.get("trading_day", 0)
                     bar_count = saved.get("live_state", {}).get("bar_count", 0)
                     peak_equity = saved.get("live_state", {}).get("peak_equity", 0.0)
+                    daily_start_equity = saved.get("live_state", {}).get("daily_start_equity", 0.0)
                     logger.info(
                         "Strategy %d: restored multi-day state (day=%d, bars=%d)",
                         strategy_id,
@@ -421,12 +491,14 @@ class TradingRunner:
             # For resume (bar_count > 0): start from now, no replay needed.
             if self.scheduler:
                 from zoneinfo import ZoneInfo
+
                 tz = ZoneInfo("Asia/Hong_Kong") if market == "hk" else ZoneInfo("America/New_York")
                 if self.scheduler.bar_count > 0:
                     source.last_ts = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
                 else:
                     from common.normalize import queryize_symbol
                     from google.cloud import bigquery as _bq
+
                     try:
                         first_sym = queryize_symbol(symbols[0], market)
                         client = _bq.Client(project="deductive-notch-495015-c2")
@@ -452,7 +524,10 @@ class TradingRunner:
             day_start_ts = None
             day_stop_reason = None
             stop_reason = None
-            _portfolio = Portfolio(initial_capital=0)
+            # Build portfolio from CapitalManager (not empty shell)
+            acct = self.capital.get_account(strategy_id)
+            _portfolio = Portfolio(initial_capital=acct.initial_capital if acct else 0)
+            _portfolio.cash = acct.cash if acct else 0
             # 从 CapitalManager 恢复真实持仓，否则 restart 后 strategy 看到空仓
             # → 不平旧仓(不 close)、只买新仓 → 旧仓占着现金不变现 → 买不起
             for vp in self.capital.get_positions(strategy_id):
@@ -466,6 +541,7 @@ class TradingRunner:
                 strat_lookback = int(self.scheduler.lookback_bars or 0)
                 if strat_lookback > 0:
                     from live.prefetch import prefetch_bars
+
                     prefetched = prefetch_bars(symbols, market, strat_lookback)
                     if prefetched:
                         _live_bars.extend(prefetched)
@@ -473,7 +549,8 @@ class TradingRunner:
                         source.last_ts = str(prefetched[-1]["timestamp"])
                         logger.info(
                             "Prefetched %d bars for strategy lookback (need %d)",
-                            len(prefetched), strat_lookback,
+                            len(prefetched),
+                            strat_lookback,
                         )
 
             def _rebuild_ctx():
@@ -514,7 +591,7 @@ class TradingRunner:
 
             def _on_bar(bar_data: dict):
                 """Per-bar callback — called by BQDataSource._poll()"""
-                nonlocal bar_count, day_bars, peak_equity, day_start_ts
+                nonlocal bar_count, day_bars, peak_equity, daily_start_equity, day_stop_reason, day_start_ts
 
                 _live_bars.append(bar_data)
                 bar_count += 1
@@ -550,8 +627,9 @@ class TradingRunner:
                             gap = s.rebalance_every - (s.bar_count - s.last_rebalance_bar)
                         else:
                             gap = s.lookback_bars - s.bar_count
-                        logger.info("Bar %d (累计 %d) — %s, 距下次 %d bars",
-                                    bar_count, day_bars, dec.value, max(gap, 0))
+                        logger.info(
+                            "Bar %d (累计 %d) — %s, 距下次 %d bars", bar_count, day_bars, dec.value, max(gap, 0)
+                        )
                     if dec in (Decision.WAITING, Decision.SKIP):
                         return
                     signals = adapter.generate_signals(
@@ -560,11 +638,9 @@ class TradingRunner:
                         strategy_id,
                     )
                     if signals:
-                        details = ", ".join(
-                            f"{s.symbol}({s.side})" for s in signals[:20]
-                        )
+                        details = ", ".join(f"{s.symbol}({s.side})" for s in signals[:20])
                         if len(signals) > 20:
-                            details += f" ... +{len(signals)-20} more"
+                            details += f" ... +{len(signals) - 20} more"
                         logger.info(
                             "Strategy %d: %d signals at bar %d (day %d) — %s",
                             strategy_id,
@@ -584,6 +660,46 @@ class TradingRunner:
                                 if sig.symbol not in _portfolio.positions:
                                     _portfolio.positions[sig.symbol] = Position(symbol=sig.symbol)
 
+                # ── Risk: equity tracking & stop checks ──
+                close_prices = bar_data.get("close", {})
+                pos_list = self.capital.get_positions(strategy_id)
+                position_value = 0.0
+                for p in pos_list:
+                    mkt_price = close_prices.get(p.symbol, p.avg_entry_price or 0.0)
+                    mkt_val = p.qty * mkt_price
+                    position_value += mkt_val
+                    # Mark-to-market: update DB position values
+                    if abs(p.market_value - mkt_val) > 0.01:
+                        p.market_value = mkt_val
+                        p.unrealized_pnl = mkt_val - p.qty * (p.avg_entry_price or 0)
+                if pos_list:
+                    try:
+                        self.capital.session.commit()
+                    except Exception:
+                        self.capital.session.rollback()
+                acct = self.capital.get_account(strategy_id)
+                eq = (acct.cash if acct else 0.0) + position_value
+
+                if eq > peak_equity:
+                    peak_equity = eq
+                    # Persist peak equity to DB
+                    if acct:
+                        acct.peak_equity = peak_equity
+                if daily_start_equity == 0:
+                    daily_start_equity = eq
+
+                current_dd = (peak_equity - eq) / max(peak_equity, 1) if peak_equity > 0 else 0.0
+                daily_loss = (daily_start_equity - eq) / max(daily_start_equity, 1) if daily_start_equity > 0 else 0.0
+
+                if current_dd >= _max_drawdown:
+                    day_stop_reason = f"MAX_DRAWDOWN ({current_dd * 100:.1f}%)"
+                    logger.warning("Strategy %d: RISK STOP — %s", strategy_id, day_stop_reason)
+                    source.stop()
+                elif daily_loss >= _max_daily_loss:
+                    day_stop_reason = f"DAILY_LOSS ({daily_loss * 100:.1f}%)"
+                    logger.warning("Strategy %d: RISK STOP — %s", strategy_id, day_stop_reason)
+                    source.stop()
+
                 # Heartbeat every 30 bars to confirm the loop is alive
                 if bar_count % 30 == 0:
                     logger.info(
@@ -598,11 +714,12 @@ class TradingRunner:
                 if state_mgr and bar_count > 0 and bar_count % checkpoint_interval == 0:
                     try:
                         state_mgr.save_checkpoint(
-                            Portfolio(initial_capital=0),
+                            self._build_portfolio_from_capital(strategy_id),
                             {
                                 "trading_day": trading_day,
                                 "bar_count": bar_count,
                                 "peak_equity": peak_equity,
+                                "daily_start_equity": daily_start_equity,
                             },
                         )
                     except Exception:
@@ -622,6 +739,38 @@ class TradingRunner:
                 len(positions),
                 max_trading_days,
             )
+
+            # ── RiskMonitor: background health checks ──
+            _monitor = None
+            if risk_cfg.get("monitor_enabled", True):
+                from engine.risk.monitor import RiskMonitor
+
+                _sid = strategy_id
+                _cap = self.capital
+
+                def _monitor_state():
+                    try:
+                        acct = _cap.get_account(_sid)
+                        pos_list = _cap.get_positions(_sid)
+                        cash_val = acct.cash if acct else 0.0
+                        positions = [
+                            {
+                                "symbol": p.symbol,
+                                "qty": p.qty,
+                                "market_value": p.qty * (p.avg_entry_price or 0),
+                            }
+                            for p in (pos_list or [])
+                        ]
+                        return {
+                            "equity": cash_val + sum(pp["market_value"] for pp in positions),
+                            "cash": cash_val,
+                            "positions": positions,
+                        }
+                    except Exception:
+                        return None
+
+                _monitor = RiskMonitor(_monitor_state, risk_cfg)
+                _monitor.start(interval_sec=int(risk_cfg.get("monitor_interval", 60)))
 
             while not stop.is_set():
                 trading_day += 1
@@ -655,6 +804,7 @@ class TradingRunner:
                         if cp:
                             bar_count = cp.get("bar_count", bar_count)
                             peak_equity = cp.get("peak_equity", peak_equity)
+                            daily_start_equity = cp.get("daily_start_equity", daily_start_equity)
                             logger.info(
                                 "Strategy %d: recovered from checkpoint",
                                 strategy_id,
@@ -669,6 +819,7 @@ class TradingRunner:
                 day_bars = 0
                 day_start_ts = None
                 day_stop_reason = None
+                daily_start_equity = 0.0  # reset per day; set on first bar
                 max_bars_per_day = max_duration_per_day * 60 // bar_interval if bar_interval > 0 else 390
 
                 # Get current account state
@@ -729,17 +880,16 @@ class TradingRunner:
                 if state_mgr:
                     try:
                         state_mgr.save(
-                            Portfolio(initial_capital=0),
+                            self._build_portfolio_from_capital(strategy_id),
                             None,
                             {
                                 # Only a full market_close confirms the day completed.
                                 # A mid-day stop rolls back so restart's +=1 returns to
                                 # the same day (avoids false MAX_TRADING_DAYS on stop/start).
-                                "trading_day": trading_day
-                                if day_stop_reason == "market_close"
-                                else trading_day - 1,
+                                "trading_day": trading_day if day_stop_reason == "market_close" else trading_day - 1,
                                 "bar_count": bar_count,
                                 "peak_equity": peak_equity,
+                                "daily_start_equity": daily_start_equity,
                                 "stop_reason": day_stop_reason,
                                 "last_bq_ts": str(datetime.now(UTC)),
                             },
@@ -770,6 +920,8 @@ class TradingRunner:
         except Exception:
             logger.exception("Strategy %d: multi-day loop fatal", strategy_id)
         finally:
+            if _monitor:
+                _monitor.stop()
             logger.info("Strategy %d: multi-day loop exited", strategy_id)
 
     @staticmethod
