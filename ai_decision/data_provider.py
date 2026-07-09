@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -323,6 +323,11 @@ class LLMQuantMCPProvider:
         self._write = None
         self._disabled = False
 
+    @property
+    def is_available(self) -> bool:
+        """Check if LLMQuant MCP is currently connected."""
+        return self._session is not None and not self._disabled
+
     async def _ensure_session(self):
         """Lazy-init MCP session (reused across calls)."""
         if self._session is not None:
@@ -336,9 +341,10 @@ class LLMQuantMCPProvider:
             self._disabled = True
             return
 
+        import asyncio
+
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
-        import asyncio
 
         try:
             params = StdioServerParameters(
@@ -567,7 +573,8 @@ class YFinanceProvider:
                 for field in needed:
                     yf_key = self.FIELD_MAP[field]
                     val = info.get(yf_key)
-                    result[field] = val if val is not None and not (isinstance(val, float) and str(val) == "nan") else None
+                    is_nan = isinstance(val, float) and str(val) == "nan"
+                    result[field] = val if val is not None and not is_nan else None
                 return result
             except Exception as e:
                 err = str(e).lower()
@@ -603,6 +610,10 @@ class DataProvider:
 
     Priority: BigQuery → LLMQuant MCP → yfinance → unavailable marker.
     """
+
+    @property
+    def llmquant_available(self) -> bool:
+        return self.llmq.is_available if hasattr(self.llmq, 'is_available') else False
 
     def __init__(
         self,
@@ -655,7 +666,7 @@ class DataProvider:
 
         return MarketData(
             symbol=symbol,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             price=bq_data.get("price"),
             open=bq_data.get("open"),
             high=bq_data.get("high"),
@@ -716,7 +727,7 @@ class DataProvider:
 
             return MarketData(
                 symbol=sym,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 price=bq_data.get("price"),
                 open=bq_data.get("open"),
                 high=bq_data.get("high"),

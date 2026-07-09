@@ -94,3 +94,9 @@ ai_decision:
     path: "/var/log/quant"
     level: "INFO"
     format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+  # ── LLM Provider Configuration (api keys via env: DEEPSEEK_API_KEY / LLMQUANT_API_KEY) ──
+  deepseek:
+    base_url: "https://api.deepseek.com"
+
+  llmquant: {}

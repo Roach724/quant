@@ -4093,6 +4093,62 @@ async def dash_market_bars(market: str, symbol: str, limit: int = 78, days: int 
 
 # ── AI Decision Engine API ───────────────────────────────────────────────────
 
+@app.get("/api/admin/ai/health")
+async def ai_health_check():
+    """Health check for AI Decision Engine dependencies.
+
+    Checks: DeepSeek API + LLMQuant MCP connectivity.
+    """
+    import os
+
+    health = {
+        "deepseek": {"status": "unknown", "error": None},
+        "llmquant_mcp": {"status": "unknown", "error": None},
+        "bigquery": {"status": "unknown", "error": None},
+    }
+
+    # Check DeepSeek
+    try:
+        from openai import AsyncOpenAI
+        import asyncio
+        deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
+        if not deepseek_key:
+            health["deepseek"] = {"status": "disabled", "error": "DEEPSEEK_API_KEY not set"}
+        else:
+            client = AsyncOpenAI(api_key=deepseek_key, base_url="https://api.deepseek.com")
+            # Light ping: list models (cheapest call)
+            try:
+                await client.models.list()
+                health["deepseek"] = {"status": "ok"}
+            except Exception as e:
+                health["deepseek"] = {"status": "error", "error": str(e)[:200]}
+    except ImportError as e:
+        health["deepseek"] = {"status": "unavailable", "error": f"ImportError: {e}"}
+
+    # Check LLMQuant MCP
+    try:
+        from ai_decision.data_provider import LLMQuantMCPProvider
+        provider = LLMQuantMCPProvider()
+        await provider._ensure_session()
+        if provider.is_available:
+            health["llmquant_mcp"] = {"status": "ok"}
+        else:
+            health["llmquant_mcp"] = {"status": "disabled", "error": "MCP session not established (check LLMQUANT_API_KEY and npx)"}
+    except Exception as e:
+        health["llmquant_mcp"] = {"status": "error", "error": str(e)[:200]}
+
+    # Check BigQuery
+    try:
+        from google.cloud import bigquery
+        client = bigquery.Client(project="deductive-notch-495015-c2")
+        client.query("SELECT 1").result()
+        health["bigquery"] = {"status": "ok"}
+    except Exception as e:
+        health["bigquery"] = {"status": "error", "error": str(e)[:200]}
+
+    return health
+
+
 @app.get("/api/admin/ai/configs")
 async def ai_list_configs(db: Session = DB_SESSION_DEP):
     """List all AI decision config templates."""
