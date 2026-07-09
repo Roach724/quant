@@ -7,7 +7,6 @@ from typing import Any
 
 import yaml
 
-
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "default_config.yaml"
 
 
@@ -107,7 +106,25 @@ class AIDecisionConfig:
     def _exec_constraints(self) -> dict:
         return self.pipeline.get("execution", {}).get("constraints", {})
 
+
+    # ── LLM Provider ──
+
+    @property
+    def deepseek_api_key(self) -> str:
+        import os
+        return os.environ.get("DEEPSEEK_API_KEY", "")
+
+    @property
+    def deepseek_base_url(self) -> str:
+        return self._raw.get("deepseek", {}).get("base_url", "https://api.deepseek.com")
+
+    @property
+    def llmquant_api_key(self) -> str:
+        import os
+        return os.environ.get("LLMQUANT_API_KEY", "")
+
     # ── Schedule ──
+
 
     @property
     def schedule(self) -> dict:
@@ -118,6 +135,25 @@ class AIDecisionConfig:
     @property
     def logging(self) -> dict:
         return self._raw.get("logging", {})
+
+    def validate_keys(self) -> list[str]:
+        """Check that required API keys are configured.
+
+        Returns a list of warning messages for missing keys.
+        Empty list means all OK.
+        """
+        warnings = []
+        if not self.deepseek_api_key:
+            warnings.append(
+                "DEEPSEEK_API_KEY not set — LLM analysis/execution will fail. "
+                "Set env var or create ai_decision/.env with your key."
+            )
+        if not self.llmquant_api_key:
+            warnings.append(
+                "LLMQUANT_API_KEY not set — SEC filings and 13F data will be "
+                "unavailable. Analysis can still run with BQ + yfinance only."
+            )
+        return warnings
 
 
 def load_config(path: str | Path | None = None) -> AIDecisionConfig:

@@ -12,17 +12,16 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 
 import jinja2
 from openai import AsyncOpenAI
 
 from ai_decision.schemas import (
-    StockDecision,
-    FusionResult,
     AnalysisReport,
+    FusionResult,
     MarketData,
+    StockDecision,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,8 +49,9 @@ class StockEvaluator:
         self.max_position_pct = max_position_pct
         self.concurrent = concurrent
 
+        import os
         self._client = AsyncOpenAI(
-            api_key=api_key or "sk-2b1489de68a54d58864585dd6c34fd30",
+            api_key=api_key or os.environ.get("DEEPSEEK_API_KEY", ""),
             base_url=DEEPSEEK_BASE_URL,
         )
         self._jinja = jinja2.Environment(
@@ -132,6 +132,26 @@ class StockEvaluator:
         total_candidates: int,
     ) -> StockDecision:
         """Evaluate a single symbol."""
+        # ── Fast-path: skip LLM for clear-cut cases ──
+        # High score + no position → auto-buy (save LLM token)
+        if fusion.final_score >= 0.8 and (not holding or holding.get("qty", 0) == 0):
+            return StockDecision(
+                symbol=fusion.symbol,
+                action="buy",
+                suggested_weight=min(0.08, self.max_position_pct),
+                reason=f"High fusion score ({fusion.final_score:.2f}), auto-buy",
+                urgency="high",
+            )
+        # Low score + no position → auto-watch (not worth LLM)
+        if fusion.final_score <= 0.2 and (not holding or holding.get("qty", 0) == 0):
+            return StockDecision(
+                symbol=fusion.symbol,
+                action="watch",
+                suggested_weight=0.0,
+                reason=f"Low fusion score ({fusion.final_score:.2f}), skip",
+                urgency="low",
+            )
+
         # Build snapshot
         snapshot = {}
         if data and data.price:
