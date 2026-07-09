@@ -313,12 +313,10 @@ class TradingRunner:
                 _bar_count += 1
 
                 # C2: 陈旧/回放 bar 只补缓冲，不推进 scheduler/不交易
-                if self.scheduler:
-                    bar_ts = pd.to_datetime(bar_data.get("timestamp"), utc=True)
-                    age = (datetime.now(UTC) - bar_ts).total_seconds()
-                    if is_stale_bar(bar_ts, bar_period_sec=self.scheduler.freq_minutes * 60, market=market):
-                        logger.info("Bar %d — stale(age=%.0fs) buffer-only, skip trade", _bar_count, age)
-                        return
+                bar_ts = pd.to_datetime(bar_data.get("timestamp"), utc=True)
+                if is_stale_bar(bar_ts, bar_period_sec=300, market=market):
+                    logger.info("Bar %d — stale, skip trade", _bar_count)
+                    return
 
                 ctx = _rebuild_ctx()
                 if ctx is None:
@@ -598,12 +596,10 @@ class TradingRunner:
                 day_bars += 1
 
                 # C2: 陈旧/回放 bar 只补缓冲，不推进 scheduler/不交易
-                if self.scheduler:
-                    bar_ts = pd.to_datetime(bar_data.get("timestamp"), utc=True)
-                    age = (datetime.now(UTC) - bar_ts).total_seconds()
-                    if is_stale_bar(bar_ts, bar_period_sec=self.scheduler.freq_minutes * 60, market=market):
-                        logger.info("Bar %d — stale(age=%.0fs) buffer-only, skip trade", bar_count, age)
-                        return
+                bar_ts = pd.to_datetime(bar_data.get("timestamp"), utc=True)
+                if is_stale_bar(bar_ts, bar_period_sec=300, market=market):
+                    logger.info("Bar %d — stale, skip trade", bar_count)
+                    return
 
                 ctx = _rebuild_ctx()
                 if ctx is None:
