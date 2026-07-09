@@ -54,6 +54,26 @@ Technical data: unavailable from internal database.
 News sentiment data: unavailable.
 {% endif %}
 
+## SEC Filings (10-K Risk Factors)
+{% if sec_filings and sec_filings.latest_10k %}
+- Filing Date: {{ sec_filings.latest_10k.filing_date | default('N/A') }}
+- Risk Factors (Item 1A):
+  {{ sec_filings.latest_10k.risk_factors[:1500] if sec_filings.latest_10k.risk_factors else 'Not extracted' }}
+{% else %}
+SEC filing data: unavailable.
+{% endif %}
+
+## Institutional Holdings (13F)
+{% if institutional_flow and institutional_flow.top_holders %}
+- Total Holders: {{ institutional_flow.total_holders }}
+- Top Institutional Holders:
+{% for h in institutional_flow.top_holders %}
+  - {{ h.manager }}: ${{ "%.0f"|format(h.value_usd) if h.value_usd else 'N/A' }} ({{ h.shares }} shares)
+{% endfor %}
+{% else %}
+13F institutional data: unavailable.
+{% endif %}
+
 ## Data Coverage Summary
 {% for source, available in coverage.items() %}
 - {{ source }}: {{ 'available' if available else 'MISSING' }}

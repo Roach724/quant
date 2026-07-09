@@ -13,23 +13,22 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import jinja2
 from openai import AsyncOpenAI
 
-from ai_decision.schemas import AnalysisReport, Candidate, MarketData
-from ai_decision.data_provider import DataProvider
 from ai_decision.config import AIDecisionConfig
+from ai_decision.data_provider import DataProvider
+from ai_decision.schemas import AnalysisReport, Candidate, MarketData
 
 logger = logging.getLogger(__name__)
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "prompt_templates"
 
-# DeepSeek API config (from OpenClaw provider config)
+# DeepSeek API defaults (override via config or env DEEPSEEK_API_KEY)
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_API_KEY = "sk-2b1489de68a54d58864585dd6c34fd30"
 DEEPSEEK_MODEL = "deepseek-v4-pro"
 
 
@@ -48,8 +47,8 @@ class StockAnalyst:
         self.concurrent = self.llm_config.get("concurrent", 5)
 
         self._client = AsyncOpenAI(
-            api_key=DEEPSEEK_API_KEY,
-            base_url=DEEPSEEK_BASE_URL,
+            api_key=config.deepseek_api_key,
+            base_url=config.deepseek_base_url,
         )
         self._data = DataProvider()
         self._jinja = jinja2.Environment(
@@ -83,6 +82,8 @@ class StockAnalyst:
             "bb_position", "bb_width", "volume",
             "pe", "forward_pe", "revenue_growth", "net_margin", "debt_equity",
             "news_sentiment", "news_headlines",
+            "sec_filings",
+            "institutional_flow",
         ]
         symbols = [c.symbol for c in top]
         market_data = await self._data.get_multi(symbols, fields)
@@ -161,6 +162,8 @@ class StockAnalyst:
             technical=technical,
             fundamentals=fundamentals,
             news=news,
+            sec_filings=data.sec_filings,
+            institutional_flow=data.institutional_flow,
             coverage=data.data_coverage,
         )
 
@@ -203,7 +206,7 @@ class StockAnalyst:
                 parsed.get("suggested_weight_modifier", 0.0)
             ),
             data_coverage=data.data_coverage,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
 
     @staticmethod
@@ -246,5 +249,5 @@ class StockAnalyst:
             risk_factors=["Analysis error"],
             suggested_weight_modifier=0.0,
             data_coverage={},
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )

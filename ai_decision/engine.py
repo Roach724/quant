@@ -12,23 +12,23 @@ Usage:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from ai_decision.config import AIDecisionConfig, load_config
-from ai_decision.recall import RecallEngine
-from ai_decision.candidate_pool import CandidatePool
 from ai_decision.analyst import StockAnalyst
+from ai_decision.candidate_pool import CandidatePool
+from ai_decision.config import AIDecisionConfig, load_config
 from ai_decision.fusion import FusionEngine
-from ai_decision.stock_evaluator import StockEvaluator
 from ai_decision.portfolio_allocator import PortfolioAllocator
+from ai_decision.recall import RecallEngine
 from ai_decision.schemas import (
-    StrategySignal,
-    Candidate,
     AnalysisReport,
+    Candidate,
     FusionResult,
-    StockDecision,
     PortfolioDecision,
+    StockDecision,
+    StrategySignal,
 )
+from ai_decision.stock_evaluator import StockEvaluator
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class AIDecisionEngine:
         self.last_run: datetime | None = None
 
     @classmethod
-    def from_config(cls, config_path: str | None = None) -> "AIDecisionEngine":
+    def from_config(cls, config_path: str | None = None) -> AIDecisionEngine:
         """Create engine from config file."""
         cfg = load_config(config_path)
         return cls(cfg)
@@ -91,6 +91,11 @@ class AIDecisionEngine:
         Returns:
             PortfolioDecision with buy/sell orders.
         """
+        # Validate API keys on each run
+        key_warnings = self.config.validate_keys()
+        for w in key_warnings:
+            logger.warning(w)
+
         account_state = account_state or {}
         logger.info("AI Decision Engine: starting full pipeline")
 
@@ -124,7 +129,7 @@ class AIDecisionEngine:
             self.stock_decisions, account_state, strategy_id, environment,
         )
 
-        self.last_run = datetime.now(timezone.utc)
+        self.last_run = datetime.now(UTC)
         logger.info("AI Decision Engine: pipeline complete")
         return self.portfolio_plan
 
@@ -185,6 +190,7 @@ class AIDecisionEngine:
             max_tokens=self.config.stock_eval_llm.get("max_tokens", 1000),
             max_position_pct=self.config.max_position_pct,
             concurrent=self.config.stock_eval_batch_size,
+            api_key=self.config.deepseek_api_key,
         )
         decisions = await self._evaluator.evaluate(
             fusion_results, reports, market_data, holdings,
@@ -223,7 +229,7 @@ class AIDecisionEngine:
         from ai_decision.schemas import AllocationSummary
         return PortfolioDecision(
             strategy_id=strategy_id,
-            run_time=datetime.now(timezone.utc),
+            run_time=datetime.now(UTC),
             environment=environment,
             sell_orders=[],
             buy_orders=[],
