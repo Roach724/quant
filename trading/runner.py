@@ -946,17 +946,39 @@ class TradingRunner:
     def _execute_signals(self, signals, bar_data: dict):
         """执行信号列表"""
         close_prices = bar_data.get("close", {})
+        executed = 0
+        skipped = 0
         for sig in signals:
             current_price = close_prices.get(sig.symbol, 0)
             if current_price <= 0:
+                logger.warning(
+                    "Signal skipped — no price for %s (side=%s, close_keys=%d)",
+                    sig.symbol, sig.side, len(close_prices),
+                )
+                skipped += 1
                 continue
             try:
-                asyncio.run(self.bridge.execute(sig, current_price))
+                logger.debug("Executing signal: %s %s @ $%.2f", sig.side, sig.symbol, current_price)
+                result = asyncio.run(self.bridge.execute(sig, current_price))
+                if result:
+                    executed += 1
+                else:
+                    logger.warning(
+                        "Signal returned None — %s %s (side=%s)",
+                        sig.symbol, sig.side, sig.side,
+                    )
+                    skipped += 1
             except Exception:
                 logger.exception(
                     "Execute failed for %s",
                     sig.symbol,
                 )
+                skipped += 1
+        if executed > 0 or skipped > 0:
+            logger.info(
+                "_execute_signals done: %d executed, %d skipped (out of %d total)",
+                executed, skipped, len(signals),
+            )
 
 
 def _format_duration(seconds: int) -> str:
