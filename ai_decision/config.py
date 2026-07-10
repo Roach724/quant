@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
+
+# Auto-load .env from ai_decision/ directory
+_ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(_ENV_PATH)
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "default_config.yaml"
 
