@@ -79,6 +79,22 @@ class SignalBridge:
 
             self.broker = FutuStockBroker(market=self.market)
             logger.info("Lazy-initialized FutuStockBroker (market=%s)", self.market)
+        else:
+            # Check if broker connection is still alive (multi-day restart)
+            try:
+                _ctx = self.broker._get_ctx()
+                if _ctx is None:
+                    logger.warning("Broker ctx is None, resetting broker")
+                    self.broker = None
+                    from oms.broker.futu_stock_broker import FutuStockBroker
+                    self.broker = FutuStockBroker(market=self.market)
+                    logger.info("Re-initialized FutuStockBroker (market=%s)", self.market)
+            except Exception:
+                logger.warning("Broker connection lost, reconnecting")
+                self.broker = None
+                from oms.broker.futu_stock_broker import FutuStockBroker
+                self.broker = FutuStockBroker(market=self.market)
+                logger.info("Re-initialized FutuStockBroker after error (market=%s)", self.market)
 
         acct = self.capital.get_account(signal.strategy_id)
         if not acct:
@@ -92,9 +108,18 @@ class SignalBridge:
             # 卖出/平仓：用持仓量，不用现金
             pos = self.capital.get_position(signal.strategy_id, signal.symbol)
             if not pos or pos.qty <= 0:
-                logger.debug("No position to close for %s", signal.symbol)
+                logger.warning(
+                    "No position to close for %s (sid=%d, pos=%s, qty=%s)",
+                    signal.symbol, signal.strategy_id,
+                    "found" if pos else "None",
+                    pos.qty if pos else "N/A",
+                )
                 return None
             qty = int(pos.qty)
+            logger.info(
+                "Closing %s: pos.qty=%d, cash=%.0f",
+                signal.symbol, qty, acct.cash,
+            )
         elif signal.qty is None:
             # 贪心 sizing: 单只预算 = min(剩余现金, 总权益 × position_size_pct)
             # MLPrediction 已按分数排序，高分先买；大 lot 买不起就跳过，小 lot 用剩余现金
@@ -145,6 +170,18 @@ class SignalBridge:
         except Exception as e:
             logger.error("Order failed for %s: %s", signal.symbol, e)
             return None
+
+        if not orders:
+            logger.warning(
+                "Order returned empty — %s %s (broker returned None/empty)",
+                signal.symbol, signal.side,
+            )
+            return None
+
+        logger.info(
+            "Order placed: %s %s qty=%d → %d fills",
+            signal.side, signal.symbol, qty, len(orders),
+        )
 
         # 更新虚拟账户（按总成交量）
         total_filled = 0

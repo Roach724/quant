@@ -1503,12 +1503,23 @@ def admin_data_overview(start: str = Query(""), end: str = Query("")):
             GROUP BY d
         """)
 
-    # factor_values: single table, split by symbol prefix
+    # factor_values: single table, classify by SSOT symbols.yaml mapping
+    import yaml as _yaml
+    from pathlib import Path as _Path
+    _quant_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _syms_cfg = _yaml.safe_load((_Path(_quant_root) / "config/symbols.yaml").read_text())
+    _us_unprefixed = set()
+    for s in _syms_cfg.get("markets", {}).get("us", {}).get("symbols", []):
+        _us_unprefixed.add(s.replace("US.", ""))
+
+    # Build IN clause for SQL — symbols are from SSOT yaml, safe to interpolate
+    _us_list_sql = ", ".join(f"'{s}'" for s in sorted(_us_unprefixed))
+
     parts.append(f"""
         SELECT
             date AS d,
-            CASE WHEN symbol LIKE 'US.%' THEN 'us_factor_values' ELSE 'hk_factor_values' END AS table_name,
-            CASE WHEN symbol LIKE 'US.%' THEN 'us' ELSE 'hk' END AS market,
+            CASE WHEN symbol IN ({_us_list_sql}) THEN 'us_factor_values' ELSE 'hk_factor_values' END AS table_name,
+            CASE WHEN symbol IN ({_us_list_sql}) THEN 'us' ELSE 'hk' END AS market,
             COUNT(DISTINCT symbol) AS symbol_count,
             COUNT(*) AS row_count
         FROM `{project}.quant.factor_values`
