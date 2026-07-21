@@ -353,11 +353,13 @@ class TradingRunner:
                             _bar_count,
                             details,
                         )
-                        self._execute_signals(signals, bar_data)
+                        succeeded = self._execute_signals(signals, bar_data)
                         if self.scheduler:
                             self.scheduler.write()
-                        # Update in-memory portfolio so the strategy knows what it holds
+                        # Update in-memory portfolio only for successfully executed signals
                         for sig in signals:
+                            if sig.symbol not in succeeded:
+                                continue
                             if sig.side in ("sell", "close"):
                                 _portfolio.positions.pop(sig.symbol, None)
                             elif sig.side == "buy":
@@ -645,11 +647,13 @@ class TradingRunner:
                             trading_day,
                             details,
                         )
-                        self._execute_signals(signals, bar_data)
+                        succeeded = self._execute_signals(signals, bar_data)
                         if self.scheduler:
                             self.scheduler.write()
-                        # Update in-memory portfolio so the strategy knows what it holds
+                        # Update in-memory portfolio only for successfully executed signals
                         for sig in signals:
+                            if sig.symbol not in succeeded:
+                                continue
                             if sig.side in ("sell", "close"):
                                 _portfolio.positions.pop(sig.symbol, None)
                             elif sig.side == "buy":
@@ -824,6 +828,16 @@ class TradingRunner:
                 positions = self.capital.get_positions(strategy_id)
                 pos_count = len(positions)
 
+                # Rebuild in-memory portfolio from CapitalManager at start of each day
+                # to fix any drift from failed close signals on previous days.
+                _portfolio = Portfolio(initial_capital=acct.initial_capital if acct else 0)
+                _portfolio.cash = cash
+                for vp in positions:
+                    if vp.qty and vp.qty > 0:
+                        p = Position(vp.symbol, entry_price=vp.avg_entry_price)
+                        p.add(int(vp.qty), vp.avg_entry_price)
+                        _portfolio.positions[vp.symbol] = p
+
                 logger.info(
                     "Strategy %d: ── Day %d starting ── cash=$%.2f positions=%d max_bars=%d",
                     strategy_id,
@@ -943,11 +957,12 @@ class TradingRunner:
                 logger.debug("Waiting for market open — sleeping %d s", int(wait_sec))
             time.sleep(min(wait_sec, poll_sec))
 
-    def _execute_signals(self, signals, bar_data: dict):
-        """执行信号列表"""
+    def _execute_signals(self, signals, bar_data: dict) -> set[str]:
+        """执行信号列表，返回成功执行的 symbol 集合。"""
         close_prices = bar_data.get("close", {})
         executed = 0
         skipped = 0
+        succeeded: set[str] = set()
         for sig in signals:
             current_price = close_prices.get(sig.symbol, 0)
             if current_price <= 0:
@@ -962,6 +977,7 @@ class TradingRunner:
                 result = asyncio.run(self.bridge.execute(sig, current_price))
                 if result:
                     executed += 1
+                    succeeded.add(sig.symbol)
                 else:
                     logger.warning(
                         "Signal returned None — %s %s (side=%s)",
@@ -979,6 +995,7 @@ class TradingRunner:
                 "_execute_signals done: %d executed, %d skipped (out of %d total)",
                 executed, skipped, len(signals),
             )
+        return succeeded
 
 
 def _format_duration(seconds: int) -> str:
